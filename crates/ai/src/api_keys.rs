@@ -1,5 +1,6 @@
 pub use crate::aws_credentials::{AwsCredentials, AwsCredentialsState};
 use serde::{Deserialize, Serialize};
+use url::Url;
 use uuid::Uuid;
 use warp_multi_agent_api as api;
 use warpui::{Entity, ModelContext, SingletonEntity};
@@ -78,6 +79,23 @@ impl ApiKeys {
     }
 }
 
+fn normalize_absolute_http_url(url: Option<String>) -> Option<String> {
+    let url = url?;
+    let url = url.trim().trim_end_matches('/').to_string();
+    if url.is_empty() {
+        return None;
+    }
+
+    let Ok(parsed) = Url::parse(&url) else {
+        return None;
+    };
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return None;
+    }
+
+    Some(url)
+}
+
 /// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum AwsCredentialsRefreshStrategy {
@@ -135,10 +153,7 @@ impl ApiKeyManager {
     }
 
     pub fn set_openai_base_url(&mut self, base_url: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.openai_base_url = base_url.and_then(|base_url| {
-            let base_url = base_url.trim().trim_end_matches('/').to_string();
-            (!base_url.is_empty()).then_some(base_url)
-        });
+        self.keys.openai_base_url = normalize_absolute_http_url(base_url);
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -148,10 +163,7 @@ impl ApiKeyManager {
         url: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        self.keys.local_multi_agent_server_root_url = url.and_then(|url| {
-            let url = url.trim().trim_end_matches('/').to_string();
-            (!url.is_empty()).then_some(url)
-        });
+        self.keys.local_multi_agent_server_root_url = normalize_absolute_http_url(url);
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -418,6 +430,40 @@ impl ApiKeyManager {
 
 impl Entity for ApiKeyManager {
     type Event = ApiKeyManagerEvent;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_absolute_http_url;
+
+    #[test]
+    fn normalizes_absolute_http_urls() {
+        assert_eq!(
+            normalize_absolute_http_url(Some(" http://127.0.0.1:8787/// ".to_string())),
+            Some("http://127.0.0.1:8787".to_string()),
+        );
+        assert_eq!(
+            normalize_absolute_http_url(Some("https://llm.example.test/v1/".to_string())),
+            Some("https://llm.example.test/v1".to_string()),
+        );
+    }
+
+    #[test]
+    fn rejects_empty_relative_and_non_http_urls() {
+        assert_eq!(normalize_absolute_http_url(Some("   ".to_string())), None);
+        assert_eq!(
+            normalize_absolute_http_url(Some("localhost:8787".to_string())),
+            None,
+        );
+        assert_eq!(
+            normalize_absolute_http_url(Some("/v1/chat/completions".to_string())),
+            None,
+        );
+        assert_eq!(
+            normalize_absolute_http_url(Some("ftp://example.test".to_string())),
+            None,
+        );
+    }
 }
 
 impl SingletonEntity for ApiKeyManager {}
