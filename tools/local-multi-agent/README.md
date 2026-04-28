@@ -15,7 +15,7 @@ npm run dev
 Set these environment variables before starting the service:
 
 - `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
+- `OPENAI_BASE_URL` unless Warp sends `X-Warp-OpenAI-Base-URL` from the BYOK OpenAI Base URL setting
 - `OPENAI_MODEL`
 - `PORT` defaults to `8787`
 
