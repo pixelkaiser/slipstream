@@ -5,7 +5,6 @@ import {
   encodeAddAgentOutput,
   encodeCreateTask,
   decodeWarpRequest,
-  encodeBase64Url,
   encodeStreamFinishedDone,
   encodeStreamFinishedInternalError,
   encodeStreamInit,
@@ -13,6 +12,7 @@ import {
 import { resolveProviderModel } from "./model.js";
 import { collectAssistantOutput } from "./response.js";
 import { log } from "./logger.js";
+import { formatSseDataEvent } from "./sse.js";
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const defaultBaseUrl = "https://api.openai.com/v1";
@@ -52,7 +52,7 @@ async function readBody(request: http.IncomingMessage): Promise<Uint8Array> {
 }
 
 function writeSse(response: http.ServerResponse, bytes: Uint8Array): void {
-  response.write(`data: ${encodeBase64Url(bytes)}\n\n`);
+  response.write(formatSseDataEvent(bytes));
 }
 
 function extractStreamingContent(payload: unknown): string {
