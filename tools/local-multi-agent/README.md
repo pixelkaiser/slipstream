@@ -16,7 +16,7 @@ Set these environment variables before starting the service:
 
 - `OPENAI_API_KEY`
 - `OPENAI_BASE_URL` unless Warp sends `X-Warp-OpenAI-Base-URL` from the BYOK OpenAI Base URL setting
-- `OPENAI_MODEL`
+- `OPENAI_MODEL` defaults to `Qwen/Qwen3.6-27B-FP8`
 - `PORT` defaults to `8787`
 
 Point Warp's BYOK `Local Multi-Agent Server URL` field at:
