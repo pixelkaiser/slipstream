@@ -47,12 +47,22 @@ pub async fn generate_multi_agent_output(
     client: &BaseClient,
     request: &warp_multi_agent_api::Request,
 ) -> Result<OutputStream, Error> {
+    generate_multi_agent_output_with_server_root_url(client, request, None).await
+}
+
+/// Opens a decoded multi-agent response event stream, optionally routing through an alternate
+/// server root for local BYOK multi-agent development.
+pub async fn generate_multi_agent_output_with_server_root_url(
+    client: &BaseClient,
+    request: &warp_multi_agent_api::Request,
+    server_root_url_override: Option<&str>,
+) -> Result<OutputStream, Error> {
     let auth_token = client
         .get_or_refresh_access_token()
         .await
         .map_err(Error::Authentication)?;
     let is_passive = is_passive_suggestion_request(request);
-    let url = endpoint_url(is_passive);
+    let url = endpoint_url(is_passive, server_root_url_override);
 
     let mut request_builder = client
         .http_client()
@@ -131,10 +141,14 @@ fn is_passive_suggestion_request(request: &warp_multi_agent_api::Request) -> boo
     })
 }
 
-fn endpoint_url(is_passive: bool) -> String {
+fn endpoint_url(is_passive: bool, server_root_url_override: Option<&str>) -> String {
+    let server_root_url = server_root_url_override
+        .map(str::to_string)
+        .unwrap_or_else(|| ChannelState::server_root_url().into_owned());
+
     format!(
         "{}/{}/{}",
-        ChannelState::server_root_url(),
+        server_root_url.trim_end_matches('/'),
         if cfg!(feature = "agent_mode_evals") {
             "agent-mode-evals"
         } else {
