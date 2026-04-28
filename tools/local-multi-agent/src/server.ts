@@ -13,6 +13,7 @@ import {
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const defaultBaseUrl = "https://api.openai.com/v1";
+const defaultModel = "Qwen/Qwen3.6-27B-FP8";
 const maxRequestBytes = 25 * 1024 * 1024;
 const openAiBaseUrlHeader = "x-warp-openai-base-url";
 
@@ -86,10 +87,7 @@ async function* streamChatCompletion(params: {
   }
 
   const baseUrl = trimTrailingSlash(nonEmpty(params.baseUrl) ?? nonEmpty(process.env.OPENAI_BASE_URL) ?? defaultBaseUrl);
-  const model = process.env.OPENAI_MODEL ?? params.model;
-  if (!model) {
-    throw new Error("OPENAI_MODEL is not set and the Warp request did not include a base model.");
-  }
+  const model = nonEmpty(process.env.OPENAI_MODEL) ?? nonEmpty(params.model) ?? defaultModel;
 
   const messages = [
     process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT
