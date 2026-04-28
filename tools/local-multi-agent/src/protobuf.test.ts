@@ -84,6 +84,7 @@ test("decodes the fields needed from a Warp request", () => {
       rootTaskId: "root",
       shouldCreateRootTask: false,
       prompt: "hello warp",
+      contextText: undefined,
       toolResults: [],
       openAiApiKey: "sk-testing",
       model: undefined,
@@ -119,6 +120,32 @@ test("extracts supported prompt input variants", () => {
     const request = lengthDelimitedField(2, item.input);
     assert.equal(decodeWarpRequest(request).prompt, item.expected, item.name);
   }
+});
+
+test("decodes attached selected text and command context", () => {
+  const selectedText = lengthDelimitedField(6, stringField(1, "Filesystem Size\n/dev/md3 1.5T"));
+  const executedShellCommand = lengthDelimitedField(5, Buffer.concat([
+    stringField(1, "df -h"),
+    stringField(2, "Filesystem Size\n/dev/md3 1.5T"),
+    varintField(3, 0),
+  ]));
+  const directory = lengthDelimitedField(1, stringField(1, "/root"));
+  const context = lengthDelimitedField(1, Buffer.concat([
+    directory,
+    selectedText,
+    executedShellCommand,
+  ]));
+  const userInput = lengthDelimitedField(1, stringField(1, "explain this output"));
+  const userInputs = lengthDelimitedField(6, lengthDelimitedField(1, userInput));
+  const request = lengthDelimitedField(2, Buffer.concat([context, userInputs]));
+
+  const decoded = decodeWarpRequest(request);
+
+  assert.equal(decoded.prompt, "explain this output");
+  assert.match(decoded.contextText ?? "", /Current directory: \/root/);
+  assert.match(decoded.contextText ?? "", /Selected text:\nFilesystem Size/);
+  assert.match(decoded.contextText ?? "", /Executed shell command:\nCommand: df -h/);
+  assert.match(decoded.contextText ?? "", /Exit code: 0/);
 });
 
 test("marks requests without a task context as needing root task creation", () => {
