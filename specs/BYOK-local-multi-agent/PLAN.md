@@ -313,3 +313,4 @@ End-to-end:
 - Added streaming Warp response support: the service emits an initial empty `AgentOutput` message, then sends `AppendToMessageContent` events with the `message.agent_output.text` field mask for each provider chunk.
 - Added a unit test for the streaming append field mask.
 - Smoke-tested the streaming path with the provided OpenAI-compatible endpoint using environment variables only; the response emitted multiple SSE data events.
+- Fixed SSE event encoding to use padded URL-safe base64 because the Warp client decodes events with Rust's `BASE64_URL_SAFE` engine, which rejects unpadded payloads whose lengths are not multiples of 4.
