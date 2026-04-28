@@ -56,8 +56,8 @@ test("decodes the fields needed from a Warp request", () => {
 });
 
 test("encodes response events as protobuf payloads", () => {
-  assert.equal(encodeBase64Url(encodeStreamInit("c", "r")), "CgkKAWMSAXIaAWM");
-  assert.equal(encodeBase64Url(encodeStreamFinishedDone()), "GgISAA");
+  assert.equal(encodeBase64Url(encodeStreamInit("c", "r")), "CgkKAWMSAXIaAWM=");
+  assert.equal(encodeBase64Url(encodeStreamFinishedDone()), "GgISAA==");
   assert.ok(encodeAgentOutput({ taskId: "root", requestId: "req", text: "ok" }).length > 0);
 });
 
