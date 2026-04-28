@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  encodeAddAgentOutput,
+  encodeAppendAgentOutput,
   decodeWarpRequest,
-  encodeAgentOutput,
   encodeBase64Url,
   encodeStreamFinishedDone,
   encodeStreamFinishedInternalError,
@@ -44,11 +46,33 @@ function writeSse(response: http.ServerResponse, bytes: Uint8Array): void {
   response.write(`data: ${encodeBase64Url(bytes)}\n\n`);
 }
 
-async function createChatCompletion(params: {
+function extractStreamingContent(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  const choices = (payload as { choices?: unknown }).choices;
+  if (!Array.isArray(choices)) {
+    return "";
+  }
+
+  return choices
+    .map((choice) => {
+      if (!choice || typeof choice !== "object") {
+        return "";
+      }
+
+      const delta = (choice as { delta?: { content?: unknown } }).delta;
+      return typeof delta?.content === "string" ? delta.content : "";
+    })
+    .join("");
+}
+
+async function* streamChatCompletion(params: {
   prompt: string;
   apiKey?: string;
   model?: string;
-}): Promise<string> {
+}): AsyncGenerator<string> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not set and the Warp request did not include an OpenAI key.");
@@ -77,7 +101,7 @@ async function createChatCompletion(params: {
       model,
       messages,
       temperature: 0.2,
-      stream: false,
+      stream: true,
     }),
   });
 
@@ -86,15 +110,41 @@ async function createChatCompletion(params: {
     throw new Error(`OpenAI-compatible endpoint returned ${completionResponse.status}: ${body}`);
   }
 
-  const payload = await completionResponse.json() as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-  const content = payload.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("OpenAI-compatible endpoint returned no assistant content.");
+  if (!completionResponse.body) {
+    throw new Error("OpenAI-compatible endpoint returned no response stream.");
   }
 
-  return content;
+  const reader = completionResponse.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) {
+        continue;
+      }
+
+      const data = trimmed.slice("data:".length).trim();
+      if (data === "[DONE]") {
+        return;
+      }
+
+      const content = extractStreamingContent(JSON.parse(data));
+      if (content) {
+        yield content;
+      }
+    }
+  }
 }
 
 async function handleMultiAgent(
@@ -116,20 +166,33 @@ async function handleMultiAgent(
 
   try {
     if (!passiveSuggestions) {
-      const output = await createChatCompletion({
-        prompt: warpRequest.prompt,
-        apiKey: warpRequest.openAiApiKey,
-        model: warpRequest.model,
-      });
+      const messageId = randomUUID();
 
       writeSse(
         response,
-        encodeAgentOutput({
+        encodeAddAgentOutput({
+          messageId,
           taskId: warpRequest.rootTaskId,
           requestId: warpRequest.requestId,
-          text: output,
+          text: "",
         }),
       );
+
+      for await (const chunk of streamChatCompletion({
+        prompt: warpRequest.prompt,
+        apiKey: warpRequest.openAiApiKey,
+        model: warpRequest.model,
+      })) {
+        writeSse(
+          response,
+          encodeAppendAgentOutput({
+            messageId,
+            taskId: warpRequest.rootTaskId,
+            requestId: warpRequest.requestId,
+            text: chunk,
+          }),
+        );
+      }
     }
 
     writeSse(response, encodeStreamFinishedDone());

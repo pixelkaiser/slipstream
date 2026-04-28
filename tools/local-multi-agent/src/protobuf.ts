@@ -230,16 +230,20 @@ function encodeTimestamp(date: Date): Uint8Array {
   return int64Field(1, Math.floor(date.getTime() / 1000));
 }
 
+function encodeFieldMask(paths: string[]): Uint8Array {
+  return concat(paths.map((path) => stringField(1, path)));
+}
+
 function encodeAgentOutputMessage(params: {
+  messageId: string;
   taskId: string;
   requestId: string;
   text: string;
 }): Uint8Array {
-  const messageId = randomUUID();
   const agentOutput = stringField(1, params.text);
 
   return concat([
-    stringField(1, messageId),
+    stringField(1, params.messageId),
     messageField(3, agentOutput),
     stringField(11, params.taskId),
     stringField(13, params.requestId),
@@ -247,7 +251,8 @@ function encodeAgentOutputMessage(params: {
   ]);
 }
 
-export function encodeAgentOutput(params: {
+export function encodeAddAgentOutput(params: {
+  messageId: string;
   taskId: string;
   requestId: string;
   text: string;
@@ -261,6 +266,35 @@ export function encodeAgentOutput(params: {
   const clientActions = messageField(1, clientAction);
 
   return messageField(2, clientActions);
+}
+
+export function encodeAppendAgentOutput(params: {
+  messageId: string;
+  taskId: string;
+  requestId: string;
+  text: string;
+}): Uint8Array {
+  const outputMessage = encodeAgentOutputMessage(params);
+  const appendToMessageContent = concat([
+    messageField(1, outputMessage),
+    messageField(2, encodeFieldMask(["message.agent_output.text"])),
+    stringField(3, params.taskId),
+  ]);
+  const clientAction = messageField(5, appendToMessageContent);
+  const clientActions = messageField(1, clientAction);
+
+  return messageField(2, clientActions);
+}
+
+export function encodeAgentOutput(params: {
+  taskId: string;
+  requestId: string;
+  text: string;
+}): Uint8Array {
+  return encodeAddAgentOutput({
+    ...params,
+    messageId: randomUUID(),
+  });
 }
 
 export function encodeStreamFinishedDone(): Uint8Array {
