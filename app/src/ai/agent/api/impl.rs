@@ -136,8 +136,12 @@ pub async fn generate_multi_agent_output(
         mcp_context: params.mcp_context.map(Into::into),
     };
 
-    let response_stream =
-        warp_multi_agent_client::generate_multi_agent_output(server_api.as_ref(), &request).await;
+    let response_stream = warp_multi_agent_client::generate_multi_agent_output_with_server_root_url(
+        server_api.as_ref(),
+        &request,
+        params.local_multi_agent_server_root_url.as_deref(),
+    )
+    .await;
     match response_stream {
         Ok(stream) => {
             let output_stream = stream

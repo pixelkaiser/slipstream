@@ -34,8 +34,24 @@ fn routes_regular_and_passive_requests_to_distinct_endpoints() {
         "ai"
     };
 
-    assert!(endpoint_url(false).ends_with(&format!("/{prefix}/multi-agent")));
-    assert!(endpoint_url(true).ends_with(&format!("/{prefix}/passive-suggestions")));
+    assert!(endpoint_url(false, None).ends_with(&format!("/{prefix}/multi-agent")));
+    assert!(endpoint_url(true, None).ends_with(&format!("/{prefix}/passive-suggestions")));
+}
+
+#[test]
+fn endpoint_url_uses_override_root() {
+    assert_eq!(
+        endpoint_url(false, Some("http://127.0.0.1:8787")),
+        "http://127.0.0.1:8787/ai/multi-agent"
+    );
+}
+
+#[test]
+fn endpoint_url_trims_override_trailing_slash() {
+    assert_eq!(
+        endpoint_url(false, Some("http://127.0.0.1:8787/")),
+        "http://127.0.0.1:8787/ai/multi-agent"
+    );
 }
 
 #[test]

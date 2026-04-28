@@ -7780,6 +7780,8 @@ impl SettingsWidget for CloudHandoffWidget {
 
 struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
+    openai_base_url_editor: ViewHandle<EditorView>,
+    local_multi_agent_server_root_url_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
     /// Buttons for the SuperGrok (xAI) subscription row; which one renders
@@ -7806,6 +7808,8 @@ impl ApiKeysWidget {
 
         let ApiKeys {
             openai: openai_key,
+            openai_base_url,
+            local_multi_agent_server_root_url,
             anthropic: anthropic_key,
             google: google_key,
             ..
@@ -7814,11 +7818,11 @@ impl ApiKeysWidget {
         // A helper macro to create and configure an API key editor.  This avoids a lot
         // of code duplication and ensures consistency between the editors.
         macro_rules! create_api_key_editor {
-            ($editor:ident, $key:ident, $set_func:ident, $placeholder:literal) => {
+            ($editor:ident, $key:ident, $set_func:ident, $placeholder:literal, $is_password:literal) => {
                 let $editor = ctx.add_typed_action_view(move |ctx| {
                     let appearance = Appearance::handle(ctx).as_ref(ctx);
                     let options = SingleLineEditorOptions {
-                        is_password: true,
+                        is_password: $is_password,
                         text: TextOptions {
                             font_size_override: Some(appearance.ui_font_size()),
                             font_family_override: Some(appearance.monospace_font_family()),
@@ -7895,18 +7899,40 @@ impl ApiKeysWidget {
             };
         }
 
-        create_api_key_editor!(openai_api_key_editor, openai_key, set_openai_key, "sk-...");
+        create_api_key_editor!(
+            openai_api_key_editor,
+            openai_key,
+            set_openai_key,
+            "sk-...",
+            true
+        );
+        create_api_key_editor!(
+            openai_base_url_editor,
+            openai_base_url,
+            set_openai_base_url,
+            "http://localhost:11434/v1",
+            false
+        );
+        create_api_key_editor!(
+            local_multi_agent_server_root_url_editor,
+            local_multi_agent_server_root_url,
+            set_local_multi_agent_server_root_url,
+            "http://127.0.0.1:8787",
+            false
+        );
         create_api_key_editor!(
             anthropic_api_key_editor,
             anthropic_key,
             set_anthropic_key,
-            "sk-ant-..."
+            "sk-ant-...",
+            true
         );
         create_api_key_editor!(
             google_api_key_editor,
             google_key,
             set_google_key,
-            "AIzaSy..."
+            "AIzaSy...",
+            true
         );
 
         // Editor text colors are snapshotted at construction via
@@ -7980,6 +8006,8 @@ impl ApiKeysWidget {
 
         Self {
             openai_api_key_editor,
+            openai_base_url_editor,
+            local_multi_agent_server_root_url_editor,
             anthropic_api_key_editor,
             google_api_key_editor,
 
@@ -8045,6 +8073,20 @@ impl ApiKeysWidget {
             appearance,
             "OpenAI API key",
             self.openai_api_key_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(self.render_api_key_input(
+            appearance,
+            "OpenAI Base URL",
+            self.openai_base_url_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(self.render_api_key_input(
+            appearance,
+            "Local Multi-Agent Server URL",
+            self.local_multi_agent_server_root_url_editor.clone(),
             is_enabled,
             app,
         ));
@@ -8421,7 +8463,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai anthropic google claude gemini gpt custom inference endpoint grok supergrok xai subscription"
+        "api keys bring your own byo openai anthropic google claude gemini gpt custom inference endpoint grok supergrok xai subscription base url compatible local multi agent server"
     }
 
     fn render(
