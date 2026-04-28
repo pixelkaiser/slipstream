@@ -12,6 +12,7 @@ import {
 } from "./protobuf.js";
 import { resolveProviderModel } from "./model.js";
 import { collectAssistantOutput } from "./response.js";
+import { log } from "./logger.js";
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const defaultBaseUrl = "https://api.openai.com/v1";
@@ -93,6 +94,13 @@ async function* streamChatCompletion(params: {
     warpModel: params.model,
     localModelAliases: process.env.LOCAL_MODEL_ALIASES,
   });
+  log("info", "provider_request", {
+    baseUrl,
+    model,
+    warpModel: params.model ?? null,
+    promptChars: params.prompt.length,
+    baseUrlSource: nonEmpty(params.baseUrl) ? "request_header" : nonEmpty(process.env.OPENAI_BASE_URL) ? "env" : "default",
+  });
 
   const messages = [
     process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT
@@ -117,12 +125,23 @@ async function* streamChatCompletion(params: {
 
   if (!completionResponse.ok) {
     const body = await completionResponse.text();
+    log("warn", "provider_error", {
+      status: completionResponse.status,
+      bodyChars: body.length,
+      model,
+      baseUrl,
+    });
     throw new Error(`OpenAI-compatible endpoint returned ${completionResponse.status}: ${body}`);
   }
 
   if (!completionResponse.body) {
     throw new Error("OpenAI-compatible endpoint returned no response stream.");
   }
+  log("debug", "provider_stream_opened", {
+    status: completionResponse.status,
+    model,
+    baseUrl,
+  });
 
   const reader = completionResponse.body.getReader();
   const decoder = new TextDecoder();
@@ -162,10 +181,32 @@ async function handleMultiAgent(
   response: http.ServerResponse,
   passiveSuggestions: boolean,
 ): Promise<void> {
+  const startedAt = Date.now();
+  let eventsSent = 0;
   const body = await readBody(request);
   const warpRequest = decodeWarpRequest(body);
   const openAiBaseUrl = request.headers[openAiBaseUrlHeader];
   const requestOpenAiBaseUrl = Array.isArray(openAiBaseUrl) ? openAiBaseUrl[0] : openAiBaseUrl;
+  log("info", passiveSuggestions ? "passive_suggestions_request" : "multi_agent_request", {
+    conversationId: warpRequest.conversationId,
+    requestId: warpRequest.requestId,
+    taskId: warpRequest.rootTaskId,
+    shouldCreateRootTask: warpRequest.shouldCreateRootTask,
+    promptChars: warpRequest.prompt.length,
+    warpModel: warpRequest.model ?? null,
+    hasRequestApiKey: warpRequest.openAiApiKey != null,
+    hasOpenAiBaseUrlHeader: requestOpenAiBaseUrl != null,
+  });
+
+  function sendEvent(event: string, bytes: Uint8Array): void {
+    writeSse(response, bytes);
+    eventsSent += 1;
+    log("debug", "sse_event", {
+      requestId: warpRequest.requestId,
+      event,
+      bytes: bytes.length,
+    });
+  }
 
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -174,13 +215,13 @@ async function handleMultiAgent(
     "x-accel-buffering": "no",
   });
 
-  writeSse(response, encodeStreamInit(warpRequest.conversationId, warpRequest.requestId));
+  sendEvent("stream_init", encodeStreamInit(warpRequest.conversationId, warpRequest.requestId));
 
   try {
     if (!passiveSuggestions) {
       if (warpRequest.shouldCreateRootTask) {
-        writeSse(
-          response,
+        sendEvent(
+          "create_task",
           encodeCreateTask({
             taskId: warpRequest.rootTaskId,
             description: warpRequest.prompt,
@@ -198,8 +239,8 @@ async function handleMultiAgent(
         }),
       );
 
-      writeSse(
-        response,
+      sendEvent(
+        "add_agent_output",
         encodeAddAgentOutput({
           messageId,
           taskId: warpRequest.rootTaskId,
@@ -209,39 +250,79 @@ async function handleMultiAgent(
       );
     }
 
-    writeSse(response, encodeStreamFinishedDone());
+    sendEvent("stream_finished_done", encodeStreamFinishedDone());
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    writeSse(response, encodeStreamFinishedInternalError(message));
+    log("error", "multi_agent_error", {
+      requestId: warpRequest.requestId,
+      message,
+    });
+    sendEvent("stream_finished_internal_error", encodeStreamFinishedInternalError(message));
   } finally {
     await delay(0);
     response.end();
+    log("info", "multi_agent_completed", {
+      requestId: warpRequest.requestId,
+      durationMs: Date.now() - startedAt,
+      eventsSent,
+    });
   }
 }
 
 const server = http.createServer((request, response) => {
   void (async () => {
+    const startedAt = Date.now();
     const method = request.method ?? "GET";
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+    log("info", "http_request", {
+      method,
+      path: url.pathname,
+      remoteAddress: request.socket.remoteAddress,
+    });
 
     if (method === "GET" && url.pathname === "/health") {
       sendJson(response, 200, { ok: true });
+      log("info", "http_response", {
+        method,
+        path: url.pathname,
+        statusCode: response.statusCode,
+        durationMs: Date.now() - startedAt,
+      });
       return;
     }
 
     if (method === "POST" && url.pathname === "/ai/multi-agent") {
       await handleMultiAgent(request, response, false);
+      log("info", "http_response", {
+        method,
+        path: url.pathname,
+        statusCode: response.statusCode,
+        durationMs: Date.now() - startedAt,
+      });
       return;
     }
 
     if (method === "POST" && url.pathname === "/ai/passive-suggestions") {
       await handleMultiAgent(request, response, true);
+      log("info", "http_response", {
+        method,
+        path: url.pathname,
+        statusCode: response.statusCode,
+        durationMs: Date.now() - startedAt,
+      });
       return;
     }
 
     sendJson(response, 404, { error: "not_found" });
+    log("warn", "http_response", {
+      method,
+      path: url.pathname,
+      statusCode: response.statusCode,
+      durationMs: Date.now() - startedAt,
+    });
   })().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
+    log("error", "http_request_error", { message });
     if (!response.headersSent) {
       sendJson(response, 500, { error: message });
     } else {
@@ -251,5 +332,11 @@ const server = http.createServer((request, response) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Local multi-agent API listening on http://127.0.0.1:${port}`);
+  log("info", "server_started", {
+    url: `http://127.0.0.1:${port}`,
+    logLevel: process.env.LOG_LEVEL?.trim() || "info",
+    hasOpenAiBaseUrlEnv: nonEmpty(process.env.OPENAI_BASE_URL) != null,
+    hasOpenAiModelEnv: nonEmpty(process.env.OPENAI_MODEL) != null,
+    hasModelAliasesEnv: nonEmpty(process.env.LOCAL_MODEL_ALIASES) != null,
+  });
 });
