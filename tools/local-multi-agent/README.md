@@ -26,6 +26,8 @@ Supported tool-call names are `read_files`, `file_glob`, `grep`, `run_shell_comm
 
 The service keeps OpenAI-compatible chat history in memory per Warp conversation ID, including assistant tool calls and tool results. Restarting the service clears this local history.
 
+For user prompts, the service also forwards supported Warp input context to the provider. This currently includes selected text, attached executed shell command blocks, attached text files, and the current directory.
+
 The service logs JSON lines for startup, HTTP requests, Warp multi-agent requests, provider requests, errors, and completion summaries. API keys and authorization-like fields are redacted.
 
 Point Warp's BYOK `Local Multi-Agent Server URL` field at:
