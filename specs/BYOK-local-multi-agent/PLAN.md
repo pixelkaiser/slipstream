@@ -11,21 +11,16 @@ This document is the implementation source of truth. Each implementation step sh
 - Warp sends agent requests to `{server_root_url}/ai/multi-agent`.
 - The request body is `application/x-protobuf` encoded as `warp.multi_agent.v1.Request`.
 - The response is Server-Sent Events. Each SSE message `data` value is base64-url-encoded protobuf bytes for `warp.multi_agent.v1.ResponseEvent`.
-- `WARP_SERVER_ROOT_URL` can override the global server root URL, but that affects all server APIs, not only agent requests.
 - BYOK is enabled for OSS builds on this branch.
 - The UI now has local secure storage for an `OpenAI Base URL`.
 - The pinned multi-agent protobuf has no field for an OpenAI-compatible base URL, so Warp passes it to the local multi-agent service with the `X-Warp-OpenAI-Base-URL` request header when a local multi-agent server URL is configured.
 
 ## Key Decision
 
-Prefer a targeted local AI endpoint setting over exposing only raw `WARP_SERVER_ROOT_URL`.
-
-Raw `WARP_SERVER_ROOT_URL` is useful for advanced development, but it redirects all Warp server calls, including auth, GraphQL, cloud objects, telemetry, billing, and AI. The user-facing BYOK path should instead route only:
+Use a targeted local AI endpoint setting for BYOK. The user-facing BYOK path routes only:
 
 - `POST /ai/multi-agent`
 - `POST /ai/passive-suggestions`
-
-The BYOK UI can still expose `WARP_SERVER_ROOT_URL` as an advanced override, but the primary implementation should be a narrower local multi-agent server URL.
 
 ## Non-Goals
 
@@ -151,8 +146,6 @@ warp-build-oss:
 - [x] Route `ServerApi::generate_multi_agent_output` to the local multi-agent URL when configured.
 - [x] Route passive suggestions to the local URL when configured.
 - [x] Keep all other hosted Warp APIs on `ChannelState::server_root_url()`.
-- [ ] Add an advanced BYOK/dev setting for raw `WARP_SERVER_ROOT_URL` if still desired.
-- [ ] Make it visually clear that raw `WARP_SERVER_ROOT_URL` affects all server APIs.
 - [x] Add focused Rust tests for URL selection.
 - [ ] Add UI-level tests if there is an existing settings test pattern that fits.
 
@@ -172,6 +165,8 @@ warp-build-oss:
 - [x] Call an OpenAI-compatible streaming API.
 - [x] Emit `StreamInit` as the first response event.
 - [x] Emit minimal task/message client actions.
+- [x] Emit `ReadFiles` tool-call messages from OpenAI-compatible tool calls.
+- [x] Decode `ReadFilesResult` inputs from Warp for follow-up requests.
 - [ ] Stream assistant output through message append actions.
 - [x] Emit `StreamFinished.Done` as the final successful event.
 - [x] Map generic provider failures to Warp `InternalError` finish reason.
@@ -217,11 +212,9 @@ Return `StreamFinished.InternalError` for unsupported variants until implemented
 
 ## Tool Support Roadmap
 
-MVP should not emit tool calls.
-
 Add tools incrementally in this order:
 
-1. `ReadFiles`
+1. [x] `ReadFiles`
 2. `FileGlob`
 3. `Grep`
 4. `RunShellCommand`
@@ -257,6 +250,7 @@ Local service:
 - [x] Unit test SSE event formatting.
 - [x] Unit test prompt extraction.
 - [x] Integration test with a mock OpenAI-compatible server.
+- [x] Integration test translating an OpenAI-compatible `read_files` tool call to Warp SSE events.
 - [x] Manual smoke test for `/health`.
 
 Warp client:
@@ -280,7 +274,7 @@ End-to-end:
 ## Implementation Order
 
 - [x] Step 1: Persist client setting for local multi-agent URL.
-- [ ] Step 2: Add BYOK UI controls for local multi-agent URL and advanced server root override.
+- [x] Step 2: Add BYOK UI controls for local multi-agent URL.
 - [x] Step 3: Route only AI agent endpoints to the local multi-agent URL.
 - [x] Step 4: Add root `Makefile`.
 - [x] Step 5: Scaffold TypeScript local service.
@@ -301,7 +295,7 @@ End-to-end:
 ### 2026-04-28
 
 - Created this plan.
-- Decided to prefer a targeted local multi-agent URL over using raw `WARP_SERVER_ROOT_URL` as the main BYOK control.
+- Decided to use a targeted local multi-agent URL as the BYOK control.
 - Included Makefile requirement.
 - Removed Ollama-specific documentation example from scope.
 - Added local BYOK secure storage for `local_multi_agent_server_root_url`.
@@ -333,3 +327,5 @@ End-to-end:
 - Stopped sending a synthetic `run_id` in local `StreamInit` events so Warp does not try to sync a non-hosted task with the hosted GraphQL task API.
 - Added local service tests for SSE data formatting, supported prompt extraction variants, and an integration path that sends a Warp protobuf request through the local service to a mock OpenAI-compatible streaming `/chat/completions` endpoint.
 - Added storage-layer validation for BYOK OpenAI Base URL and Local Multi-Agent Server URL settings; only absolute `http`/`https` URLs with a host are persisted, and trailing slashes are normalized.
+- Removed raw global server-root override scope from this plan; local BYOK remains targeted to the multi-agent endpoints.
+- Added the first local tool-call path for `ReadFiles`: the service advertises an OpenAI-compatible `read_files` tool, accumulates streamed provider tool-call deltas, emits Warp `Message.ToolCall` events, decodes `ReadFilesResult` inputs on follow-up requests, keeps a minimal in-memory prompt cache so tool-result turns include the original user request, and has unit/integration coverage for the protobuf and SSE paths.

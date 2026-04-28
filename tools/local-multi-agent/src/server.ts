@@ -3,14 +3,15 @@ import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   encodeAddAgentOutput,
+  encodeAddReadFilesToolCall,
   encodeCreateTask,
   decodeWarpRequest,
   encodeStreamFinishedDone,
   encodeStreamFinishedInternalError,
   encodeStreamInit,
+  type ReadFilesToolCallFile,
 } from "./protobuf.js";
 import { resolveProviderModel } from "./model.js";
-import { collectAssistantOutput } from "./response.js";
 import { log } from "./logger.js";
 import { formatSseDataEvent } from "./sse.js";
 
@@ -18,6 +19,7 @@ const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const defaultBaseUrl = "https://api.openai.com/v1";
 const maxRequestBytes = 25 * 1024 * 1024;
 const openAiBaseUrlHeader = "x-warp-openai-base-url";
+const conversationState = new Map<string, { lastUserPrompt?: string }>();
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
@@ -55,6 +57,61 @@ function writeSse(response: http.ServerResponse, bytes: Uint8Array): void {
   response.write(formatSseDataEvent(bytes));
 }
 
+type ProviderToolCall = {
+  id: string;
+  name: string;
+  argumentsText: string;
+};
+
+type ProviderResponse = {
+  content: string;
+  toolCalls: ProviderToolCall[];
+};
+
+function readFilesToolSchema(): object {
+  return {
+    type: "function",
+    function: {
+      name: "read_files",
+      description: "Read one or more text files from the user's current workspace or shell context.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          files: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                name: {
+                  type: "string",
+                  description: "A relative or absolute file path to read.",
+                },
+                line_ranges: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {
+                      start: { type: "integer", minimum: 1 },
+                      end: { type: "integer", minimum: 1 },
+                    },
+                    required: ["start", "end"],
+                  },
+                },
+              },
+              required: ["name"],
+            },
+          },
+        },
+        required: ["files"],
+      },
+    },
+  };
+}
+
 function extractStreamingContent(payload: unknown): string {
   if (!payload || typeof payload !== "object") {
     return "";
@@ -77,12 +134,125 @@ function extractStreamingContent(payload: unknown): string {
     .join("");
 }
 
-async function* streamChatCompletion(params: {
+function extractStreamingToolCalls(payload: unknown, accumulated: Map<number, ProviderToolCall>): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+
+  const choices = (payload as { choices?: unknown }).choices;
+  if (!Array.isArray(choices)) {
+    return;
+  }
+
+  for (const choice of choices) {
+    if (!choice || typeof choice !== "object") {
+      continue;
+    }
+
+    const delta = (choice as { delta?: { tool_calls?: unknown } }).delta;
+    if (!Array.isArray(delta?.tool_calls)) {
+      continue;
+    }
+
+    for (const toolCallDelta of delta.tool_calls) {
+      if (!toolCallDelta || typeof toolCallDelta !== "object") {
+        continue;
+      }
+
+      const index = (toolCallDelta as { index?: unknown }).index;
+      if (typeof index !== "number") {
+        continue;
+      }
+
+      const existing = accumulated.get(index) ?? { id: "", name: "", argumentsText: "" };
+      const id = (toolCallDelta as { id?: unknown }).id;
+      const fn = (toolCallDelta as { function?: { name?: unknown; arguments?: unknown } }).function;
+      accumulated.set(index, {
+        id: typeof id === "string" ? id : existing.id,
+        name: typeof fn?.name === "string" ? existing.name + fn.name : existing.name,
+        argumentsText: typeof fn?.arguments === "string" ? existing.argumentsText + fn.arguments : existing.argumentsText,
+      });
+    }
+  }
+}
+
+function shouldEnableTools(): boolean {
+  return process.env.LOCAL_ENABLE_TOOLS?.trim().toLowerCase() !== "false";
+}
+
+function parseReadFilesToolCall(toolCall: ProviderToolCall): ReadFilesToolCallFile[] | undefined {
+  if (toolCall.name !== "read_files") {
+    return undefined;
+  }
+
+  const args = JSON.parse(toolCall.argumentsText || "{}") as { files?: unknown; paths?: unknown };
+  const files = Array.isArray(args.files)
+    ? args.files
+    : Array.isArray(args.paths)
+      ? args.paths.map((path) => ({ name: path }))
+      : [];
+
+  const parsed = files.flatMap((file): ReadFilesToolCallFile[] => {
+    if (typeof file === "string") {
+      return [{ name: file }];
+    }
+    if (!file || typeof file !== "object") {
+      return [];
+    }
+
+    const name = (file as { name?: unknown; path?: unknown }).name ?? (file as { path?: unknown }).path;
+    if (typeof name !== "string" || !name.trim()) {
+      return [];
+    }
+
+    const lineRanges = (file as { line_ranges?: unknown; lineRanges?: unknown }).line_ranges
+      ?? (file as { lineRanges?: unknown }).lineRanges;
+    const parsedRanges = Array.isArray(lineRanges)
+      ? lineRanges.flatMap((range): Array<{ start: number; end: number }> => {
+          if (!range || typeof range !== "object") {
+            return [];
+          }
+          const start = (range as { start?: unknown }).start;
+          const end = (range as { end?: unknown }).end;
+          return Number.isInteger(start) && Number.isInteger(end)
+            ? [{ start: Number(start), end: Number(end) }]
+            : [];
+        })
+      : undefined;
+
+    return [{ name: name.trim(), lineRanges: parsedRanges }];
+  });
+
+  return parsed.length ? parsed : undefined;
+}
+
+function promptForProvider(warpRequest: ReturnType<typeof decodeWarpRequest>): string {
+  const state = conversationState.get(warpRequest.conversationId) ?? {};
+  if (warpRequest.toolResults.length > 0 && state.lastUserPrompt) {
+    return [
+      "Original user request:",
+      state.lastUserPrompt,
+      "",
+      warpRequest.prompt,
+    ].join("\n");
+  }
+
+  if (warpRequest.prompt && warpRequest.toolResults.length === 0) {
+    conversationState.set(warpRequest.conversationId, {
+      ...state,
+      lastUserPrompt: warpRequest.prompt,
+    });
+  }
+
+  return warpRequest.prompt;
+}
+
+async function streamChatCompletion(params: {
   prompt: string;
   apiKey?: string;
   baseUrl?: string;
   model?: string;
-}): AsyncGenerator<string> {
+}): Promise<ProviderResponse> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not set and the Warp request did not include an OpenAI key.");
@@ -109,18 +279,21 @@ async function* streamChatCompletion(params: {
     { role: "user", content: params.prompt || "Continue." },
   ].filter((message) => message != null);
 
+  const requestBody = {
+    model,
+    messages,
+    temperature: 0.2,
+    stream: true,
+    ...(shouldEnableTools() ? { tools: [readFilesToolSchema()], tool_choice: "auto" } : {}),
+  };
+
   const completionResponse = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${apiKey}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: 0.2,
-      stream: true,
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!completionResponse.ok) {
@@ -146,6 +319,8 @@ async function* streamChatCompletion(params: {
   const reader = completionResponse.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let content = "";
+  const toolCalls = new Map<number, ProviderToolCall>();
 
   while (true) {
     const { done, value } = await reader.read();
@@ -165,15 +340,25 @@ async function* streamChatCompletion(params: {
 
       const data = trimmed.slice("data:".length).trim();
       if (data === "[DONE]") {
-        return;
+        return {
+          content,
+          toolCalls: [...toolCalls.values()].filter((toolCall) => toolCall.id && toolCall.name),
+        };
       }
 
-      const content = extractStreamingContent(JSON.parse(data));
-      if (content) {
-        yield content;
+      const parsed = JSON.parse(data);
+      const chunk = extractStreamingContent(parsed);
+      if (chunk) {
+        content += chunk;
       }
+      extractStreamingToolCalls(parsed, toolCalls);
     }
   }
+
+  return {
+    content,
+    toolCalls: [...toolCalls.values()].filter((toolCall) => toolCall.id && toolCall.name),
+  };
 }
 
 async function handleMultiAgent(
@@ -229,25 +414,47 @@ async function handleMultiAgent(
         );
       }
 
-      const messageId = randomUUID();
-      const output = await collectAssistantOutput(
-        streamChatCompletion({
-          prompt: warpRequest.prompt,
-          apiKey: warpRequest.openAiApiKey,
-          baseUrl: requestOpenAiBaseUrl,
-          model: warpRequest.model,
-        }),
-      );
+      const providerPrompt = promptForProvider(warpRequest);
+      const providerResponse = await streamChatCompletion({
+        prompt: providerPrompt,
+        apiKey: warpRequest.openAiApiKey,
+        baseUrl: requestOpenAiBaseUrl,
+        model: warpRequest.model,
+      });
 
-      sendEvent(
-        "add_agent_output",
-        encodeAddAgentOutput({
-          messageId,
-          taskId: warpRequest.rootTaskId,
-          requestId: warpRequest.requestId,
-          text: output,
-        }),
-      );
+      if (!providerResponse.content && !providerResponse.toolCalls.length) {
+        throw new Error("OpenAI-compatible endpoint returned no assistant content or tool calls.");
+      }
+
+      if (providerResponse.content) {
+        sendEvent(
+          "add_agent_output",
+          encodeAddAgentOutput({
+            messageId: randomUUID(),
+            taskId: warpRequest.rootTaskId,
+            requestId: warpRequest.requestId,
+            text: providerResponse.content,
+          }),
+        );
+      }
+
+      for (const toolCall of providerResponse.toolCalls) {
+        const files = parseReadFilesToolCall(toolCall);
+        if (!files) {
+          throw new Error(`Unsupported provider tool call: ${toolCall.name}`);
+        }
+
+        sendEvent(
+          "add_read_files_tool_call",
+          encodeAddReadFilesToolCall({
+            messageId: randomUUID(),
+            taskId: warpRequest.rootTaskId,
+            requestId: warpRequest.requestId,
+            toolCallId: toolCall.id,
+            files,
+          }),
+        );
+      }
     }
 
     sendEvent("stream_finished_done", encodeStreamFinishedDone());

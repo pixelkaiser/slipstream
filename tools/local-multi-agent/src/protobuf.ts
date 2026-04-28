@@ -15,8 +15,20 @@ export type WarpRequestSummary = {
   rootTaskId: string;
   shouldCreateRootTask: boolean;
   prompt: string;
+  toolResults: ReadFilesToolResult[];
   openAiApiKey?: string;
   model?: string;
+};
+
+export type ReadFilesToolCallFile = {
+  name: string;
+  lineRanges?: Array<{ start: number; end: number }>;
+};
+
+export type ReadFilesToolResult = {
+  toolCallId: string;
+  files: Array<{ filePath: string; content: string }>;
+  error?: string;
 };
 
 function concat(parts: Uint8Array[]): Uint8Array {
@@ -202,18 +214,85 @@ function decodeInputPrompt(requestFields: ProtoField[]): string | undefined {
   );
 }
 
+function decodeFileContent(fileContentFields: ProtoField[]): { filePath: string; content: string } | undefined {
+  const filePath = stringValue(field(fileContentFields, 1));
+  const content = stringValue(field(fileContentFields, 2));
+  if (!filePath || content == null) {
+    return undefined;
+  }
+
+  return { filePath, content };
+}
+
+function decodeReadFilesResult(toolCallResultFields: ProtoField[]): ReadFilesToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  if (!toolCallId) {
+    return undefined;
+  }
+
+  const readFiles = message(field(toolCallResultFields, 3));
+  if (!readFiles.length) {
+    return undefined;
+  }
+
+  const error = stringValue(field(message(field(readFiles, 2)), 1));
+  const files: Array<{ filePath: string; content: string }> = [];
+
+  const textFilesSuccess = message(field(readFiles, 1));
+  for (const fileContentField of fields(textFilesSuccess, 1)) {
+    const decoded = decodeFileContent(message(fileContentField));
+    if (decoded) {
+      files.push(decoded);
+    }
+  }
+
+  const anyFilesSuccess = message(field(readFiles, 3));
+  for (const anyFileContentField of fields(anyFilesSuccess, 1)) {
+    const textContent = message(field(message(anyFileContentField), 2));
+    const decoded = decodeFileContent(textContent);
+    if (decoded) {
+      files.push(decoded);
+    }
+  }
+
+  return { toolCallId, files, error };
+}
+
+function decodeToolResults(requestFields: ProtoField[]): ReadFilesToolResult[] {
+  const input = message(field(requestFields, 2));
+  const results: ReadFilesToolResult[] = [];
+
+  const userInputs = message(field(input, 6));
+  for (const userInputField of fields(userInputs, 1)) {
+    const userInput = message(userInputField);
+    const decoded = decodeReadFilesResult(message(field(userInput, 2)));
+    if (decoded) {
+      results.push(decoded);
+    }
+  }
+
+  const deprecatedToolCallResult = decodeReadFilesResult(message(field(input, 3)));
+  if (deprecatedToolCallResult) {
+    results.push(deprecatedToolCallResult);
+  }
+
+  return results;
+}
+
 export function decodeWarpRequest(bytes: Uint8Array): WarpRequestSummary {
   const requestFields = decodeFields(bytes);
   const { conversationId } = decodeMetadata(requestFields);
   const { openAiApiKey, model } = decodeSettings(requestFields);
   const decodedRootTaskId = decodeRootTaskId(requestFields);
+  const toolResults = decodeToolResults(requestFields);
 
   return {
     conversationId,
     requestId: randomUUID(),
     rootTaskId: decodedRootTaskId ?? randomUUID(),
     shouldCreateRootTask: decodedRootTaskId == null,
-    prompt: decodeInputPrompt(requestFields) ?? "",
+    prompt: decodeInputPrompt(requestFields) ?? formatToolResultsPrompt(toolResults),
+    toolResults,
     openAiApiKey,
     model,
   };
@@ -253,6 +332,13 @@ function encodeTimestamp(date: Date): Uint8Array {
   return int64Field(1, Math.floor(date.getTime() / 1000));
 }
 
+function encodeLineRange(range: { start: number; end: number }): Uint8Array {
+  return concat([
+    int64Field(1, range.start),
+    int64Field(2, range.end),
+  ]);
+}
+
 function encodeFieldMask(paths: string[]): Uint8Array {
   return concat(paths.map((path) => stringField(1, path)));
 }
@@ -284,6 +370,55 @@ export function encodeAddAgentOutput(params: {
   const addMessagesToTask = concat([
     stringField(1, params.taskId),
     messageField(2, outputMessage),
+  ]);
+  const clientAction = messageField(3, addMessagesToTask);
+  const clientActions = messageField(1, clientAction);
+
+  return messageField(2, clientActions);
+}
+
+function encodeReadFilesToolCall(params: {
+  toolCallId: string;
+  files: ReadFilesToolCallFile[];
+}): Uint8Array {
+  const readFiles = concat(params.files.map((file) => messageField(1, concat([
+    stringField(1, file.name),
+    ...((file.lineRanges ?? []).map((range) => messageField(2, encodeLineRange(range)))),
+  ]))));
+
+  return concat([
+    stringField(1, params.toolCallId),
+    messageField(5, readFiles),
+  ]);
+}
+
+function encodeReadFilesToolCallMessage(params: {
+  messageId: string;
+  taskId: string;
+  requestId: string;
+  toolCallId: string;
+  files: ReadFilesToolCallFile[];
+}): Uint8Array {
+  return concat([
+    stringField(1, params.messageId),
+    messageField(4, encodeReadFilesToolCall(params)),
+    stringField(11, params.taskId),
+    stringField(13, params.requestId),
+    messageField(14, encodeTimestamp(new Date())),
+  ]);
+}
+
+export function encodeAddReadFilesToolCall(params: {
+  messageId: string;
+  taskId: string;
+  requestId: string;
+  toolCallId: string;
+  files: ReadFilesToolCallFile[];
+}): Uint8Array {
+  const toolCallMessage = encodeReadFilesToolCallMessage(params);
+  const addMessagesToTask = concat([
+    stringField(1, params.taskId),
+    messageField(2, toolCallMessage),
   ]);
   const clientAction = messageField(3, addMessagesToTask);
   const clientActions = messageField(1, clientAction);
@@ -333,4 +468,23 @@ export function encodeStreamFinishedInternalError(message: string): Uint8Array {
 
 export function encodeBase64Url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+function formatToolResultsPrompt(toolResults: ReadFilesToolResult[]): string {
+  if (!toolResults.length) {
+    return "";
+  }
+
+  return [
+    "Tool results are available. Use them to continue answering the user's original request.",
+    ...toolResults.map((result) => {
+      const header = `ReadFiles result for tool_call_id=${result.toolCallId}`;
+      if (result.error) {
+        return `${header}\nError: ${result.error}`;
+      }
+
+      const files = result.files.map((file) => `File: ${file.filePath}\n${file.content}`).join("\n\n");
+      return `${header}\n${files}`;
+    }),
+  ].join("\n\n");
 }
