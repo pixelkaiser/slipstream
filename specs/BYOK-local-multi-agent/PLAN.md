@@ -95,7 +95,7 @@ Environment variables:
 - `PORT=8787`
 - `OPENAI_BASE_URL=http://127.0.0.1:1234/v1` unless Warp sends `X-Warp-OpenAI-Base-URL`
 - `OPENAI_API_KEY=...`
-- `OPENAI_MODEL=...`
+- `OPENAI_MODEL=Qwen/Qwen3.6-27B-FP8` by default unless overridden
 - `LOG_LEVEL=debug`
 
 Supported README examples:
@@ -317,3 +317,4 @@ End-to-end:
 - Fixed SSE event encoding to use padded URL-safe base64 because the Warp client decodes events with Rust's `BASE64_URL_SAFE` engine, which rejects unpadded payloads whose lengths are not multiples of 4.
 - Routed the BYOK OpenAI Base URL from the Warp setting to the local service with `X-Warp-OpenAI-Base-URL`; the local service now prefers that header over `OPENAI_BASE_URL` and only falls back to `https://api.openai.com/v1` if neither is provided.
 - Smoke-tested the header path with `OPENAI_BASE_URL` unset in the service environment to confirm the request header controls the provider URL.
+- Added a default Makefile `help` target and set the local service default model to `Qwen/Qwen3.6-27B-FP8` unless `OPENAI_MODEL` or a Warp request model is supplied.
