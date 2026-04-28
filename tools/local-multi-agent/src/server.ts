@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -7,7 +8,11 @@ import {
   encodeCreateTask,
   decodeWarpRequest,
   encodeStreamFinishedDone,
+  encodeStreamFinishedContextWindowExceeded,
   encodeStreamFinishedInternalError,
+  encodeStreamFinishedInvalidApiKey,
+  encodeStreamFinishedLlmUnavailable,
+  encodeStreamFinishedQuotaLimit,
   encodeStreamInit,
   type ReadFilesToolCallFile,
   type WarpToolCall,
@@ -21,6 +26,11 @@ const defaultBaseUrl = "https://api.openai.com/v1";
 const maxRequestBytes = 25 * 1024 * 1024;
 const openAiBaseUrlHeader = "x-warp-openai-base-url";
 const conversationState = new Map<string, { messages: ProviderChatMessage[] }>();
+const localStatePath = process.env.LOCAL_STATE_PATH?.trim() || undefined;
+const maxConversationMessages = Math.max(
+  4,
+  Number.parseInt(process.env.LOCAL_MAX_HISTORY_MESSAGES ?? "80", 10) || 80,
+);
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
@@ -64,9 +74,13 @@ type ProviderToolCall = {
   argumentsText: string;
 };
 
+type ProviderContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 type ProviderChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
-  content?: string;
+  content?: string | ProviderContentPart[];
   tool_call_id?: string;
   tool_calls?: Array<{
     id: string;
@@ -82,6 +96,19 @@ type ProviderResponse = {
   content: string;
   toolCalls: ProviderToolCall[];
 };
+
+type FinishReason = "invalid_api_key" | "llm_unavailable" | "context_window_exceeded" | "quota_limit" | "internal_error";
+
+class LocalAgentError extends Error {
+  constructor(
+    message: string,
+    readonly finishReason: FinishReason = "internal_error",
+    readonly modelName?: string,
+  ) {
+    super(message);
+    this.name = "LocalAgentError";
+  }
+}
 
 function providerToolCallMessage(toolCall: ProviderToolCall): NonNullable<ProviderChatMessage["tool_calls"]>[number] {
   return {
@@ -174,6 +201,26 @@ function grepToolSchema(): object {
           query: { type: "string" },
           path: { type: "string", description: "File or directory to search. Defaults to the current directory." },
         },
+      },
+    },
+  };
+}
+
+function searchCodebaseToolSchema(): object {
+  return {
+    type: "function",
+    function: {
+      name: "search_codebase",
+      description: "Search indexed codebase context for relevant files and snippets.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          query: { type: "string" },
+          path_filters: { type: "array", items: { type: "string" } },
+          codebase_path: { type: "string" },
+        },
+        required: ["query"],
       },
     },
   };
@@ -289,6 +336,7 @@ function localToolSchemas(): object[] {
     readFilesToolSchema(),
     fileGlobToolSchema(),
     grepToolSchema(),
+    searchCodebaseToolSchema(),
     runShellCommandToolSchema(),
     applyFileDiffsToolSchema(),
     suggestPlanToolSchema(),
@@ -462,6 +510,23 @@ function parseToolCall(toolCall: ProviderToolCall): WarpToolCall | undefined {
         },
       };
     }
+    case "search_codebase": {
+      const query = args.query;
+      if (typeof query !== "string" || !query.trim()) {
+        return undefined;
+      }
+      return {
+        toolCallId: toolCall.id,
+        tool: {
+          type: "search_codebase",
+          query: query.trim(),
+          pathFilters: stringList(args.path_filters),
+          codebasePath: typeof args.codebase_path === "string" && args.codebase_path.trim()
+            ? args.codebase_path.trim()
+            : undefined,
+        },
+      };
+    }
     case "file_glob": {
       const patterns = stringList(args.patterns).concat(stringList(args.pattern));
       if (!patterns.length) {
@@ -586,6 +651,8 @@ function formatToolResultForProvider(result: ReturnType<typeof decodeWarpRequest
       return `Updated files:\n${result.updatedFiles.join("\n")}\nDeleted files:\n${result.deletedFiles.join("\n")}`;
     case "suggest_plan":
       return `Status: ${result.status}${result.planText ? `\nPlan:\n${result.planText}` : ""}`;
+    case "generic":
+      return `${result.name} result:\n${result.content}`;
   }
 }
 
@@ -602,6 +669,131 @@ function formatUserMessageForProvider(warpRequest: ReturnType<typeof decodeWarpR
     "User request:",
     prompt,
   ].join("\n");
+}
+
+function formatUserContentForProvider(warpRequest: ReturnType<typeof decodeWarpRequest>): string | ProviderContentPart[] {
+  const text = formatUserMessageForProvider(warpRequest);
+  if (!warpRequest.contextImages?.length) {
+    return text;
+  }
+
+  return [
+    { type: "text", text },
+    ...warpRequest.contextImages.map((image) => ({
+      type: "image_url" as const,
+      image_url: { url: `data:${image.mimeType};base64,${image.data}` },
+    })),
+  ];
+}
+
+function providerMessageContentLength(content: ProviderChatMessage["content"]): number {
+  if (typeof content === "string") {
+    return content.length;
+  }
+  if (Array.isArray(content)) {
+    return content.reduce((sum, part) => sum + (part.type === "text" ? part.text.length : part.image_url.url.length), 0);
+  }
+  return 0;
+}
+
+function streamFinishedForError(error: unknown): Uint8Array {
+  if (error instanceof LocalAgentError) {
+    switch (error.finishReason) {
+      case "invalid_api_key":
+        return encodeStreamFinishedInvalidApiKey(error.modelName);
+      case "llm_unavailable":
+        return encodeStreamFinishedLlmUnavailable();
+      case "context_window_exceeded":
+        return encodeStreamFinishedContextWindowExceeded();
+      case "quota_limit":
+        return encodeStreamFinishedQuotaLimit();
+      case "internal_error":
+        break;
+    }
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  return encodeStreamFinishedInternalError(message);
+}
+
+function isProviderChatMessage(value: unknown): value is ProviderChatMessage {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const role = (value as { role?: unknown }).role;
+  return role === "system" || role === "user" || role === "assistant" || role === "tool";
+}
+
+function loadConversationState(): void {
+  if (!localStatePath) {
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(localStatePath, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return;
+    }
+    for (const [conversationId, state] of Object.entries(parsed)) {
+      const messages = (state as { messages?: unknown }).messages;
+      if (Array.isArray(messages)) {
+        conversationState.set(conversationId, {
+          messages: messages.filter(isProviderChatMessage).slice(-maxConversationMessages),
+        });
+      }
+    }
+    log("info", "conversation_state_loaded", {
+      path: localStatePath,
+      conversationCount: conversationState.size,
+    });
+  } catch (error) {
+    log("warn", "conversation_state_load_failed", {
+      path: localStatePath,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function persistConversationState(): void {
+  if (!localStatePath) {
+    return;
+  }
+
+  try {
+    writeFileSync(localStatePath, JSON.stringify(Object.fromEntries(conversationState), null, 2));
+  } catch (error) {
+    log("warn", "conversation_state_persist_failed", {
+      path: localStatePath,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function trimConversationState(state: { messages: ProviderChatMessage[] }): void {
+  if (state.messages.length > maxConversationMessages) {
+    state.messages.splice(0, state.messages.length - maxConversationMessages);
+  }
+}
+
+function classifyProviderError(status: number, body: string, model: string): LocalAgentError {
+  const lowerBody = body.toLowerCase();
+  const message = `OpenAI-compatible endpoint returned ${status}: ${body}`;
+  if (status === 401 || status === 403 || /invalid[_ ]api[_ ]key|incorrect api key|unauthorized/.test(lowerBody)) {
+    return new LocalAgentError(message, "invalid_api_key", model);
+  }
+  if (status === 429) {
+    return new LocalAgentError(message, "quota_limit", model);
+  }
+  if (
+    status === 413
+    || /context[_ -]?window|context length|maximum context|too many tokens|token limit|input is too long/.test(lowerBody)
+  ) {
+    return new LocalAgentError(message, "context_window_exceeded", model);
+  }
+  if ([408, 500, 502, 503, 504].includes(status)) {
+    return new LocalAgentError(message, "llm_unavailable", model);
+  }
+  return new LocalAgentError(message, "internal_error", model);
 }
 
 function stateForConversation(conversationId: string): { messages: ProviderChatMessage[] } {
@@ -626,10 +818,10 @@ function pendingProviderMessages(warpRequest: ReturnType<typeof decodeWarpReques
         content: formatToolResultForProvider(result),
       });
     }
-  } else if (warpRequest.prompt || warpRequest.contextText) {
+  } else if (warpRequest.prompt || warpRequest.contextText || warpRequest.contextImages?.length) {
     pendingMessages.push({
       role: "user",
-      content: formatUserMessageForProvider(warpRequest),
+      content: formatUserContentForProvider(warpRequest),
     });
   }
 
@@ -663,6 +855,8 @@ function rememberProviderResponse(
       ? { tool_calls: providerResponse.toolCalls.map(providerToolCallMessage) }
       : {}),
   });
+  trimConversationState(state);
+  persistConversationState();
 }
 
 async function streamChatCompletion(params: {
@@ -673,7 +867,7 @@ async function streamChatCompletion(params: {
 }): Promise<ProviderResponse> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is not set and the Warp request did not include an OpenAI key.");
+    throw new LocalAgentError("OPENAI_API_KEY is not set and the Warp request did not include an OpenAI key.", "invalid_api_key", params.model);
   }
 
   const baseUrl = trimTrailingSlash(nonEmpty(params.baseUrl) ?? nonEmpty(process.env.OPENAI_BASE_URL) ?? defaultBaseUrl);
@@ -687,7 +881,7 @@ async function streamChatCompletion(params: {
     model,
     warpModel: params.model ?? null,
     messageCount: params.messages.length,
-    promptChars: params.messages.reduce((sum, message) => sum + (message.content?.length ?? 0), 0),
+    promptChars: params.messages.reduce((sum, message) => sum + providerMessageContentLength(message.content), 0),
     baseUrlSource: nonEmpty(params.baseUrl) ? "request_header" : nonEmpty(process.env.OPENAI_BASE_URL) ? "env" : "default",
   });
 
@@ -723,11 +917,11 @@ async function streamChatCompletion(params: {
       model,
       baseUrl,
     });
-    throw new Error(`OpenAI-compatible endpoint returned ${completionResponse.status}: ${body}`);
+    throw classifyProviderError(completionResponse.status, body, model);
   }
 
   if (!completionResponse.body) {
-    throw new Error("OpenAI-compatible endpoint returned no response stream.");
+    throw new LocalAgentError("OpenAI-compatible endpoint returned no response stream.", "llm_unavailable", model);
   }
   log("debug", "provider_stream_opened", {
     status: completionResponse.status,
@@ -798,6 +992,8 @@ async function handleMultiAgent(
     shouldCreateRootTask: warpRequest.shouldCreateRootTask,
     promptChars: warpRequest.prompt.length,
     contextChars: warpRequest.contextText?.length ?? 0,
+    contextImageCount: warpRequest.contextImages?.length ?? 0,
+    toolResultTypes: warpRequest.toolResults.map((result) => result.type === "generic" ? result.name : result.type),
     warpModel: warpRequest.model ?? null,
     hasRequestApiKey: warpRequest.openAiApiKey != null,
     hasOpenAiBaseUrlHeader: requestOpenAiBaseUrl != null,
@@ -845,7 +1041,7 @@ async function handleMultiAgent(
       });
 
       if (!providerResponse.content && !providerResponse.toolCalls.length) {
-        throw new Error("OpenAI-compatible endpoint returned no assistant content or tool calls.");
+        throw new LocalAgentError("OpenAI-compatible endpoint returned no assistant content or tool calls.");
       }
 
       rememberProviderResponse(warpRequest.conversationId, providerMessages.pendingMessages, providerResponse);
@@ -865,7 +1061,7 @@ async function handleMultiAgent(
       for (const toolCall of providerResponse.toolCalls) {
         const parsedToolCall = parseToolCall(toolCall);
         if (!parsedToolCall) {
-          throw new Error(`Unsupported provider tool call: ${toolCall.name}`);
+          throw new LocalAgentError(`Unsupported provider tool call: ${toolCall.name}`);
         }
 
         sendEvent(
@@ -887,7 +1083,7 @@ async function handleMultiAgent(
       requestId: warpRequest.requestId,
       message,
     });
-    sendEvent("stream_finished_internal_error", encodeStreamFinishedInternalError(message));
+    sendEvent("stream_finished_error", streamFinishedForError(error));
   } finally {
     await delay(0);
     response.end();
@@ -961,6 +1157,8 @@ const server = http.createServer((request, response) => {
   });
 });
 
+loadConversationState();
+
 server.listen(port, "127.0.0.1", () => {
   log("info", "server_started", {
     url: `http://127.0.0.1:${port}`,
@@ -968,5 +1166,7 @@ server.listen(port, "127.0.0.1", () => {
     hasOpenAiBaseUrlEnv: nonEmpty(process.env.OPENAI_BASE_URL) != null,
     hasOpenAiModelEnv: nonEmpty(process.env.OPENAI_MODEL) != null,
     hasModelAliasesEnv: nonEmpty(process.env.LOCAL_MODEL_ALIASES) != null,
+    hasLocalStatePath: localStatePath != null,
+    maxConversationMessages,
   });
 });
