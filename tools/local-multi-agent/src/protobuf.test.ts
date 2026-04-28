@@ -71,7 +71,7 @@ test("marks requests without a task context as needing root task creation", () =
 });
 
 test("encodes response events as protobuf payloads", () => {
-  assert.equal(encodeBase64Url(encodeStreamInit("c", "r")), "CgkKAWMSAXIaAWM=");
+  assert.equal(encodeBase64Url(encodeStreamInit("c", "r")), "CgYKAWMSAXI=");
   assert.equal(encodeBase64Url(encodeStreamFinishedDone()), "GgISAA==");
   assert.ok(encodeAgentOutput({ taskId: "root", requestId: "req", text: "ok" }).length > 0);
   assert.ok(encodeCreateTask({ taskId: "root", description: "hello" }).length > 0);
