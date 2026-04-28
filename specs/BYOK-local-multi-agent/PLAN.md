@@ -170,7 +170,7 @@ warp-build-oss:
 - [x] Decode `ReadFilesResult` inputs from Warp for follow-up requests.
 - [x] Emit `FileGlob`, `Grep`, `SearchCodebase`, `RunShellCommand`, `ApplyFileDiffs`, and `SuggestPlan` tool-call messages from OpenAI-compatible tool calls.
 - [x] Decode `FileGlob`, `Grep`, `SearchCodebase`, `RunShellCommand`, `ApplyFileDiffs`, `SuggestPlan`, and generic follow-up results from Warp for follow-up requests.
-- [ ] Stream assistant output through message append actions.
+- [x] Stream assistant output through message append actions.
 - [x] Emit `StreamFinished.Done` as the final successful event.
 - [x] Map provider authentication, quota, availability, context-window, and generic failures to Warp stream finish reasons.
 - [x] Add in-memory conversation transcript state keyed by conversation ID.
@@ -350,3 +350,5 @@ End-to-end:
 - Added specific Warp stream finish reason mapping for invalid API keys, quota/rate limits, provider unavailability, and context-window failures.
 - Added `LOCAL_MAX_HISTORY_MESSAGES` transcript trimming and optional `LOCAL_STATE_PATH` JSON persistence for local conversation history.
 - Added `search_codebase` tool-call support and generic provider follow-up formatting for additional Warp tool results such as MCP reads/calls, shell-output reads, skill reads, conversation fetches, and codebase search results.
+- Restored incremental assistant output streaming using Warp's exchange sequencing contract: the first provider content chunk creates the assistant message with `AddMessagesToTask`, and subsequent chunks append to that same message with `AppendToMessageContent`.
+- Added integration coverage that verifies a chunked provider stream emits both the initial assistant output event and a later append event with the `message.agent_output.text` field mask.
