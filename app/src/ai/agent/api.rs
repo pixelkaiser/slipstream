@@ -122,6 +122,7 @@ pub struct RequestParams {
     /// User-provided custom model providers (BYOK endpoints).
     pub custom_model_providers:
         Option<warp_multi_agent_api::request::settings::CustomModelProviders>,
+    pub openai_base_url: Option<String>,
     pub local_multi_agent_server_root_url: Option<String>,
     pub allow_use_of_warp_credits: bool,
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
@@ -259,6 +260,7 @@ impl RequestParams {
             .keys()
             .local_multi_agent_server_root_url
             .clone();
+        let openai_base_url = ApiKeyManager::as_ref(app).keys().openai_base_url.clone();
         let allow_use_of_warp_credits = *AISettings::as_ref(app).can_use_warp_credits_for_fallback;
 
         let app_execution_mode = AppExecutionMode::as_ref(app);
@@ -348,6 +350,7 @@ impl RequestParams {
             should_redact_secrets,
             api_keys,
             custom_model_providers,
+            openai_base_url,
             local_multi_agent_server_root_url,
             allow_use_of_warp_credits,
             autonomy_level,

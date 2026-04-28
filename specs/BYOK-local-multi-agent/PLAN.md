@@ -13,7 +13,8 @@ This document is the implementation source of truth. Each implementation step sh
 - The response is Server-Sent Events. Each SSE message `data` value is base64-url-encoded protobuf bytes for `warp.multi_agent.v1.ResponseEvent`.
 - `WARP_SERVER_ROOT_URL` can override the global server root URL, but that affects all server APIs, not only agent requests.
 - BYOK is enabled for OSS builds on this branch.
-- The UI now has local secure storage for an `OpenAI Base URL`, but the pinned multi-agent protobuf has no field that lets Warp's hosted backend consume it.
+- The UI now has local secure storage for an `OpenAI Base URL`.
+- The pinned multi-agent protobuf has no field for an OpenAI-compatible base URL, so Warp passes it to the local multi-agent service with the `X-Warp-OpenAI-Base-URL` request header when a local multi-agent server URL is configured.
 
 ## Key Decision
 
@@ -92,7 +93,7 @@ Makefile
 Environment variables:
 
 - `PORT=8787`
-- `OPENAI_BASE_URL=http://127.0.0.1:1234/v1`
+- `OPENAI_BASE_URL=http://127.0.0.1:1234/v1` unless Warp sends `X-Warp-OpenAI-Base-URL`
 - `OPENAI_API_KEY=...`
 - `OPENAI_MODEL=...`
 - `LOG_LEVEL=debug`
@@ -314,3 +315,5 @@ End-to-end:
 - Added a unit test for the streaming append field mask.
 - Smoke-tested the streaming path with the provided OpenAI-compatible endpoint using environment variables only; the response emitted multiple SSE data events.
 - Fixed SSE event encoding to use padded URL-safe base64 because the Warp client decodes events with Rust's `BASE64_URL_SAFE` engine, which rejects unpadded payloads whose lengths are not multiples of 4.
+- Routed the BYOK OpenAI Base URL from the Warp setting to the local service with `X-Warp-OpenAI-Base-URL`; the local service now prefers that header over `OPENAI_BASE_URL` and only falls back to `https://api.openai.com/v1` if neither is provided.
+- Smoke-tested the header path with `OPENAI_BASE_URL` unset in the service environment to confirm the request header controls the provider URL.

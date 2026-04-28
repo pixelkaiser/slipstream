@@ -67,6 +67,8 @@ use super::experiments::ServerExperiment;
 use super::experiments::ServerExperiments;
 use super::graphql::GraphQLError;
 
+const OPENAI_BASE_URL_HEADER: &str = "X-Warp-OpenAI-Base-URL";
+
 fn multi_agent_output_url(
     is_passive: bool,
     is_evals: bool,
@@ -1211,6 +1213,7 @@ impl ServerApi {
         &self,
         request: &warp_multi_agent_api::Request,
         server_root_url_override: Option<&str>,
+        openai_base_url: Option<&str>,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
         let auth_token = self
@@ -1245,6 +1248,12 @@ impl ServerApi {
 
         if let Some(token) = ambient_workload_token {
             request_builder = request_builder.header(AMBIENT_WORKLOAD_TOKEN_HEADER, token);
+        }
+
+        if server_root_url_override.is_some() {
+            if let Some(openai_base_url) = openai_base_url {
+                request_builder = request_builder.header(OPENAI_BASE_URL_HEADER, openai_base_url);
+            }
         }
 
         cfg_if::cfg_if! {
