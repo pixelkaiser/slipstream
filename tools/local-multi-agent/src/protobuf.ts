@@ -1381,7 +1381,7 @@ export function encodeAppendAgentOutput(params: {
   const outputMessage = encodeAgentOutputMessage(params);
   const appendToMessageContent = concat([
     messageField(1, outputMessage),
-    messageField(2, encodeFieldMask(["message.agent_output.text"])),
+    messageField(2, encodeFieldMask(["agent_output.text"])),
     stringField(3, params.taskId),
   ]);
   const clientAction = messageField(5, appendToMessageContent);

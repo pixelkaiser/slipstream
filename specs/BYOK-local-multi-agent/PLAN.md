@@ -351,4 +351,5 @@ End-to-end:
 - Added `LOCAL_MAX_HISTORY_MESSAGES` transcript trimming and optional `LOCAL_STATE_PATH` JSON persistence for local conversation history.
 - Added `search_codebase` tool-call support and generic provider follow-up formatting for additional Warp tool results such as MCP reads/calls, shell-output reads, skill reads, conversation fetches, and codebase search results.
 - Restored incremental assistant output streaming using Warp's exchange sequencing contract: the first provider content chunk creates the assistant message with `AddMessagesToTask`, and subsequent chunks append to that same message with `AppendToMessageContent`.
-- Added integration coverage that verifies a chunked provider stream emits both the initial assistant output event and a later append event with the `message.agent_output.text` field mask.
+- Added integration coverage that verifies a chunked provider stream emits both the initial assistant output event and a later append event with the `agent_output.text` field mask.
+- Fixed the local append field mask to `agent_output.text`, which is rooted at Warp's `Message` descriptor. The previous `message.agent_output.text` path was silently ignored by the client append operation.

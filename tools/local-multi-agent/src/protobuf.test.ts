@@ -426,5 +426,6 @@ test("encodes streaming agent output append events with the text field mask", ()
   });
 
   assert.ok(initial.length > 0);
-  assert.ok(Buffer.from(append).includes("message.agent_output.text"));
+  assert.ok(Buffer.from(append).includes("agent_output.text"));
+  assert.equal(Buffer.from(append).includes("message.agent_output.text"), false);
 });
