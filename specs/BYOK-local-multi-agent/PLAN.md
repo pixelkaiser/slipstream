@@ -167,10 +167,10 @@ warp-build-oss:
 - [x] Implement `POST /ai/passive-suggestions`.
 - [x] Extract user text from supported request input variants.
 - [x] Convert Warp request context into a simple model prompt.
-- [ ] Call an OpenAI-compatible streaming API.
+- [x] Call an OpenAI-compatible streaming API.
 - [x] Emit `StreamInit` as the first response event.
 - [x] Emit minimal task/message client actions.
-- [ ] Stream assistant output through message append/update actions.
+- [x] Stream assistant output through message append actions.
 - [x] Emit `StreamFinished.Done` as the final successful event.
 - [x] Map generic provider failures to Warp `InternalError` finish reason.
 - [ ] Add in-memory conversation/task state keyed by conversation ID.
@@ -248,6 +248,7 @@ Always try to end the SSE stream with `StreamFinished` so the Warp UI can leave 
 Local service:
 
 - [x] Unit test protobuf decode/encode.
+- [x] Unit test streaming append event field-mask encoding.
 - [ ] Unit test SSE event formatting.
 - [ ] Unit test prompt extraction.
 - [ ] Integration test with a mock OpenAI-compatible server.
@@ -266,6 +267,7 @@ End-to-end:
 - [x] Start local service with `npm start`.
 - [ ] Configure Warp BYOK settings to use the local service URL.
 - [x] Configure OpenAI Base URL/API key in the local service environment.
+- [x] Confirm local service emits multiple SSE events for a streamed provider response.
 - [ ] Send a simple prompt in Warp Agent.
 - [ ] Confirm assistant output streams into the Warp UI.
 - [ ] Confirm hosted auth/cloud APIs still use the normal Warp server root.
@@ -281,7 +283,7 @@ End-to-end:
 - [x] Step 7: Implement `/health`.
 - [x] Step 8: Implement protobuf SSE helpers.
 - [x] Step 9: Implement simple prompt extraction.
-- [ ] Step 10: Implement OpenAI-compatible streaming call.
+- [x] Step 10: Implement OpenAI-compatible streaming call.
 - [x] Step 11: Emit minimal Warp task/message events.
 - [x] Step 12: Add local service tests.
 - [x] Step 13: Add Warp routing tests.
@@ -304,6 +306,10 @@ End-to-end:
 - Added the root `Makefile` targets for local-agent install/dev/build/start/test and Warp OSS app build.
 - Scaffolded `tools/local-multi-agent` as a TypeScript service with `GET /health`, `POST /ai/multi-agent`, and `POST /ai/passive-suggestions`.
 - Implemented an MVP hand-written protobuf codec for the fields needed to decode a simple Warp request and encode `StreamInit`, `ClientActions.AddMessagesToTask`, `StreamFinished.Done`, and `StreamFinished.InternalError`.
-- Wired the local service to an OpenAI-compatible `/chat/completions` endpoint via environment variables. The current provider call is non-streaming; it sends one assistant message event after the model response completes.
+- Wired the local service to an OpenAI-compatible `/chat/completions` endpoint via environment variables.
 - Added local service unit tests for protobuf request decoding and response event encoding.
 - Smoke-tested the local service with a provided OpenAI-compatible endpoint using environment variables only; no test secrets were written to the repo.
+- Reworked the local service provider call to use OpenAI-compatible streaming chat completions.
+- Added streaming Warp response support: the service emits an initial empty `AgentOutput` message, then sends `AppendToMessageContent` events with the `message.agent_output.text` field mask for each provider chunk.
+- Added a unit test for the streaming append field mask.
+- Smoke-tested the streaming path with the provided OpenAI-compatible endpoint using environment variables only; the response emitted multiple SSE data events.
