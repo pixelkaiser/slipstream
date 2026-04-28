@@ -161,20 +161,20 @@ warp-build-oss:
 - [x] Implement `POST /ai/multi-agent`.
 - [x] Implement `POST /ai/passive-suggestions`.
 - [x] Extract user text from supported request input variants.
-- [x] Extract selected text and attached terminal/file context from supported `InputContext` fields.
+- [x] Extract selected text, referenced attachments, terminal/file/image context, environment metadata, skills, LSP, and MCP summaries from supported request fields.
 - [x] Convert Warp request context into a simple model prompt.
 - [x] Call an OpenAI-compatible streaming API.
 - [x] Emit `StreamInit` as the first response event.
 - [x] Emit minimal task/message client actions.
 - [x] Emit `ReadFiles` tool-call messages from OpenAI-compatible tool calls.
 - [x] Decode `ReadFilesResult` inputs from Warp for follow-up requests.
-- [x] Emit `FileGlob`, `Grep`, `RunShellCommand`, `ApplyFileDiffs`, and `SuggestPlan` tool-call messages from OpenAI-compatible tool calls.
-- [x] Decode `FileGlob`, `Grep`, `RunShellCommand`, `ApplyFileDiffs`, and `SuggestPlan` results from Warp for follow-up requests.
+- [x] Emit `FileGlob`, `Grep`, `SearchCodebase`, `RunShellCommand`, `ApplyFileDiffs`, and `SuggestPlan` tool-call messages from OpenAI-compatible tool calls.
+- [x] Decode `FileGlob`, `Grep`, `SearchCodebase`, `RunShellCommand`, `ApplyFileDiffs`, `SuggestPlan`, and generic follow-up results from Warp for follow-up requests.
 - [ ] Stream assistant output through message append actions.
 - [x] Emit `StreamFinished.Done` as the final successful event.
-- [x] Map generic provider failures to Warp `InternalError` finish reason.
+- [x] Map provider authentication, quota, availability, context-window, and generic failures to Warp stream finish reasons.
 - [x] Add in-memory conversation transcript state keyed by conversation ID.
-- [ ] Add optional JSON persistence for local state.
+- [x] Add optional JSON persistence for local state.
 - [x] Document local run workflow.
 
 ## MVP Protocol Behavior
@@ -220,9 +220,10 @@ Add tools incrementally in this order:
 1. [x] `ReadFiles`
 2. [x] `FileGlob`
 3. [x] `Grep`
-4. [x] `RunShellCommand`
-5. [x] `ApplyFileDiffs`
-6. [x] `SuggestPlan`
+4. [x] `SearchCodebase`
+5. [x] `RunShellCommand`
+6. [x] `ApplyFileDiffs`
+7. [x] `SuggestPlan`
 
 For each tool:
 
@@ -252,7 +253,7 @@ Local service:
 - [x] Unit test log redaction.
 - [x] Unit test SSE event formatting.
 - [x] Unit test prompt extraction.
-- [x] Unit test selected text and command context extraction.
+- [x] Unit test selected text, command, environment, image, and generic tool result extraction.
 - [x] Integration test with a mock OpenAI-compatible server.
 - [x] Integration test forwarding selected text context to the provider.
 - [x] Integration test preserving OpenAI-compatible conversation history across turns.
@@ -345,3 +346,7 @@ End-to-end:
 - Noted that the local transcript state is process-local; restarting the service clears history unless optional persistence is added later.
 - The Warp log warning `No metadata returned for conversation` is a separate hosted metadata lookup and not the source of local provider context loss.
 - Added local decoding for `InputContext.selected_text`, deprecated `InputContext.executed_shell_commands`, attached text files, and current directory. User prompts sent to the provider now include an `Attached context` section, so selected terminal output such as command results is visible to the local model.
+- Expanded local request decoding for more `InputContext` fields, referenced attachments, MCP summaries, image attachments, CLI-agent prompts, passive-suggestion prompts, environment creation prompts, and additional tool results that can be represented as generic provider follow-up content.
+- Added specific Warp stream finish reason mapping for invalid API keys, quota/rate limits, provider unavailability, and context-window failures.
+- Added `LOCAL_MAX_HISTORY_MESSAGES` transcript trimming and optional `LOCAL_STATE_PATH` JSON persistence for local conversation history.
+- Added `search_codebase` tool-call support and generic provider follow-up formatting for additional Warp tool results such as MCP reads/calls, shell-output reads, skill reads, conversation fetches, and codebase search results.

@@ -19,14 +19,16 @@ Set these environment variables before starting the service:
 - `OPENAI_MODEL` globally overrides model selection and otherwise defaults to `Qwen/Qwen3.6-27B-FP8`.
 - `LOCAL_MODEL_ALIASES` optionally maps Warp model IDs to provider model IDs as JSON. Built-in aliases map `auto`, `auto-efficient`, `auto-coding`, and `auto-reasoning` to `Qwen/Qwen3.6-27B-FP8`.
 - `LOCAL_ENABLE_TOOLS=false` disables local tool-call advertisement. Tools are enabled by default.
+- `LOCAL_MAX_HISTORY_MESSAGES` limits in-memory provider transcript messages per conversation. Defaults to `80`.
+- `LOCAL_STATE_PATH` optionally persists provider transcripts to a local JSON file across service restarts.
 - `LOG_LEVEL` defaults to `info`; use `debug` to log individual SSE events.
 - `PORT` defaults to `8787`
 
-Supported tool-call names are `read_files`, `file_glob`, `grep`, `run_shell_command`, `apply_file_diffs`, and `suggest_plan`. Warp executes the tool call locally and sends the result back to this service on the next request.
+Supported tool-call names are `read_files`, `file_glob`, `grep`, `search_codebase`, `run_shell_command`, `apply_file_diffs`, and `suggest_plan`. Warp executes the tool call locally and sends the result back to this service on the next request.
 
 The service keeps OpenAI-compatible chat history in memory per Warp conversation ID, including assistant tool calls and tool results. Restarting the service clears this local history.
 
-For user prompts, the service also forwards supported Warp input context to the provider. This currently includes selected text, attached executed shell command blocks, attached text files, and the current directory.
+For user prompts, the service also forwards supported Warp input context to the provider. This currently includes selected text, referenced attachments, attached executed shell command blocks, running command snapshots, attached text files, images, current directory, OS/shell/time, git metadata, codebase/project-rule summaries, skills, LSP server summaries, and MCP server/resource/tool summaries.
 
 The service logs JSON lines for startup, HTTP requests, Warp multi-agent requests, provider requests, errors, and completion summaries. API keys and authorization-like fields are redacted.
 
