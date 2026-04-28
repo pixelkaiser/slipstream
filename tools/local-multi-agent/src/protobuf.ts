@@ -15,6 +15,7 @@ export type WarpRequestSummary = {
   rootTaskId: string;
   shouldCreateRootTask: boolean;
   prompt: string;
+  contextText?: string;
   toolResults: WarpToolResult[];
   openAiApiKey?: string;
   model?: string;
@@ -293,6 +294,68 @@ function decodeInputPrompt(requestFields: ProtoField[]): string | undefined {
   );
 }
 
+function decodeFileContext(fileFields: ProtoField[]): string | undefined {
+  const content = message(field(fileFields, 1));
+  const filePath = stringValue(field(content, 1));
+  const text = stringValue(field(content, 2));
+  if (!filePath || !text) {
+    return undefined;
+  }
+
+  const lineRange = message(field(content, 3));
+  const start = intValue(field(lineRange, 1));
+  const end = intValue(field(lineRange, 2));
+  const range = start != null && end != null ? `:${start}-${end}` : "";
+  return [`File: ${filePath}${range}`, text].join("\n");
+}
+
+function decodeAttachedContext(requestFields: ProtoField[]): string | undefined {
+  const input = message(field(requestFields, 2));
+  const context = message(field(input, 1));
+  if (!context.length) {
+    return undefined;
+  }
+
+  const sections: string[] = [];
+
+  const directory = message(field(context, 1));
+  const pwd = stringValue(field(directory, 1));
+  if (pwd) {
+    sections.push(`Current directory: ${pwd}`);
+  }
+
+  for (const selectedTextField of fields(context, 6)) {
+    const text = stringValue(field(message(selectedTextField), 1));
+    if (text) {
+      sections.push(`Selected text:\n${text}`);
+    }
+  }
+
+  for (const commandField of fields(context, 5)) {
+    const command = message(commandField);
+    const commandText = stringValue(field(command, 1));
+    const output = stringValue(field(command, 2));
+    const exitCode = intValue(field(command, 3));
+    if (commandText || output) {
+      sections.push([
+        "Executed shell command:",
+        commandText ? `Command: ${commandText}` : undefined,
+        exitCode != null ? `Exit code: ${exitCode}` : undefined,
+        output ? `Output:\n${output}` : undefined,
+      ].filter((line): line is string => line != null).join("\n"));
+    }
+  }
+
+  for (const fileField of fields(context, 9)) {
+    const decoded = decodeFileContext(message(fileField));
+    if (decoded) {
+      sections.push(decoded);
+    }
+  }
+
+  return sections.length ? sections.join("\n\n") : undefined;
+}
+
 function decodeFileContent(fileContentFields: ProtoField[]): { filePath: string; content: string } | undefined {
   const filePath = stringValue(field(fileContentFields, 1));
   const content = stringValue(field(fileContentFields, 2));
@@ -539,6 +602,7 @@ export function decodeWarpRequest(bytes: Uint8Array): WarpRequestSummary {
     rootTaskId: decodedRootTaskId ?? randomUUID(),
     shouldCreateRootTask: decodedRootTaskId == null,
     prompt: decodeInputPrompt(requestFields) ?? formatToolResultsPrompt(toolResults),
+    contextText: decodeAttachedContext(requestFields),
     toolResults,
     openAiApiKey,
     model,
