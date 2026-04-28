@@ -26,6 +26,7 @@ serde_yaml.workspace = true
 string-offset.workspace = true
 typed-path.workspace = true
 anyhow.workspace = true
+url.workspace = true
 base16ct = "0.2.0"
 streaming-iterator.workspace = true
 instant.workspace = true
