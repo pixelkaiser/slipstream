@@ -172,7 +172,7 @@ warp-build-oss:
 - [x] Call an OpenAI-compatible streaming API.
 - [x] Emit `StreamInit` as the first response event.
 - [x] Emit minimal task/message client actions.
-- [x] Stream assistant output through message append actions.
+- [ ] Stream assistant output through message append actions.
 - [x] Emit `StreamFinished.Done` as the final successful event.
 - [x] Map generic provider failures to Warp `InternalError` finish reason.
 - [ ] Add in-memory conversation/task state keyed by conversation ID.
@@ -251,6 +251,8 @@ Local service:
 
 - [x] Unit test protobuf decode/encode.
 - [x] Unit test streaming append event field-mask encoding.
+- [x] Unit test model alias resolution.
+- [x] Unit test buffered provider stream collection.
 - [ ] Unit test SSE event formatting.
 - [ ] Unit test prompt extraction.
 - [ ] Integration test with a mock OpenAI-compatible server.
@@ -269,7 +271,7 @@ End-to-end:
 - [x] Start local service with `npm start`.
 - [ ] Configure Warp BYOK settings to use the local service URL.
 - [x] Configure OpenAI Base URL/API key in the local service environment.
-- [x] Confirm local service emits multiple SSE events for a streamed provider response.
+- [ ] Confirm assistant output streams into Warp UI without `ExchangeNotFound`.
 - [ ] Send a simple prompt in Warp Agent.
 - [ ] Confirm assistant output streams into the Warp UI.
 - [ ] Confirm hosted auth/cloud APIs still use the normal Warp server root.
@@ -321,3 +323,6 @@ End-to-end:
 - Added a default Makefile `help` target and set the local service default model to `Qwen/Qwen3.6-27B-FP8` unless `OPENAI_MODEL` is supplied.
 - Added local service model aliasing so Warp's internal model IDs, such as `auto-efficient`, can map to OpenAI-compatible provider model IDs.
 - Made `make local-agent-start` depend on `local-agent-build` so it does not run stale compiled `dist` output.
+- Temporarily changed the local service to buffer provider stream chunks and emit one final `AddMessagesToTask` event. Per-chunk `AppendToMessageContent` caused `Conversation(ExchangeNotFound)` in the Warp UI because the local service was not yet matching Warp's exchange sequencing contract.
+- Added unit tests for model alias mapping and buffered provider stream collection.
+- Smoke-tested the buffered response path; the local service now emits exactly three SSE events for a successful request: `StreamInit`, one `AddMessagesToTask`, and `StreamFinished.Done`.

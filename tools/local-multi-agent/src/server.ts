@@ -3,23 +3,17 @@ import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   encodeAddAgentOutput,
-  encodeAppendAgentOutput,
   decodeWarpRequest,
   encodeBase64Url,
   encodeStreamFinishedDone,
   encodeStreamFinishedInternalError,
   encodeStreamInit,
 } from "./protobuf.js";
+import { resolveProviderModel } from "./model.js";
+import { collectAssistantOutput } from "./response.js";
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const defaultBaseUrl = "https://api.openai.com/v1";
-const defaultModel = "Qwen/Qwen3.6-27B-FP8";
-const defaultModelAliases: Record<string, string> = {
-  auto: defaultModel,
-  "auto-efficient": defaultModel,
-  "auto-coding": defaultModel,
-  "auto-reasoning": defaultModel,
-};
 const maxRequestBytes = 25 * 1024 * 1024;
 const openAiBaseUrlHeader = "x-warp-openai-base-url";
 
@@ -30,47 +24,6 @@ function trimTrailingSlash(value: string): string {
 function nonEmpty(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
-}
-
-function configuredModelAliases(): Record<string, string> {
-  const rawAliases = nonEmpty(process.env.LOCAL_MODEL_ALIASES);
-  if (!rawAliases) {
-    return {};
-  }
-
-  const aliases = JSON.parse(rawAliases) as unknown;
-  if (!aliases || typeof aliases !== "object" || Array.isArray(aliases)) {
-    throw new Error("LOCAL_MODEL_ALIASES must be a JSON object mapping Warp model IDs to provider model IDs.");
-  }
-
-  return Object.fromEntries(
-    Object.entries(aliases)
-      .map(([key, value]) => [key, typeof value === "string" ? nonEmpty(value) : undefined] as const)
-      .filter((entry): entry is [string, string] => entry[1] != null),
-  );
-}
-
-function resolveProviderModel(warpModel: string | undefined): string {
-  const explicitModel = nonEmpty(process.env.OPENAI_MODEL);
-  if (explicitModel) {
-    return explicitModel;
-  }
-
-  const requestedModel = nonEmpty(warpModel);
-  if (!requestedModel) {
-    return defaultModel;
-  }
-
-  const modelAliases = {
-    ...defaultModelAliases,
-    ...configuredModelAliases(),
-  };
-
-  if (modelAliases[requestedModel]) {
-    return modelAliases[requestedModel];
-  }
-
-  return requestedModel.startsWith("auto") ? defaultModel : requestedModel;
 }
 
 function sendJson(response: http.ServerResponse, status: number, payload: unknown): void {
@@ -134,7 +87,11 @@ async function* streamChatCompletion(params: {
   }
 
   const baseUrl = trimTrailingSlash(nonEmpty(params.baseUrl) ?? nonEmpty(process.env.OPENAI_BASE_URL) ?? defaultBaseUrl);
-  const model = resolveProviderModel(params.model);
+  const model = resolveProviderModel({
+    openAiModel: process.env.OPENAI_MODEL,
+    warpModel: params.model,
+    localModelAliases: process.env.LOCAL_MODEL_ALIASES,
+  });
 
   const messages = [
     process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT
@@ -221,6 +178,14 @@ async function handleMultiAgent(
   try {
     if (!passiveSuggestions) {
       const messageId = randomUUID();
+      const output = await collectAssistantOutput(
+        streamChatCompletion({
+          prompt: warpRequest.prompt,
+          apiKey: warpRequest.openAiApiKey,
+          baseUrl: requestOpenAiBaseUrl,
+          model: warpRequest.model,
+        }),
+      );
 
       writeSse(
         response,
@@ -228,26 +193,9 @@ async function handleMultiAgent(
           messageId,
           taskId: warpRequest.rootTaskId,
           requestId: warpRequest.requestId,
-          text: "",
+          text: output,
         }),
       );
-
-      for await (const chunk of streamChatCompletion({
-        prompt: warpRequest.prompt,
-        apiKey: warpRequest.openAiApiKey,
-        baseUrl: requestOpenAiBaseUrl,
-        model: warpRequest.model,
-      })) {
-        writeSse(
-          response,
-          encodeAppendAgentOutput({
-            messageId,
-            taskId: warpRequest.rootTaskId,
-            requestId: warpRequest.requestId,
-            text: chunk,
-          }),
-        );
-      }
     }
 
     writeSse(response, encodeStreamFinishedDone());
