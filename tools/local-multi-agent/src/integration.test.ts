@@ -176,6 +176,80 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
   }
 });
 
+test("keeps provider conversation history across turns", { timeout: 10_000 }, async () => {
+  const providerBodies: unknown[] = [];
+  const provider = http.createServer(async (_request, response) => {
+    providerBodies.push(JSON.parse(await readBody(_request)));
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+    });
+    const content = providerBodies.length === 1 ? "first answer" : "second answer";
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`);
+    response.write("data: [DONE]\n\n");
+    response.end();
+  });
+  const providerPort = await listenOnLoopback(provider);
+
+  const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
+  const servicePort = await listenOnLoopback(serviceProbe);
+  await closeServer(serviceProbe);
+
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const child = spawn(process.execPath, ["dist/server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(servicePort),
+      OPENAI_API_KEY: "sk-local-test",
+      OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
+      OPENAI_MODEL: "mock-model",
+      LOG_LEVEL: "error",
+    },
+  });
+  child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
+  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+
+  try {
+    await waitForHealth(servicePort, child);
+    const firstResponse = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpPromptRequest("first prompt", "conversation-history")),
+    });
+    assert.equal(firstResponse.status, 200);
+    await firstResponse.text();
+
+    const secondResponse = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpPromptRequest("second prompt", "conversation-history")),
+    });
+    assert.equal(secondResponse.status, 200);
+    await secondResponse.text();
+
+    assert.equal(providerBodies.length, 2);
+    assert.deepEqual((providerBodies[1] as { messages?: unknown }).messages, [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first answer" },
+      { role: "user", content: "second prompt" },
+    ]);
+  } catch (error) {
+    const diagnostics = [
+      `stdout:\n${stdout.join("")}`,
+      `stderr:\n${stderr.join("")}`,
+    ].join("\n");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${diagnostics}`);
+  } finally {
+    stopChild(child);
+    await closeServer(provider);
+  }
+});
+
 test("translates an OpenAI read_files tool call into Warp SSE events", { timeout: 10_000 }, async () => {
   const providerBodies: unknown[] = [];
   const provider = http.createServer(async (request, response) => {
@@ -266,9 +340,28 @@ test("translates an OpenAI read_files tool call into Warp SSE events", { timeout
     assert.equal(followUpResponse.status, 200);
     const followUpEvents = (await followUpResponse.text()).split("\n\n").filter(Boolean);
     assert.equal(followUpEvents.length, 4);
-    const followUpMessages = (providerBodies[1] as { messages?: Array<{ content?: string }> }).messages ?? [];
-    assert.match(followUpMessages[0]?.content ?? "", /Original user request:\nread src\/main\.ts/);
-    assert.match(followUpMessages[0]?.content ?? "", /console\.log\('tool result'\)/);
+    assert.deepEqual((providerBodies[1] as { messages?: unknown }).messages, [
+      { role: "user", content: "read src/main.ts" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call-read-files",
+            type: "function",
+            function: {
+              name: "read_files",
+              arguments: JSON.stringify({ files: [{ name: "src/main.ts" }] }),
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "call-read-files",
+        content: "File: src/main.ts\nconsole.log('tool result');",
+      },
+    ]);
   } catch (error) {
     const diagnostics = [
       `stdout:\n${stdout.join("")}`,
