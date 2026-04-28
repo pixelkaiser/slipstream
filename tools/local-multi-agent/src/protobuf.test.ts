@@ -15,6 +15,26 @@ function hex(value: string): Uint8Array {
   return Uint8Array.from(Buffer.from(value.replace(/\s+/g, ""), "hex"));
 }
 
+function encodeVarint(value: number): Uint8Array {
+  const bytes: number[] = [];
+  let remaining = value;
+  while (remaining >= 0x80) {
+    bytes.push((remaining & 0x7f) | 0x80);
+    remaining >>= 7;
+  }
+  bytes.push(remaining);
+  return Uint8Array.from(bytes);
+}
+
+function lengthDelimitedField(fieldNumber: number, value: Uint8Array): Uint8Array {
+  assert.ok(value.length < 128, "test helper only supports one-byte lengths");
+  return Uint8Array.from([...encodeVarint((fieldNumber << 3) | 2), value.length, ...value]);
+}
+
+function stringField(fieldNumber: number, value: string): Uint8Array {
+  return lengthDelimitedField(fieldNumber, Buffer.from(value));
+}
+
 test("decodes the fields needed from a Warp request", () => {
   const task = hex("0a04726f6f74");
   const taskContext = Uint8Array.from([0x0a, task.length, ...task]);
@@ -55,6 +75,36 @@ test("decodes the fields needed from a Warp request", () => {
       model: undefined,
     },
   );
+});
+
+test("extracts supported prompt input variants", () => {
+  const cases = [
+    {
+      name: "deprecated user query",
+      input: lengthDelimitedField(2, stringField(1, "legacy prompt")),
+      expected: "legacy prompt",
+    },
+    {
+      name: "query with canned response",
+      input: lengthDelimitedField(4, stringField(1, "canned prompt")),
+      expected: "canned prompt",
+    },
+    {
+      name: "invoke skill user query",
+      input: lengthDelimitedField(17, lengthDelimitedField(2, stringField(1, "skill prompt"))),
+      expected: "skill prompt",
+    },
+    {
+      name: "summarize conversation",
+      input: lengthDelimitedField(13, stringField(1, "summarize prompt")),
+      expected: "summarize prompt",
+    },
+  ];
+
+  for (const item of cases) {
+    const request = lengthDelimitedField(2, item.input);
+    assert.equal(decodeWarpRequest(request).prompt, item.expected, item.name);
+  }
 });
 
 test("marks requests without a task context as needing root task creation", () => {
