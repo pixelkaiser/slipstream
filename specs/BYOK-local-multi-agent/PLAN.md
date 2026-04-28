@@ -253,6 +253,7 @@ Local service:
 - [x] Unit test streaming append event field-mask encoding.
 - [x] Unit test model alias resolution.
 - [x] Unit test buffered provider stream collection.
+- [x] Unit test log redaction.
 - [ ] Unit test SSE event formatting.
 - [ ] Unit test prompt extraction.
 - [ ] Integration test with a mock OpenAI-compatible server.
@@ -269,11 +270,11 @@ Warp client:
 End-to-end:
 
 - [x] Start local service with `npm start`.
-- [ ] Configure Warp BYOK settings to use the local service URL.
+- [x] Configure Warp BYOK settings to use the local service URL.
 - [x] Configure OpenAI Base URL/API key in the local service environment.
 - [ ] Confirm assistant output streams into Warp UI without `ExchangeNotFound`.
-- [ ] Send a simple prompt in Warp Agent.
-- [ ] Confirm assistant output streams into the Warp UI.
+- [x] Send a simple prompt in Warp Agent.
+- [x] Confirm assistant output renders in the Warp UI for non-tool-call prompts.
 - [ ] Confirm hosted auth/cloud APIs still use the normal Warp server root.
 
 ## Implementation Order
@@ -328,3 +329,4 @@ End-to-end:
 - Smoke-tested the buffered response path; the local service now emits exactly three SSE events for a successful request: `StreamInit`, one `AddMessagesToTask`, and `StreamFinished.Done`.
 - Fixed new-conversation task creation by emitting `CreateTask` before `AddMessagesToTask` when the inbound request has no server task in `task_context`; this addresses `Conversation(TaskNotFound)` from targeting a synthetic fallback task ID.
 - Smoke-tested the taskless request path; the service now emits four SSE events for a new conversation: `StreamInit`, `CreateTask`, `AddMessagesToTask`, and `StreamFinished.Done`.
+- Added JSON-line logging for local service startup, HTTP request routing, Warp request metadata, provider request metadata, errors, completion summaries, and debug-level SSE event emission. Sensitive key/token/auth fields are redacted.
