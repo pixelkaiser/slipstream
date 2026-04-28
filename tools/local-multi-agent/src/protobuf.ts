@@ -13,6 +13,7 @@ export type WarpRequestSummary = {
   conversationId: string;
   requestId: string;
   rootTaskId: string;
+  shouldCreateRootTask: boolean;
   prompt: string;
   openAiApiKey?: string;
   model?: string;
@@ -205,11 +206,13 @@ export function decodeWarpRequest(bytes: Uint8Array): WarpRequestSummary {
   const requestFields = decodeFields(bytes);
   const { conversationId } = decodeMetadata(requestFields);
   const { openAiApiKey, model } = decodeSettings(requestFields);
+  const decodedRootTaskId = decodeRootTaskId(requestFields);
 
   return {
     conversationId,
     requestId: randomUUID(),
-    rootTaskId: decodeRootTaskId(requestFields) ?? "root",
+    rootTaskId: decodedRootTaskId ?? randomUUID(),
+    shouldCreateRootTask: decodedRootTaskId == null,
     prompt: decodeInputPrompt(requestFields) ?? "",
     openAiApiKey,
     model,
@@ -224,6 +227,27 @@ export function encodeStreamInit(conversationId: string, requestId: string): Uin
   ]);
 
   return messageField(1, init);
+}
+
+function encodeTask(params: {
+  taskId: string;
+  description: string;
+}): Uint8Array {
+  return concat([
+    stringField(1, params.taskId),
+    stringField(2, params.description),
+  ]);
+}
+
+export function encodeCreateTask(params: {
+  taskId: string;
+  description: string;
+}): Uint8Array {
+  const createTask = messageField(1, encodeTask(params));
+  const clientAction = messageField(1, createTask);
+  const clientActions = messageField(1, clientAction);
+
+  return messageField(2, clientActions);
 }
 
 function encodeTimestamp(date: Date): Uint8Array {
