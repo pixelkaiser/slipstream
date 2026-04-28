@@ -254,9 +254,9 @@ Local service:
 - [x] Unit test model alias resolution.
 - [x] Unit test buffered provider stream collection.
 - [x] Unit test log redaction.
-- [ ] Unit test SSE event formatting.
-- [ ] Unit test prompt extraction.
-- [ ] Integration test with a mock OpenAI-compatible server.
+- [x] Unit test SSE event formatting.
+- [x] Unit test prompt extraction.
+- [x] Integration test with a mock OpenAI-compatible server.
 - [x] Manual smoke test for `/health`.
 
 Warp client:
@@ -331,3 +331,4 @@ End-to-end:
 - Smoke-tested the taskless request path; the service now emits four SSE events for a new conversation: `StreamInit`, `CreateTask`, `AddMessagesToTask`, and `StreamFinished.Done`.
 - Added JSON-line logging for local service startup, HTTP request routing, Warp request metadata, provider request metadata, errors, completion summaries, and debug-level SSE event emission. Sensitive key/token/auth fields are redacted.
 - Stopped sending a synthetic `run_id` in local `StreamInit` events so Warp does not try to sync a non-hosted task with the hosted GraphQL task API.
+- Added local service tests for SSE data formatting, supported prompt extraction variants, and an integration path that sends a Warp protobuf request through the local service to a mock OpenAI-compatible streaming `/chat/completions` endpoint.
