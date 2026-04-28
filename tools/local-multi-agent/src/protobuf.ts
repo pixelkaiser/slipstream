@@ -309,5 +309,5 @@ export function encodeStreamFinishedInternalError(message: string): Uint8Array {
 }
 
 export function encodeBase64Url(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64url");
+  return Buffer.from(bytes).toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
 }
