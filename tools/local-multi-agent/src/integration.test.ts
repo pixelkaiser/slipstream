@@ -23,6 +23,13 @@ function warpPromptRequest(prompt: string, conversationId?: string): Uint8Array 
   return Buffer.concat([lengthDelimitedField(2, deprecatedUserQuery), metadata(conversationId)]);
 }
 
+function warpPromptRequestWithSelectedText(prompt: string, selectedText: string, conversationId?: string): Uint8Array {
+  const selectedTextContext = lengthDelimitedField(6, stringField(1, selectedText));
+  const context = lengthDelimitedField(1, selectedTextContext);
+  const deprecatedUserQuery = lengthDelimitedField(2, stringField(1, prompt));
+  return Buffer.concat([lengthDelimitedField(2, Buffer.concat([context, deprecatedUserQuery])), metadata(conversationId)]);
+}
+
 function warpReadFilesResultRequest(params: {
   conversationId: string;
   toolCallId: string;
@@ -164,6 +171,73 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
     );
     assert.equal(events.length, 4);
     assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
+  } catch (error) {
+    const diagnostics = [
+      `stdout:\n${stdout.join("")}`,
+      `stderr:\n${stderr.join("")}`,
+    ].join("\n");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${diagnostics}`);
+  } finally {
+    stopChild(child);
+    await closeServer(provider);
+  }
+});
+
+test("passes attached selected text context to the provider", { timeout: 10_000 }, async () => {
+  let providerBody: unknown;
+  const provider = http.createServer(async (request, response) => {
+    providerBody = JSON.parse(await readBody(request));
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+    });
+    response.write('data: {"choices":[{"delta":{"content":"explained"}}]}\n\n');
+    response.write("data: [DONE]\n\n");
+    response.end();
+  });
+  const providerPort = await listenOnLoopback(provider);
+
+  const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
+  const servicePort = await listenOnLoopback(serviceProbe);
+  await closeServer(serviceProbe);
+
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const child = spawn(process.execPath, ["dist/server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(servicePort),
+      OPENAI_API_KEY: "sk-local-test",
+      OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
+      OPENAI_MODEL: "mock-model",
+      LOG_LEVEL: "error",
+    },
+  });
+  child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
+  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+
+  try {
+    await waitForHealth(servicePort, child);
+    const response = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpPromptRequestWithSelectedText(
+        "explain this output",
+        "Filesystem Size Used Avail Use% Mounted on\n/dev/md3 1.5T 42G 1.4T 3% /",
+        "conversation-selected-text",
+      )),
+    });
+
+    assert.equal(response.status, 200);
+    await response.text();
+
+    const messages = (providerBody as { messages?: Array<{ content?: string }> }).messages ?? [];
+    assert.equal(messages.length, 1);
+    assert.match(messages[0]?.content ?? "", /Attached context:/);
+    assert.match(messages[0]?.content ?? "", /Selected text:\nFilesystem Size Used Avail/);
+    assert.match(messages[0]?.content ?? "", /User request:\nexplain this output/);
   } catch (error) {
     const diagnostics = [
       `stdout:\n${stdout.join("")}`,
