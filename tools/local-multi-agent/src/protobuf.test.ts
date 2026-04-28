@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  encodeAddAgentOutput,
+  encodeAppendAgentOutput,
   decodeWarpRequest,
   encodeAgentOutput,
   encodeBase64Url,
@@ -57,4 +59,22 @@ test("encodes response events as protobuf payloads", () => {
   assert.equal(encodeBase64Url(encodeStreamInit("c", "r")), "CgkKAWMSAXIaAWM");
   assert.equal(encodeBase64Url(encodeStreamFinishedDone()), "GgISAA");
   assert.ok(encodeAgentOutput({ taskId: "root", requestId: "req", text: "ok" }).length > 0);
+});
+
+test("encodes streaming agent output append events with the text field mask", () => {
+  const initial = encodeAddAgentOutput({
+    messageId: "message",
+    taskId: "root",
+    requestId: "request",
+    text: "",
+  });
+  const append = encodeAppendAgentOutput({
+    messageId: "message",
+    taskId: "root",
+    requestId: "request",
+    text: "chunk",
+  });
+
+  assert.ok(initial.length > 0);
+  assert.ok(Buffer.from(append).includes("message.agent_output.text"));
 });
