@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   encodeAddAgentOutput,
   encodeAddToolCall,
+  encodeAppendAgentOutput,
   encodeCreateTask,
   decodeWarpRequest,
   encodeStreamFinishedDone,
@@ -864,6 +865,7 @@ async function streamChatCompletion(params: {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  onContentChunk?: (chunk: string) => void;
 }): Promise<ProviderResponse> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -963,6 +965,7 @@ async function streamChatCompletion(params: {
       const chunk = extractStreamingContent(parsed);
       if (chunk) {
         content += chunk;
+        params.onContentChunk?.(chunk);
       }
       extractStreamingToolCalls(parsed, toolCalls);
     }
@@ -1031,6 +1034,8 @@ async function handleMultiAgent(
       }
 
       const providerMessages = prepareProviderMessages(warpRequest);
+      const assistantMessageId = randomUUID();
+      let streamedAgentOutput = false;
       const providerResponse = await streamChatCompletion({
         messages: providerMessages.messages.length
           ? providerMessages.messages
@@ -1038,6 +1043,31 @@ async function handleMultiAgent(
         apiKey: warpRequest.openAiApiKey,
         baseUrl: requestOpenAiBaseUrl,
         model: warpRequest.model,
+        onContentChunk: (chunk) => {
+          if (!streamedAgentOutput) {
+            streamedAgentOutput = true;
+            sendEvent(
+              "add_agent_output",
+              encodeAddAgentOutput({
+                messageId: assistantMessageId,
+                taskId: warpRequest.rootTaskId,
+                requestId: warpRequest.requestId,
+                text: chunk,
+              }),
+            );
+            return;
+          }
+
+          sendEvent(
+            "append_agent_output",
+            encodeAppendAgentOutput({
+              messageId: assistantMessageId,
+              taskId: warpRequest.rootTaskId,
+              requestId: warpRequest.requestId,
+              text: chunk,
+            }),
+          );
+        },
       });
 
       if (!providerResponse.content && !providerResponse.toolCalls.length) {
@@ -1046,11 +1076,11 @@ async function handleMultiAgent(
 
       rememberProviderResponse(warpRequest.conversationId, providerMessages.pendingMessages, providerResponse);
 
-      if (providerResponse.content) {
+      if (providerResponse.content && !streamedAgentOutput) {
         sendEvent(
           "add_agent_output",
           encodeAddAgentOutput({
-            messageId: randomUUID(),
+            messageId: assistantMessageId,
             taskId: warpRequest.rootTaskId,
             requestId: warpRequest.requestId,
             text: providerResponse.content,
