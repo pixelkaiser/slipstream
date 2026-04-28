@@ -161,6 +161,7 @@ warp-build-oss:
 - [x] Implement `POST /ai/multi-agent`.
 - [x] Implement `POST /ai/passive-suggestions`.
 - [x] Extract user text from supported request input variants.
+- [x] Extract selected text and attached terminal/file context from supported `InputContext` fields.
 - [x] Convert Warp request context into a simple model prompt.
 - [x] Call an OpenAI-compatible streaming API.
 - [x] Emit `StreamInit` as the first response event.
@@ -251,7 +252,9 @@ Local service:
 - [x] Unit test log redaction.
 - [x] Unit test SSE event formatting.
 - [x] Unit test prompt extraction.
+- [x] Unit test selected text and command context extraction.
 - [x] Integration test with a mock OpenAI-compatible server.
+- [x] Integration test forwarding selected text context to the provider.
 - [x] Integration test preserving OpenAI-compatible conversation history across turns.
 - [x] Integration test translating an OpenAI-compatible `read_files` tool call to Warp SSE events.
 - [x] Integration test translating every supported OpenAI-compatible tool call to Warp SSE events.
@@ -341,3 +344,4 @@ End-to-end:
 - Added integration coverage for multi-turn provider history and updated the read-files tool follow-up test to assert the provider receives a real assistant-tool-result transcript instead of a flattened prompt.
 - Noted that the local transcript state is process-local; restarting the service clears history unless optional persistence is added later.
 - The Warp log warning `No metadata returned for conversation` is a separate hosted metadata lookup and not the source of local provider context loss.
+- Added local decoding for `InputContext.selected_text`, deprecated `InputContext.executed_shell_commands`, attached text files, and current directory. User prompts sent to the provider now include an `Attached context` section, so selected terminal output such as command results is visible to the local model.
