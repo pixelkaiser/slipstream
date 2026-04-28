@@ -108,6 +108,10 @@ function stopChild(child: ChildProcessWithoutNullStreams): void {
   }
 }
 
+function sseEventBytes(event: string): Buffer {
+  return Buffer.from(event.replace(/^data: /, "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+
 test("serves a Warp multi-agent request through a mock OpenAI-compatible stream", { timeout: 10_000 }, async () => {
   let providerPath: string | undefined;
   let providerBody: unknown;
@@ -169,8 +173,11 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
       ((providerBody as { tools?: Array<{ function?: { name?: string } }> }).tools ?? []).map((tool) => tool.function?.name),
       ["read_files", "file_glob", "grep", "search_codebase", "run_shell_command", "apply_file_diffs", "suggest_plan"],
     );
-    assert.equal(events.length, 4);
+    assert.equal(events.length, 5);
     assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
+    assert.equal(sseEventBytes(events[2]).includes("hello"), true);
+    assert.equal(sseEventBytes(events[3]).includes(" warp"), true);
+    assert.equal(sseEventBytes(events[3]).includes("message.agent_output.text"), true);
   } catch (error) {
     const diagnostics = [
       `stdout:\n${stdout.join("")}`,
