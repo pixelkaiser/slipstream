@@ -16,6 +16,7 @@ export type WarpRequestSummary = {
   shouldCreateRootTask: boolean;
   prompt: string;
   contextText?: string;
+  contextImages?: Array<{ data: string; mimeType: string }>;
   toolResults: WarpToolResult[];
   openAiApiKey?: string;
   model?: string;
@@ -57,6 +58,13 @@ export type FileGlobToolCall = {
   minDepth?: number;
 };
 
+export type SearchCodebaseToolCall = {
+  type: "search_codebase";
+  query: string;
+  pathFilters?: string[];
+  codebasePath?: string;
+};
+
 export type ApplyFileDiffsToolCall = {
   type: "apply_file_diffs";
   summary: string;
@@ -84,7 +92,7 @@ export type SuggestPlanToolCall = {
 
 export type WarpToolCall =
   | ({ toolCallId: string } & {
-      tool: RunShellCommandToolCall | { type: "read_files"; files: ReadFilesToolCallFile[] } | GrepToolCall | FileGlobToolCall | ApplyFileDiffsToolCall | SuggestPlanToolCall;
+      tool: RunShellCommandToolCall | { type: "read_files"; files: ReadFilesToolCallFile[] } | GrepToolCall | FileGlobToolCall | SearchCodebaseToolCall | ApplyFileDiffsToolCall | SuggestPlanToolCall;
     });
 
 export type WarpToolResult =
@@ -93,7 +101,8 @@ export type WarpToolResult =
   | { type: "grep"; toolCallId: string; matchedFiles: Array<{ filePath: string; lineNumbers: number[] }>; error?: string }
   | { type: "file_glob"; toolCallId: string; matchedFiles: string[]; warnings?: string; error?: string }
   | { type: "apply_file_diffs"; toolCallId: string; updatedFiles: string[]; deletedFiles: string[]; error?: string }
-  | { type: "suggest_plan"; toolCallId: string; status: "accepted" | "edited"; planText?: string };
+  | { type: "suggest_plan"; toolCallId: string; status: "accepted" | "edited"; planText?: string }
+  | { type: "generic"; toolCallId: string; name: string; content: string; error?: string };
 
 function concat(parts: Uint8Array[]): Uint8Array {
   const length = parts.reduce((sum, part) => sum + part.length, 0);
@@ -230,6 +239,14 @@ function intValue(fieldValue: ProtoField | undefined): number | undefined {
   return readVarint(fieldValue.raw, 0)[0];
 }
 
+function bytesValue(fieldValue: ProtoField | undefined): Uint8Array | undefined {
+  if (!fieldValue || fieldValue.wireType !== 2) {
+    return undefined;
+  }
+
+  return fieldValue.raw;
+}
+
 function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => value != null && value.trim().length > 0)?.trim();
 }
@@ -268,7 +285,14 @@ function decodeInputPrompt(requestFields: ProtoField[]): string | undefined {
   for (const userInputField of fields(userInputs, 1)) {
     const userInput = message(userInputField);
     const userQuery = message(field(userInput, 1));
-    const query = stringValue(field(userQuery, 1));
+    const cliAgentUserQuery = message(field(userInput, 3));
+    const cliUserQuery = message(field(cliAgentUserQuery, 1));
+    const messagesReceived = message(field(userInput, 4));
+    const query = firstNonEmpty(
+      stringValue(field(userQuery, 1)),
+      stringValue(field(cliUserQuery, 1)),
+      formatReceivedMessages(messagesReceived),
+    );
     if (query) {
       return query;
     }
@@ -277,9 +301,16 @@ function decodeInputPrompt(requestFields: ProtoField[]): string | undefined {
   const deprecatedUserQuery = message(field(input, 2));
   const cannedResponse = message(field(input, 4));
   const autoCodeDiff = message(field(input, 5));
+  const resumeConversation = message(field(input, 7));
+  const initProjectRules = message(field(input, 8));
+  const generatePassiveSuggestions = message(field(input, 9));
   const createNewProject = message(field(input, 10));
   const cloneRepository = message(field(input, 11));
+  const codeReview = message(field(input, 12));
   const summarizeConversation = message(field(input, 13));
+  const createEnvironment = message(field(input, 14));
+  const fetchReviewComments = message(field(input, 15));
+  const startFromAmbientRunPrompt = message(field(input, 16));
   const invokeSkill = message(field(input, 17));
   const invokeSkillUserQuery = message(field(invokeSkill, 2));
 
@@ -287,15 +318,82 @@ function decodeInputPrompt(requestFields: ProtoField[]): string | undefined {
     stringValue(field(deprecatedUserQuery, 1)),
     stringValue(field(cannedResponse, 1)),
     stringValue(field(autoCodeDiff, 1)),
+    resumeConversation.length ? "Resume this conversation." : undefined,
+    initProjectRules.length ? "Initialize project rules for this project." : undefined,
+    formatPassiveSuggestionPrompt(generatePassiveSuggestions),
     stringValue(field(createNewProject, 1)),
-    stringValue(field(cloneRepository, 1)),
+    formatCloneRepositoryPrompt(cloneRepository),
+    codeReview.length ? "Review the attached code review comments and diff context." : undefined,
     stringValue(field(summarizeConversation, 1)),
+    formatCreateEnvironmentPrompt(createEnvironment),
+    formatFetchReviewCommentsPrompt(fetchReviewComments),
+    formatStartFromAmbientRunPrompt(startFromAmbientRunPrompt),
     stringValue(field(invokeSkillUserQuery, 1)),
   );
 }
 
-function decodeFileContext(fileFields: ProtoField[]): string | undefined {
-  const content = message(field(fileFields, 1));
+function formatReceivedMessages(messagesReceived: ProtoField[]): string | undefined {
+  const messages = fields(messagesReceived, 1).flatMap((messageField): string[] => {
+    const received = message(messageField);
+    const sender = stringValue(field(received, 2));
+    const subject = stringValue(field(received, 4));
+    const body = stringValue(field(received, 5));
+    if (!subject && !body) {
+      return [];
+    }
+    return [[
+      "Message received from another agent:",
+      sender ? `Sender: ${sender}` : undefined,
+      subject ? `Subject: ${subject}` : undefined,
+      body ? `Body:\n${body}` : undefined,
+    ].filter((line): line is string => line != null).join("\n")];
+  });
+  return messages.length ? messages.join("\n\n") : undefined;
+}
+
+function formatPassiveSuggestionPrompt(generatePassiveSuggestions: ProtoField[]): string | undefined {
+  if (!generatePassiveSuggestions.length) {
+    return undefined;
+  }
+  const shellCommandCompleted = message(field(generatePassiveSuggestions, 4));
+  const executedCommand = formatExecutedShellCommand(message(field(shellCommandCompleted, 1)));
+  return [
+    "Generate passive suggestions for the current context.",
+    executedCommand,
+  ].filter((line): line is string => Boolean(line)).join("\n\n");
+}
+
+function formatCloneRepositoryPrompt(cloneRepository: ProtoField[]): string | undefined {
+  const url = stringValue(field(cloneRepository, 1));
+  return url ? `Clone repository: ${url}` : undefined;
+}
+
+function formatCreateEnvironmentPrompt(createEnvironment: ProtoField[]): string | undefined {
+  const repoPaths = fields(createEnvironment, 1).flatMap((repoPath) => {
+    const path = stringValue(repoPath);
+    return path ? [path] : [];
+  });
+  return repoPaths.length ? `Create a development environment for:\n${repoPaths.join("\n")}` : undefined;
+}
+
+function formatFetchReviewCommentsPrompt(fetchReviewComments: ProtoField[]): string | undefined {
+  const repoPath = stringValue(field(fetchReviewComments, 1));
+  return repoPath ? `Fetch review comments for repository: ${repoPath}` : undefined;
+}
+
+function formatStartFromAmbientRunPrompt(startFromAmbientRunPrompt: ProtoField[]): string | undefined {
+  const runtimeBasePrompt = stringValue(field(startFromAmbientRunPrompt, 2));
+  const attachmentsDir = stringValue(field(startFromAmbientRunPrompt, 4));
+  if (!runtimeBasePrompt && !attachmentsDir) {
+    return undefined;
+  }
+  return [
+    runtimeBasePrompt,
+    attachmentsDir ? `Attachments directory: ${attachmentsDir}` : undefined,
+  ].filter((line): line is string => line != null).join("\n\n");
+}
+
+function formatFileContent(content: ProtoField[]): string | undefined {
   const filePath = stringValue(field(content, 1));
   const text = stringValue(field(content, 2));
   if (!filePath || !text) {
@@ -309,19 +407,67 @@ function decodeFileContext(fileFields: ProtoField[]): string | undefined {
   return [`File: ${filePath}${range}`, text].join("\n");
 }
 
-function decodeAttachedContext(requestFields: ProtoField[]): string | undefined {
-  const input = message(field(requestFields, 2));
-  const context = message(field(input, 1));
-  if (!context.length) {
+function decodeFileContext(fileFields: ProtoField[]): string | undefined {
+  return formatFileContent(message(field(fileFields, 1)));
+}
+
+function formatExecutedShellCommand(command: ProtoField[]): string | undefined {
+  const commandText = stringValue(field(command, 1));
+  const output = stringValue(field(command, 2));
+  const exitCode = intValue(field(command, 3));
+  if (!commandText && !output) {
     return undefined;
   }
 
+  return [
+    "Executed shell command:",
+    commandText ? `Command: ${commandText}` : undefined,
+    exitCode != null ? `Exit code: ${exitCode}` : undefined,
+    output ? `Output:\n${output}` : undefined,
+  ].filter((line): line is string => line != null).join("\n");
+}
+
+function formatTimestamp(timestamp: ProtoField[]): string | undefined {
+  const seconds = intValue(field(timestamp, 1));
+  if (seconds == null) {
+    return undefined;
+  }
+  return new Date(seconds * 1000).toISOString();
+}
+
+function decodeAttachedContext(requestFields: ProtoField[]): Pick<WarpRequestSummary, "contextText" | "contextImages"> {
+  const input = message(field(requestFields, 2));
+  const context = message(field(input, 1));
+  if (!context.length) {
+    return {};
+  }
+
   const sections: string[] = [];
+  const contextImages: Array<{ data: string; mimeType: string }> = [];
 
   const directory = message(field(context, 1));
   const pwd = stringValue(field(directory, 1));
   if (pwd) {
     sections.push(`Current directory: ${pwd}`);
+  }
+
+  const operatingSystem = message(field(context, 2));
+  const platform = stringValue(field(operatingSystem, 1));
+  const distribution = stringValue(field(operatingSystem, 2));
+  if (platform || distribution) {
+    sections.push(`Operating system: ${[platform, distribution].filter(Boolean).join(" ")}`);
+  }
+
+  const shell = message(field(context, 3));
+  const shellName = stringValue(field(shell, 1));
+  const shellVersion = stringValue(field(shell, 2));
+  if (shellName || shellVersion) {
+    sections.push(`Shell: ${[shellName, shellVersion].filter(Boolean).join(" ")}`);
+  }
+
+  const currentTime = formatTimestamp(message(field(context, 4)));
+  if (currentTime) {
+    sections.push(`Current time: ${currentTime}`);
   }
 
   for (const selectedTextField of fields(context, 6)) {
@@ -332,17 +478,18 @@ function decodeAttachedContext(requestFields: ProtoField[]): string | undefined 
   }
 
   for (const commandField of fields(context, 5)) {
-    const command = message(commandField);
-    const commandText = stringValue(field(command, 1));
-    const output = stringValue(field(command, 2));
-    const exitCode = intValue(field(command, 3));
-    if (commandText || output) {
-      sections.push([
-        "Executed shell command:",
-        commandText ? `Command: ${commandText}` : undefined,
-        exitCode != null ? `Exit code: ${exitCode}` : undefined,
-        output ? `Output:\n${output}` : undefined,
-      ].filter((line): line is string => line != null).join("\n"));
+    const decoded = formatExecutedShellCommand(message(commandField));
+    if (decoded) {
+      sections.push(decoded);
+    }
+  }
+
+  for (const imageField of fields(context, 7)) {
+    const image = message(imageField);
+    const data = bytesValue(field(image, 1));
+    const mimeType = stringValue(field(image, 2)) ?? "image/png";
+    if (data?.length) {
+      contextImages.push({ data: Buffer.from(data).toString("base64"), mimeType });
     }
   }
 
@@ -353,7 +500,185 @@ function decodeAttachedContext(requestFields: ProtoField[]): string | undefined 
     }
   }
 
-  return sections.length ? sections.join("\n\n") : undefined;
+  const codebases = fields(context, 8).flatMap((codebaseField): string[] => {
+    const codebase = message(codebaseField);
+    const name = stringValue(field(codebase, 1));
+    const path = stringValue(field(codebase, 2));
+    return name || path ? [`${name ?? "codebase"}: ${path ?? ""}`] : [];
+  });
+  if (codebases.length) {
+    sections.push(`Indexed codebases:\n${codebases.join("\n")}`);
+  }
+
+  for (const projectRulesField of fields(context, 10)) {
+    const projectRules = message(projectRulesField);
+    const rootPath = stringValue(field(projectRules, 1));
+    const activeRules = fields(projectRules, 2).flatMap((ruleField) => {
+      const decoded = formatFileContent(message(ruleField));
+      return decoded ? [decoded] : [];
+    });
+    const additionalRulePaths = fields(projectRules, 3).flatMap((rulePathField) => {
+      const path = stringValue(rulePathField);
+      return path ? [path] : [];
+    });
+    if (rootPath || activeRules.length || additionalRulePaths.length) {
+      sections.push([
+        `Project rules${rootPath ? ` for ${rootPath}` : ""}:`,
+        ...activeRules,
+        additionalRulePaths.length ? `Additional rule files:\n${additionalRulePaths.join("\n")}` : undefined,
+      ].filter((line): line is string => line != null).join("\n"));
+    }
+  }
+
+  const git = message(field(context, 11));
+  const head = stringValue(field(git, 1));
+  const branch = stringValue(field(git, 2));
+  if (head || branch) {
+    sections.push(`Git: ${[branch ? `branch=${branch}` : undefined, head ? `head=${head}` : undefined].filter(Boolean).join(", ")}`);
+  }
+
+  const skillsContext = message(field(context, 12));
+  const skills = fields(skillsContext, 1).flatMap((skillField): string[] => {
+    const skill = message(skillField);
+    const name = stringValue(field(skill, 2));
+    const description = stringValue(field(skill, 3));
+    return name || description ? [`${name ?? "skill"}${description ? `: ${description}` : ""}`] : [];
+  });
+  if (skills.length) {
+    sections.push(`Available skills:\n${skills.join("\n")}`);
+  }
+
+  const lspContext = message(field(context, 13));
+  const lspServers = fields(lspContext, 1).flatMap((serverField): string[] => {
+    const server = message(serverField);
+    const root = stringValue(field(server, 1));
+    const name = stringValue(field(server, 2));
+    return root || name ? [`${name ?? "LSP"}${root ? ` (${root})` : ""}`] : [];
+  });
+  if (lspServers.length) {
+    sections.push(`Available LSP servers:\n${lspServers.join("\n")}`);
+  }
+
+  return {
+    contextText: sections.length ? sections.join("\n\n") : undefined,
+    contextImages: contextImages.length ? contextImages : undefined,
+  };
+}
+
+function formatAttachment(attachment: ProtoField[], label?: string): string | undefined {
+  const plainText = stringValue(field(attachment, 1));
+  const executedCommand = formatExecutedShellCommand(message(field(attachment, 2)));
+  const runningCommand = formatRunningShellCommand(message(field(attachment, 3)));
+  const documentContent = message(field(attachment, 7));
+  const documentId = stringValue(field(documentContent, 1));
+  const documentText = stringValue(field(documentContent, 2));
+  const filePath = stringValue(field(message(field(attachment, 8)), 1));
+  const body = firstNonEmpty(
+    plainText,
+    executedCommand,
+    runningCommand,
+    documentText ? [`Document: ${documentId ?? ""}`, documentText].join("\n") : undefined,
+    filePath ? `File path: ${filePath}` : undefined,
+  );
+  if (!body) {
+    return undefined;
+  }
+  return label ? `Referenced attachment ${label}:\n${body}` : `Referenced attachment:\n${body}`;
+}
+
+function decodeReferencedAttachments(requestFields: ProtoField[]): string[] {
+  const input = message(field(requestFields, 2));
+  const sections: string[] = [];
+  const userQueries: ProtoField[][] = [];
+
+  const userInputs = message(field(input, 6));
+  for (const userInputField of fields(userInputs, 1)) {
+    const userInput = message(userInputField);
+    const direct = message(field(userInput, 1));
+    const cli = message(field(message(field(userInput, 3)), 1));
+    if (direct.length) {
+      userQueries.push(direct);
+    }
+    if (cli.length) {
+      userQueries.push(cli);
+    }
+  }
+
+  const deprecatedUserQuery = message(field(input, 2));
+  if (deprecatedUserQuery.length) {
+    userQueries.push(deprecatedUserQuery);
+  }
+
+  for (const userQuery of userQueries) {
+    for (const attachmentEntryField of fields(userQuery, 2)) {
+      const attachmentEntry = message(attachmentEntryField);
+      const key = stringValue(field(attachmentEntry, 1));
+      const decoded = formatAttachment(message(field(attachmentEntry, 2)), key);
+      if (decoded) {
+        sections.push(decoded);
+      }
+    }
+  }
+
+  return sections;
+}
+
+function decodeMcpContext(requestFields: ProtoField[]): string[] {
+  const mcpContext = message(field(requestFields, 6));
+  if (!mcpContext.length) {
+    return [];
+  }
+
+  const sections: string[] = [];
+  const legacyResources = fields(mcpContext, 1).flatMap((resourceField): string[] => {
+    const resource = message(resourceField);
+    const uri = stringValue(field(resource, 1));
+    const name = stringValue(field(resource, 2));
+    const description = stringValue(field(resource, 3));
+    return uri || name || description ? [`${name ?? uri ?? "resource"}${description ? `: ${description}` : ""}${uri ? ` (${uri})` : ""}`] : [];
+  });
+  const legacyTools = fields(mcpContext, 2).flatMap((toolField): string[] => {
+    const tool = message(toolField);
+    const name = stringValue(field(tool, 1));
+    const description = stringValue(field(tool, 2));
+    return name || description ? [`${name ?? "tool"}${description ? `: ${description}` : ""}`] : [];
+  });
+
+  if (legacyResources.length) {
+    sections.push(`Available MCP resources:\n${legacyResources.join("\n")}`);
+  }
+  if (legacyTools.length) {
+    sections.push(`Available MCP tools:\n${legacyTools.join("\n")}`);
+  }
+
+  for (const serverField of fields(mcpContext, 3)) {
+    const server = message(serverField);
+    const name = stringValue(field(server, 1));
+    const description = stringValue(field(server, 2));
+    const id = stringValue(field(server, 5));
+    const resources = fields(server, 3).flatMap((resourceField) => {
+      const resource = message(resourceField);
+      const resourceName = stringValue(field(resource, 2));
+      const uri = stringValue(field(resource, 1));
+      return resourceName || uri ? [`${resourceName ?? uri}${uri ? ` (${uri})` : ""}`] : [];
+    });
+    const tools = fields(server, 4).flatMap((toolField) => {
+      const tool = message(toolField);
+      const toolName = stringValue(field(tool, 1));
+      const toolDescription = stringValue(field(tool, 2));
+      return toolName || toolDescription ? [`${toolName ?? "tool"}${toolDescription ? `: ${toolDescription}` : ""}`] : [];
+    });
+    if (name || description || id || resources.length || tools.length) {
+      sections.push([
+        `MCP server: ${name ?? id ?? "unnamed"}`,
+        description ? `Description: ${description}` : undefined,
+        resources.length ? `Resources:\n${resources.join("\n")}` : undefined,
+        tools.length ? `Tools:\n${tools.join("\n")}` : undefined,
+      ].filter((line): line is string => line != null).join("\n"));
+    }
+  }
+
+  return sections;
 }
 
 function decodeFileContent(fileContentFields: ProtoField[]): { filePath: string; content: string } | undefined {
@@ -559,13 +884,181 @@ function decodeSuggestPlanResult(toolCallResultFields: ProtoField[]): WarpToolRe
   return { type: "suggest_plan", toolCallId, status: "accepted" };
 }
 
+function decodeSearchCodebaseResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  const searchCodebase = message(field(toolCallResultFields, 4));
+  if (!toolCallId || !searchCodebase.length) {
+    return undefined;
+  }
+
+  const error = stringValue(field(message(field(searchCodebase, 2)), 1));
+  const files = fields(message(field(searchCodebase, 1)), 1).flatMap((fileField) => {
+    const decoded = formatFileContent(message(fileField));
+    return decoded ? [decoded] : [];
+  });
+  return { type: "generic", toolCallId, name: "search_codebase", content: files.join("\n\n"), error };
+}
+
+function formatShellSnapshot(snapshot: ProtoField[]): string | undefined {
+  const output = stringValue(field(snapshot, 1));
+  const cursor = stringValue(field(snapshot, 2));
+  const commandId = stringValue(field(snapshot, 3));
+  if (!output && !cursor && !commandId) {
+    return undefined;
+  }
+  return [
+    commandId ? `Command ID: ${commandId}` : undefined,
+    cursor ? `Cursor: ${cursor}` : undefined,
+    output ? `Output:\n${output}` : undefined,
+  ].filter((line): line is string => line != null).join("\n");
+}
+
+function formatRunningShellCommand(runningCommand: ProtoField[]): string | undefined {
+  const command = stringValue(field(runningCommand, 1));
+  const snapshot = formatShellSnapshot(message(field(runningCommand, 2)));
+  if (!command && !snapshot) {
+    return undefined;
+  }
+  return [
+    "Running shell command:",
+    command ? `Command: ${command}` : undefined,
+    snapshot,
+  ].filter((line): line is string => line != null).join("\n");
+}
+
+function formatShellFinished(finished: ProtoField[]): string | undefined {
+  const output = stringValue(field(finished, 1));
+  const exitCode = intValue(field(finished, 2));
+  const commandId = stringValue(field(finished, 3));
+  if (!output && exitCode == null && !commandId) {
+    return undefined;
+  }
+  return [
+    commandId ? `Command ID: ${commandId}` : undefined,
+    exitCode != null ? `Exit code: ${exitCode}` : undefined,
+    output ? `Output:\n${output}` : undefined,
+  ].filter((line): line is string => line != null).join("\n");
+}
+
+function decodeReadShellCommandOutputResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  const readShellOutput = message(field(toolCallResultFields, 22));
+  if (!toolCallId || !readShellOutput.length) {
+    return undefined;
+  }
+
+  const command = stringValue(field(readShellOutput, 1));
+  const snapshot = formatShellSnapshot(message(field(readShellOutput, 2)));
+  const finished = formatShellFinished(message(field(readShellOutput, 3)));
+  const error = message(field(readShellOutput, 4)).length ? "Shell command not found." : undefined;
+  return {
+    type: "generic",
+    toolCallId,
+    name: "read_shell_command_output",
+    content: [command ? `Command: ${command}` : undefined, snapshot, finished].filter(Boolean).join("\n"),
+    error,
+  };
+}
+
+function formatMcpResourceContent(resourceContent: ProtoField[]): string | undefined {
+  const uri = stringValue(field(resourceContent, 1));
+  const text = message(field(resourceContent, 2));
+  const textContent = stringValue(field(text, 1));
+  const textMime = stringValue(field(text, 2));
+  const binary = message(field(resourceContent, 3));
+  const binaryMime = stringValue(field(binary, 2));
+  if (textContent) {
+    return [`Resource: ${uri ?? ""}`, textMime ? `MIME: ${textMime}` : undefined, textContent].filter(Boolean).join("\n");
+  }
+  if (binary.length) {
+    return [`Resource: ${uri ?? ""}`, `Binary content${binaryMime ? ` (${binaryMime})` : ""}`].join("\n");
+  }
+  return uri ? `Resource: ${uri}` : undefined;
+}
+
+function decodeReadMcpResourceResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  const readMcpResource = message(field(toolCallResultFields, 11));
+  if (!toolCallId || !readMcpResource.length) {
+    return undefined;
+  }
+
+  const error = stringValue(field(message(field(readMcpResource, 2)), 1));
+  const contents = fields(message(field(readMcpResource, 1)), 1).flatMap((contentField) => {
+    const decoded = formatMcpResourceContent(message(contentField));
+    return decoded ? [decoded] : [];
+  });
+  return { type: "generic", toolCallId, name: "read_mcp_resource", content: contents.join("\n\n"), error };
+}
+
+function decodeCallMcpToolResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  const callMcpTool = message(field(toolCallResultFields, 12));
+  if (!toolCallId || !callMcpTool.length) {
+    return undefined;
+  }
+
+  const error = stringValue(field(message(field(callMcpTool, 2)), 1));
+  const results = fields(message(field(callMcpTool, 1)), 1).flatMap((resultField): string[] => {
+    const result = message(resultField);
+    const text = stringValue(field(message(field(result, 1)), 1));
+    if (text) {
+      return [text];
+    }
+    const resource = formatMcpResourceContent(message(field(result, 3)));
+    if (resource) {
+      return [resource];
+    }
+    const image = message(field(result, 2));
+    const mime = stringValue(field(image, 2));
+    return image.length ? [`Image result${mime ? ` (${mime})` : ""}`] : [];
+  });
+  return { type: "generic", toolCallId, name: "call_mcp_tool", content: results.join("\n\n"), error };
+}
+
+function decodeReadSkillResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  const readSkill = message(field(toolCallResultFields, 26));
+  if (!toolCallId || !readSkill.length) {
+    return undefined;
+  }
+
+  const error = stringValue(field(message(field(readSkill, 2)), 1));
+  const content = formatFileContent(message(field(message(field(readSkill, 1)), 1))) ?? "";
+  return { type: "generic", toolCallId, name: "read_skill", content, error };
+}
+
+function decodeFetchConversationResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  const fetchConversation = message(field(toolCallResultFields, 27));
+  if (!toolCallId || !fetchConversation.length) {
+    return undefined;
+  }
+
+  const error = stringValue(field(message(field(fetchConversation, 2)), 1));
+  const directoryPath = stringValue(field(message(field(fetchConversation, 1)), 2));
+  return {
+    type: "generic",
+    toolCallId,
+    name: "fetch_conversation",
+    content: directoryPath ? `Conversation materialized at: ${directoryPath}` : "",
+    error,
+  };
+}
+
 function decodeToolResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
   return decodeReadFilesResult(toolCallResultFields)
     ?? decodeRunShellCommandResult(toolCallResultFields)
+    ?? decodeSearchCodebaseResult(toolCallResultFields)
     ?? decodeGrepResult(toolCallResultFields)
     ?? decodeFileGlobResult(toolCallResultFields)
     ?? decodeApplyFileDiffsResult(toolCallResultFields)
-    ?? decodeSuggestPlanResult(toolCallResultFields);
+    ?? decodeSuggestPlanResult(toolCallResultFields)
+    ?? decodeReadMcpResourceResult(toolCallResultFields)
+    ?? decodeCallMcpToolResult(toolCallResultFields)
+    ?? decodeReadShellCommandOutputResult(toolCallResultFields)
+    ?? decodeReadSkillResult(toolCallResultFields)
+    ?? decodeFetchConversationResult(toolCallResultFields);
 }
 
 function decodeToolResults(requestFields: ProtoField[]): WarpToolResult[] {
@@ -595,6 +1088,13 @@ export function decodeWarpRequest(bytes: Uint8Array): WarpRequestSummary {
   const { openAiApiKey, model } = decodeSettings(requestFields);
   const decodedRootTaskId = decodeRootTaskId(requestFields);
   const toolResults = decodeToolResults(requestFields);
+  const attachedContext = decodeAttachedContext(requestFields);
+  const contextSections = [
+    attachedContext.contextText,
+    ...decodeReferencedAttachments(requestFields),
+    ...decodeMcpContext(requestFields),
+  ].filter((section): section is string => Boolean(section));
+  const contextText = contextSections.length ? contextSections.join("\n\n") : undefined;
 
   return {
     conversationId,
@@ -602,7 +1102,8 @@ export function decodeWarpRequest(bytes: Uint8Array): WarpRequestSummary {
     rootTaskId: decodedRootTaskId ?? randomUUID(),
     shouldCreateRootTask: decodedRootTaskId == null,
     prompt: decodeInputPrompt(requestFields) ?? formatToolResultsPrompt(toolResults),
-    contextText: decodeAttachedContext(requestFields),
+    ...(contextText ? { contextText } : {}),
+    ...(attachedContext.contextImages ? { contextImages: attachedContext.contextImages } : {}),
     toolResults,
     openAiApiKey,
     model,
@@ -749,6 +1250,19 @@ function encodeFileGlobToolCall(params: FileGlobToolCall & { toolCallId: string 
   ]);
 }
 
+function encodeSearchCodebaseToolCall(params: SearchCodebaseToolCall & { toolCallId: string }): Uint8Array {
+  const searchCodebase = concat([
+    stringField(1, params.query),
+    ...((params.pathFilters ?? []).map((filter) => stringField(2, filter))),
+    stringField(3, params.codebasePath),
+  ]);
+
+  return concat([
+    stringField(1, params.toolCallId),
+    messageField(3, searchCodebase),
+  ]);
+}
+
 function encodeApplyFileDiffsToolCall(params: ApplyFileDiffsToolCall & { toolCallId: string }): Uint8Array {
   const applyFileDiffs = concat([
     stringField(1, params.summary),
@@ -806,6 +1320,8 @@ function encodeToolCall(params: WarpToolCall): Uint8Array {
       return encodeGrepToolCall({ ...params.tool, toolCallId: params.toolCallId });
     case "file_glob":
       return encodeFileGlobToolCall({ ...params.tool, toolCallId: params.toolCallId });
+    case "search_codebase":
+      return encodeSearchCodebaseToolCall({ ...params.tool, toolCallId: params.toolCallId });
     case "apply_file_diffs":
       return encodeApplyFileDiffsToolCall({ ...params.tool, toolCallId: params.toolCallId });
     case "suggest_plan":
@@ -896,6 +1412,30 @@ export function encodeStreamFinishedInternalError(message: string): Uint8Array {
   return messageField(3, finished);
 }
 
+export function encodeStreamFinishedInvalidApiKey(modelName?: string): Uint8Array {
+  const invalidApiKey = concat([
+    int64Field(1, 2), // LLM_PROVIDER_OPENAI
+    stringField(2, modelName),
+  ]);
+  const finished = messageField(12, invalidApiKey);
+  return messageField(3, finished);
+}
+
+export function encodeStreamFinishedLlmUnavailable(): Uint8Array {
+  const finished = messageField(6, new Uint8Array());
+  return messageField(3, finished);
+}
+
+export function encodeStreamFinishedContextWindowExceeded(): Uint8Array {
+  const finished = messageField(5, new Uint8Array());
+  return messageField(3, finished);
+}
+
+export function encodeStreamFinishedQuotaLimit(): Uint8Array {
+  const finished = messageField(4, new Uint8Array());
+  return messageField(3, finished);
+}
+
 export function encodeBase64Url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
 }
@@ -922,6 +1462,8 @@ function formatToolResult(result: WarpToolResult): string {
       return `${header}\nUpdated files:\n${result.updatedFiles.join("\n")}\nDeleted files:\n${result.deletedFiles.join("\n")}`;
     case "suggest_plan":
       return `${header}\nStatus: ${result.status}${result.planText ? `\nPlan:\n${result.planText}` : ""}`;
+    case "generic":
+      return `${result.name} result for tool_call_id=${result.toolCallId}\n${result.content}`;
   }
 }
 
