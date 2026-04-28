@@ -223,7 +223,6 @@ export function encodeStreamInit(conversationId: string, requestId: string): Uin
   const init = concat([
     stringField(1, conversationId),
     stringField(2, requestId),
-    stringField(3, conversationId),
   ]);
 
   return messageField(1, init);
