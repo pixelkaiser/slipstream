@@ -158,6 +158,10 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
     assert.equal((providerBody as { stream?: unknown }).stream, true);
     assert.equal((providerBody as { tool_choice?: unknown }).tool_choice, "auto");
     assert.equal(Array.isArray((providerBody as { tools?: unknown }).tools), true);
+    assert.deepEqual(
+      ((providerBody as { tools?: Array<{ function?: { name?: string } }> }).tools ?? []).map((tool) => tool.function?.name),
+      ["read_files", "file_glob", "grep", "run_shell_command", "apply_file_diffs", "suggest_plan"],
+    );
     assert.equal(events.length, 4);
     assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
   } catch (error) {
@@ -265,6 +269,116 @@ test("translates an OpenAI read_files tool call into Warp SSE events", { timeout
     const followUpMessages = (providerBodies[1] as { messages?: Array<{ content?: string }> }).messages ?? [];
     assert.match(followUpMessages[0]?.content ?? "", /Original user request:\nread src\/main\.ts/);
     assert.match(followUpMessages[0]?.content ?? "", /console\.log\('tool result'\)/);
+  } catch (error) {
+    const diagnostics = [
+      `stdout:\n${stdout.join("")}`,
+      `stderr:\n${stderr.join("")}`,
+    ].join("\n");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${diagnostics}`);
+  } finally {
+    stopChild(child);
+    await closeServer(provider);
+  }
+});
+
+test("translates all supported OpenAI tool calls into Warp SSE events", { timeout: 10_000 }, async () => {
+  const toolCalls = [
+    {
+      id: "call-glob",
+      function: {
+        name: "file_glob",
+        arguments: JSON.stringify({ patterns: ["*.ts"], search_dir: "src" }),
+      },
+    },
+    {
+      id: "call-grep",
+      function: {
+        name: "grep",
+        arguments: JSON.stringify({ queries: ["TODO"], path: "." }),
+      },
+    },
+    {
+      id: "call-shell",
+      function: {
+        name: "run_shell_command",
+        arguments: JSON.stringify({ command: "pwd", is_read_only: true }),
+      },
+    },
+    {
+      id: "call-apply",
+      function: {
+        name: "apply_file_diffs",
+        arguments: JSON.stringify({
+          summary: "edit file",
+          diffs: [{ file_path: "src/main.ts", search: "old", replace: "new" }],
+        }),
+      },
+    },
+    {
+      id: "call-plan",
+      function: {
+        name: "suggest_plan",
+        arguments: JSON.stringify({ summary: "plan", tasks: [{ description: "Do work" }] }),
+      },
+    },
+  ];
+  const provider = http.createServer(async (_request, response) => {
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+    });
+    response.write(`data: ${JSON.stringify({
+      choices: [
+        {
+          delta: {
+            tool_calls: toolCalls.map((toolCall, index) => ({
+              index,
+              id: toolCall.id,
+              type: "function",
+              function: toolCall.function,
+            })),
+          },
+        },
+      ],
+    })}\n\n`);
+    response.write("data: [DONE]\n\n");
+    response.end();
+  });
+  const providerPort = await listenOnLoopback(provider);
+
+  const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
+  const servicePort = await listenOnLoopback(serviceProbe);
+  await closeServer(serviceProbe);
+
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const child = spawn(process.execPath, ["dist/server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(servicePort),
+      OPENAI_API_KEY: "sk-local-test",
+      OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
+      OPENAI_MODEL: "mock-model",
+      LOG_LEVEL: "error",
+    },
+  });
+  child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
+  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+
+  try {
+    await waitForHealth(servicePort, child);
+    const response = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpPromptRequest("use tools")),
+    });
+
+    assert.equal(response.status, 200);
+    const events = (await response.text()).split("\n\n").filter(Boolean);
+    assert.equal(events.length, 8);
+    assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
   } catch (error) {
     const diagnostics = [
       `stdout:\n${stdout.join("")}`,
