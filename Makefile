@@ -1,6 +1,18 @@
 LOCAL_AGENT_DIR := tools/local-multi-agent
 
-.PHONY: local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test warp-check warp-build warp-build-oss
+.DEFAULT_GOAL := help
+
+.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test warp-check warp-build warp-build-oss
+
+help:
+	@echo "Warp BYOK local development targets:"
+	@echo "  make local-agent-install  Install local multi-agent service dependencies"
+	@echo "  make local-agent-dev      Run the local multi-agent service in watch mode"
+	@echo "  make local-agent-build    Build the local multi-agent service"
+	@echo "  make local-agent-start    Run the built local multi-agent service"
+	@echo "  make local-agent-test     Build and test the local multi-agent service"
+	@echo "  make warp-check           Run Rust formatting and Warp OSS app check"
+	@echo "  make warp-build-oss       Build the Warp OSS macOS app bundle"
 
 local-agent-install:
 	cd $(LOCAL_AGENT_DIR) && npm install
