@@ -90,7 +90,10 @@ impl ApiKeyManager {
     }
 
     pub fn set_openai_base_url(&mut self, base_url: Option<String>, ctx: &mut ModelContext<Self>) {
-        self.keys.openai_base_url = base_url;
+        self.keys.openai_base_url = base_url.and_then(|base_url| {
+            let base_url = base_url.trim().trim_end_matches('/').to_string();
+            (!base_url.is_empty()).then_some(base_url)
+        });
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
