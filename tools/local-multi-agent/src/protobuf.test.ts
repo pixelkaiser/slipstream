@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   encodeAddAgentOutput,
+  encodeAddReadFilesToolCall,
   encodeAppendAgentOutput,
   encodeCreateTask,
   decodeWarpRequest,
@@ -71,6 +72,7 @@ test("decodes the fields needed from a Warp request", () => {
       rootTaskId: "root",
       shouldCreateRootTask: false,
       prompt: "hello warp",
+      toolResults: [],
       openAiApiKey: "sk-testing",
       model: undefined,
     },
@@ -120,11 +122,49 @@ test("marks requests without a task context as needing root task creation", () =
   assert.notEqual(decoded.rootTaskId, "root");
 });
 
+test("decodes read_files tool call results from user inputs", () => {
+  const fileContent = Buffer.concat([
+    stringField(1, "src/main.ts"),
+    stringField(2, "console.log('warp');"),
+  ]);
+  const textFilesSuccess = lengthDelimitedField(1, fileContent);
+  const readFilesResult = lengthDelimitedField(1, textFilesSuccess);
+  const toolCallResult = Buffer.concat([
+    stringField(1, "call-read-files"),
+    lengthDelimitedField(3, readFilesResult),
+  ]);
+  const userInput = lengthDelimitedField(2, toolCallResult);
+  const userInputs = lengthDelimitedField(1, userInput);
+  const input = lengthDelimitedField(6, userInputs);
+  const request = lengthDelimitedField(2, input);
+
+  const decoded = decodeWarpRequest(request);
+
+  assert.deepEqual(decoded.toolResults, [
+    {
+      toolCallId: "call-read-files",
+      files: [{ filePath: "src/main.ts", content: "console.log('warp');" }],
+      error: undefined,
+    },
+  ]);
+  assert.match(decoded.prompt, /src\/main\.ts/);
+  assert.match(decoded.prompt, /console\.log/);
+});
+
 test("encodes response events as protobuf payloads", () => {
   assert.equal(encodeBase64Url(encodeStreamInit("c", "r")), "CgYKAWMSAXI=");
   assert.equal(encodeBase64Url(encodeStreamFinishedDone()), "GgISAA==");
   assert.ok(encodeAgentOutput({ taskId: "root", requestId: "req", text: "ok" }).length > 0);
   assert.ok(encodeCreateTask({ taskId: "root", description: "hello" }).length > 0);
+  const toolCall = encodeAddReadFilesToolCall({
+    messageId: "message",
+    taskId: "root",
+    requestId: "request",
+    toolCallId: "call-read-files",
+    files: [{ name: "src/main.ts", lineRanges: [{ start: 1, end: 10 }] }],
+  });
+  assert.ok(Buffer.from(toolCall).includes("call-read-files"));
+  assert.ok(Buffer.from(toolCall).includes("src/main.ts"));
 });
 
 test("encodes streaming agent output append events with the text field mask", () => {
