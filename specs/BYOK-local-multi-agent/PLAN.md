@@ -274,7 +274,7 @@ End-to-end:
 - [x] Start local service with `npm start`.
 - [x] Configure Warp BYOK settings to use the local service URL.
 - [x] Configure OpenAI Base URL/API key in the local service environment.
-- [ ] Confirm assistant output streams into Warp UI without `ExchangeNotFound`.
+- [x] Confirm assistant output streams into Warp UI without `ExchangeNotFound`.
 - [x] Send a simple prompt in Warp Agent.
 - [x] Confirm assistant output renders in the Warp UI for non-tool-call prompts.
 - [ ] Confirm hosted auth/cloud APIs still use the normal Warp server root.
@@ -353,3 +353,4 @@ End-to-end:
 - Restored incremental assistant output streaming using Warp's exchange sequencing contract: the first provider content chunk creates the assistant message with `AddMessagesToTask`, and subsequent chunks append to that same message with `AppendToMessageContent`.
 - Added integration coverage that verifies a chunked provider stream emits both the initial assistant output event and a later append event with the `agent_output.text` field mask.
 - Fixed the local append field mask to `agent_output.text`, which is rooted at Warp's `Message` descriptor. The previous `message.agent_output.text` path was silently ignored by the client append operation.
+- Manually confirmed in Warp that streamed local agent output renders in the UI after the append field-mask fix.
