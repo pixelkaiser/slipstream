@@ -16,7 +16,7 @@ use super::workspace::{
 };
 use crate::ai::llms::LLMModelHost;
 use crate::auth::{AuthStateProvider, UserUid};
-use crate::channel::ChannelState;
+use crate::channel::{Channel, ChannelState};
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::cloud_object::{CloudObjectEventEntrypoint, ObjectType, Owner, Space};
 use crate::pricing::PricingInfoModel;
@@ -479,14 +479,20 @@ impl UserWorkspaces {
     /// Whether BYO API key is enabled for the current user, based on the active policies.
     /// Note that the value may be incorrect if called before the team's billing metadata has been fetched.
     /// For solo users (no workspace), this is controlled by the `SoloUserByok` feature flag.
-    /// Anonymous or logged-out users are not allowed to use BYO API keys.
+    /// OSS builds always allow BYO API keys. For hosted channels, anonymous or logged-out users are
+    /// not allowed to use BYO API keys.
     pub fn is_byo_api_key_enabled(&self, app: &AppContext) -> bool {
+        if ChannelState::channel() == Channel::Oss {
+            return true;
+        }
+
         if AuthStateProvider::as_ref(app)
             .get()
             .is_anonymous_or_logged_out()
         {
             return false;
         }
+
         self.current_workspace()
             .map(|workspace| workspace.is_byo_api_key_enabled())
             .unwrap_or(FeatureFlag::SoloUserByok.is_enabled())
