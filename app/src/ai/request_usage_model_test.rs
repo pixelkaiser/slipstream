@@ -513,6 +513,32 @@ fn test_has_any_ai_remaining_true_with_byok_enabled_and_key_provided() {
 }
 
 #[test]
+fn test_has_any_ai_remaining_true_with_oss_build_and_key_provided() {
+    App::test((), |mut app| async move {
+        // ChannelState defaults to OSS in tests, where BYOK is enabled independent of billing policy.
+        let (_uid, workspace) = create_test_workspace();
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+
+        ApiKeyManager::handle(&app).update(&mut app, |manager, ctx| {
+            manager.set_openai_key(Some("test-key".to_string()), ctx);
+        });
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            // No standard requests remaining, no bonus credits.
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                model.has_any_ai_remaining(ctx),
+                "expected has_any_ai_remaining to be true when an OSS build has a BYO key",
+            );
+        });
+    });
+}
+
+#[test]
 fn test_has_any_ai_remaining_false_with_byok_enabled_but_no_key() {
     App::test((), |mut app| async move {
         // Create a workspace with BYOK enabled but no key provided.

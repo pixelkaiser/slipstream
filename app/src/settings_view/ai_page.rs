@@ -6361,6 +6361,19 @@ impl ApiKeysWidget {
                         );
                         ctx.notify();
                     }
+                });
+                let editor_clone = $editor.clone();
+                ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, event, ctx| {
+                    if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = event {
+                        let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
+                        let is_byo_enabled = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled();
+                        AISettingsPageView::update_editor_interaction_state(
+                            editor_clone.clone(),
+                            is_any_ai_enabled && is_byo_enabled,
+                            ctx,
+                        );
+                        ctx.notify();
+                    }
                 })
             };
         }
