@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   encodeAddAgentOutput,
   encodeAppendAgentOutput,
+  encodeCreateTask,
   decodeWarpRequest,
   encodeAgentOutput,
   encodeBase64Url,
@@ -48,6 +49,7 @@ test("decodes the fields needed from a Warp request", () => {
       conversationId: "conversation",
       requestId: "<generated>",
       rootTaskId: "root",
+      shouldCreateRootTask: false,
       prompt: "hello warp",
       openAiApiKey: "sk-testing",
       model: undefined,
@@ -55,10 +57,24 @@ test("decodes the fields needed from a Warp request", () => {
   );
 });
 
+test("marks requests without a task context as needing root task creation", () => {
+  const userQuery = hex("0a0b68656c6c6f2077617270");
+  const userInput = Uint8Array.from([0x0a, userQuery.length, ...userQuery]);
+  const userInputs = Uint8Array.from([0x0a, userInput.length, ...userInput]);
+  const input = Uint8Array.from([0x32, userInputs.length, ...userInputs]);
+  const request = Uint8Array.from([0x12, input.length, ...input]);
+
+  const decoded = decodeWarpRequest(request);
+
+  assert.equal(decoded.shouldCreateRootTask, true);
+  assert.notEqual(decoded.rootTaskId, "root");
+});
+
 test("encodes response events as protobuf payloads", () => {
   assert.equal(encodeBase64Url(encodeStreamInit("c", "r")), "CgkKAWMSAXIaAWM=");
   assert.equal(encodeBase64Url(encodeStreamFinishedDone()), "GgISAA==");
   assert.ok(encodeAgentOutput({ taskId: "root", requestId: "req", text: "ok" }).length > 0);
+  assert.ok(encodeCreateTask({ taskId: "root", description: "hello" }).length > 0);
 });
 
 test("encodes streaming agent output append events with the text field mask", () => {
