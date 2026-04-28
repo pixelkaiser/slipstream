@@ -66,6 +66,27 @@ use super::experiments::ServerExperiment;
 use super::experiments::ServerExperiments;
 use super::graphql::GraphQLError;
 
+fn multi_agent_output_url(
+    is_passive: bool,
+    is_evals: bool,
+    server_root_url_override: Option<&str>,
+) -> String {
+    let server_root_url = server_root_url_override
+        .map(str::to_string)
+        .unwrap_or_else(|| ChannelState::server_root_url().into_owned());
+
+    format!(
+        "{}/{}/{}",
+        server_root_url.trim_end_matches('/'),
+        if is_evals { "agent-mode-evals" } else { "ai" },
+        if is_passive {
+            "passive-suggestions"
+        } else {
+            "multi-agent"
+        }
+    )
+}
+
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
 const EXPERIMENT_ID_HEADER: &str = "X-Warp-Experiment-Id";
@@ -1091,6 +1112,7 @@ impl ServerApi {
     pub async fn generate_multi_agent_output(
         &self,
         request: &warp_multi_agent_api::Request,
+        server_root_url_override: Option<&str>,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
         let auth_token = self
@@ -1106,16 +1128,7 @@ impl ServerApi {
             )
         });
         let is_evals = cfg!(feature = "agent_mode_evals");
-        let url = format!(
-            "{}/{}/{}",
-            ChannelState::server_root_url(),
-            if is_evals { "agent-mode-evals" } else { "ai" },
-            if is_passive {
-                "passive-suggestions"
-            } else {
-                "multi-agent"
-            }
-        );
+        let url = multi_agent_output_url(is_passive, is_evals, server_root_url_override);
 
         let ambient_workload_token = self
             .get_or_create_ambient_workload_token()
@@ -1422,3 +1435,32 @@ impl Entity for ServerApiProvider {
 }
 
 impl SingletonEntity for ServerApiProvider {}
+
+#[cfg(test)]
+mod tests {
+    use super::multi_agent_output_url;
+
+    #[test]
+    fn multi_agent_output_url_uses_default_agent_path_with_override() {
+        assert_eq!(
+            multi_agent_output_url(false, false, Some("http://127.0.0.1:8787")),
+            "http://127.0.0.1:8787/ai/multi-agent"
+        );
+    }
+
+    #[test]
+    fn multi_agent_output_url_trims_override_trailing_slash() {
+        assert_eq!(
+            multi_agent_output_url(false, false, Some("http://127.0.0.1:8787/")),
+            "http://127.0.0.1:8787/ai/multi-agent"
+        );
+    }
+
+    #[test]
+    fn multi_agent_output_url_uses_passive_suggestions_path() {
+        assert_eq!(
+            multi_agent_output_url(true, false, Some("http://127.0.0.1:8787")),
+            "http://127.0.0.1:8787/ai/passive-suggestions"
+        );
+    }
+}
