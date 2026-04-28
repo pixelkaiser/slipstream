@@ -21,6 +21,8 @@ pub struct ApiKeys {
     pub google: Option<String>,
     pub anthropic: Option<String>,
     pub openai: Option<String>,
+    pub openai_base_url: Option<String>,
+    pub local_multi_agent_server_root_url: Option<String>,
     pub open_router: Option<String>,
 }
 
@@ -83,6 +85,25 @@ impl ApiKeyManager {
 
     pub fn set_openai_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
         self.keys.openai = key;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_openai_base_url(&mut self, base_url: Option<String>, ctx: &mut ModelContext<Self>) {
+        self.keys.openai_base_url = base_url;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_local_multi_agent_server_root_url(
+        &mut self,
+        url: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys.local_multi_agent_server_root_url = url.and_then(|url| {
+            let url = url.trim().trim_end_matches('/').to_string();
+            (!url.is_empty()).then_some(url)
+        });
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
