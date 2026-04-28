@@ -146,7 +146,7 @@ warp-build-oss:
 - [x] Expose the setting under `Settings -> Agents -> Warp Agent -> API Keys`.
 - [x] Label the field `Local Multi-Agent Server URL`.
 - [x] Use placeholder `http://127.0.0.1:8787`.
-- [ ] Validate absolute HTTP/HTTPS URLs.
+- [x] Validate absolute HTTP/HTTPS URLs.
 - [ ] Add a `Test connection` action that calls `/health`.
 - [x] Route `ServerApi::generate_multi_agent_output` to the local multi-agent URL when configured.
 - [x] Route passive suggestions to the local URL when configured.
@@ -332,3 +332,4 @@ End-to-end:
 - Added JSON-line logging for local service startup, HTTP request routing, Warp request metadata, provider request metadata, errors, completion summaries, and debug-level SSE event emission. Sensitive key/token/auth fields are redacted.
 - Stopped sending a synthetic `run_id` in local `StreamInit` events so Warp does not try to sync a non-hosted task with the hosted GraphQL task API.
 - Added local service tests for SSE data formatting, supported prompt extraction variants, and an integration path that sends a Warp protobuf request through the local service to a mock OpenAI-compatible streaming `/chat/completions` endpoint.
+- Added storage-layer validation for BYOK OpenAI Base URL and Local Multi-Agent Server URL settings; only absolute `http`/`https` URLs with a host are persisted, and trailing slashes are normalized.
