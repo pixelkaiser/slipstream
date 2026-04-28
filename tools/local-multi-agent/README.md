@@ -18,7 +18,10 @@ Set these environment variables before starting the service:
 - `OPENAI_BASE_URL` unless Warp sends `X-Warp-OpenAI-Base-URL` from the BYOK OpenAI Base URL setting
 - `OPENAI_MODEL` globally overrides model selection and otherwise defaults to `Qwen/Qwen3.6-27B-FP8`.
 - `LOCAL_MODEL_ALIASES` optionally maps Warp model IDs to provider model IDs as JSON. Built-in aliases map `auto`, `auto-efficient`, `auto-coding`, and `auto-reasoning` to `Qwen/Qwen3.6-27B-FP8`.
+- `LOG_LEVEL` defaults to `info`; use `debug` to log individual SSE events.
 - `PORT` defaults to `8787`
+
+The service logs JSON lines for startup, HTTP requests, Warp multi-agent requests, provider requests, errors, and completion summaries. API keys and authorization-like fields are redacted.
 
 Point Warp's BYOK `Local Multi-Agent Server URL` field at:
 
