@@ -23,7 +23,7 @@ local-agent-dev:
 local-agent-build:
 	cd $(LOCAL_AGENT_DIR) && npm run build
 
-local-agent-start:
+local-agent-start: local-agent-build
 	cd $(LOCAL_AGENT_DIR) && npm start
 
 local-agent-test:
