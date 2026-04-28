@@ -177,7 +177,8 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
     assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
     assert.equal(sseEventBytes(events[2]).includes("hello"), true);
     assert.equal(sseEventBytes(events[3]).includes(" warp"), true);
-    assert.equal(sseEventBytes(events[3]).includes("message.agent_output.text"), true);
+    assert.equal(sseEventBytes(events[3]).includes("agent_output.text"), true);
+    assert.equal(sseEventBytes(events[3]).includes("message.agent_output.text"), false);
   } catch (error) {
     const diagnostics = [
       `stdout:\n${stdout.join("")}`,
