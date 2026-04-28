@@ -15,7 +15,7 @@ export type WarpRequestSummary = {
   rootTaskId: string;
   shouldCreateRootTask: boolean;
   prompt: string;
-  toolResults: ReadFilesToolResult[];
+  toolResults: WarpToolResult[];
   openAiApiKey?: string;
   model?: string;
 };
@@ -26,10 +26,73 @@ export type ReadFilesToolCallFile = {
 };
 
 export type ReadFilesToolResult = {
+  type: "read_files";
   toolCallId: string;
   files: Array<{ filePath: string; content: string }>;
   error?: string;
 };
+
+export type RunShellCommandToolCall = {
+  type: "run_shell_command";
+  command: string;
+  isReadOnly?: boolean;
+  isRisky?: boolean;
+  usesPager?: boolean;
+  waitUntilComplete?: boolean;
+};
+
+export type GrepToolCall = {
+  type: "grep";
+  queries: string[];
+  path?: string;
+};
+
+export type FileGlobToolCall = {
+  type: "file_glob";
+  patterns: string[];
+  searchDir?: string;
+  maxMatches?: number;
+  maxDepth?: number;
+  minDepth?: number;
+};
+
+export type ApplyFileDiffsToolCall = {
+  type: "apply_file_diffs";
+  summary: string;
+  diffs?: Array<{ filePath: string; search?: string; replace?: string }>;
+  newFiles?: Array<{ filePath: string; content: string }>;
+  deletedFiles?: Array<{ filePath: string }>;
+  v4aUpdates?: Array<{
+    filePath: string;
+    moveTo?: string;
+    hunks: Array<{
+      changeContext?: string[];
+      preContext?: string;
+      old?: string;
+      new?: string;
+      postContext?: string;
+    }>;
+  }>;
+};
+
+export type SuggestPlanToolCall = {
+  type: "suggest_plan";
+  summary: string;
+  tasks: Array<{ description: string }>;
+};
+
+export type WarpToolCall =
+  | ({ toolCallId: string } & {
+      tool: RunShellCommandToolCall | { type: "read_files"; files: ReadFilesToolCallFile[] } | GrepToolCall | FileGlobToolCall | ApplyFileDiffsToolCall | SuggestPlanToolCall;
+    });
+
+export type WarpToolResult =
+  | ReadFilesToolResult
+  | { type: "run_shell_command"; toolCallId: string; command?: string; output?: string; exitCode?: number; error?: string }
+  | { type: "grep"; toolCallId: string; matchedFiles: Array<{ filePath: string; lineNumbers: number[] }>; error?: string }
+  | { type: "file_glob"; toolCallId: string; matchedFiles: string[]; warnings?: string; error?: string }
+  | { type: "apply_file_diffs"; toolCallId: string; updatedFiles: string[]; deletedFiles: string[]; error?: string }
+  | { type: "suggest_plan"; toolCallId: string; status: "accepted" | "edited"; planText?: string };
 
 function concat(parts: Uint8Array[]): Uint8Array {
   const length = parts.reduce((sum, part) => sum + part.length, 0);
@@ -85,6 +148,14 @@ function stringField(fieldNumber: number, value: string | undefined): Uint8Array
 
 function int64Field(fieldNumber: number, value: number): Uint8Array {
   return concat([tag(fieldNumber, 0), encodeVarint(value)]);
+}
+
+function boolField(fieldNumber: number, value: boolean | undefined): Uint8Array {
+  if (value == null) {
+    return new Uint8Array();
+  }
+
+  return concat([tag(fieldNumber, 0), encodeVarint(value ? 1 : 0)]);
 }
 
 function messageField(fieldNumber: number, value: Uint8Array): Uint8Array {
@@ -148,6 +219,14 @@ function stringValue(fieldValue: ProtoField | undefined): string | undefined {
   }
 
   return textDecoder.decode(fieldValue.raw);
+}
+
+function intValue(fieldValue: ProtoField | undefined): number | undefined {
+  if (!fieldValue || fieldValue.wireType !== 0) {
+    return undefined;
+  }
+
+  return readVarint(fieldValue.raw, 0)[0];
 }
 
 function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
@@ -255,23 +334,191 @@ function decodeReadFilesResult(toolCallResultFields: ProtoField[]): ReadFilesToo
     }
   }
 
-  return { toolCallId, files, error };
+  return { type: "read_files", toolCallId, files, error };
 }
 
-function decodeToolResults(requestFields: ProtoField[]): ReadFilesToolResult[] {
+function decodeRunShellCommandResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  if (!toolCallId) {
+    return undefined;
+  }
+
+  const runShellCommand = message(field(toolCallResultFields, 2));
+  if (!runShellCommand.length) {
+    return undefined;
+  }
+
+  const command = stringValue(field(runShellCommand, 3));
+  const commandFinished = message(field(runShellCommand, 5));
+  const permissionDenied = message(field(runShellCommand, 6));
+  if (commandFinished.length) {
+    return {
+      type: "run_shell_command",
+      toolCallId,
+      command,
+      output: stringValue(field(commandFinished, 1)) ?? "",
+      exitCode: intValue(field(commandFinished, 2)) ?? 0,
+    };
+  }
+  if (permissionDenied.length) {
+    return {
+      type: "run_shell_command",
+      toolCallId,
+      command,
+      error: "Permission denied.",
+    };
+  }
+
+  return {
+    type: "run_shell_command",
+    toolCallId,
+    command,
+    output: stringValue(field(runShellCommand, 1)) ?? "",
+    exitCode: intValue(field(runShellCommand, 2)),
+  };
+}
+
+function decodeGrepResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  if (!toolCallId) {
+    return undefined;
+  }
+
+  const grep = message(field(toolCallResultFields, 8));
+  if (!grep.length) {
+    return undefined;
+  }
+
+  const error = stringValue(field(message(field(grep, 2)), 1));
+  const success = message(field(grep, 1));
+  const matchedFiles = fields(success, 1).flatMap((matchField) => {
+    const match = message(matchField);
+    const filePath = stringValue(field(match, 1));
+    if (!filePath) {
+      return [];
+    }
+
+    return [{
+      filePath,
+      lineNumbers: fields(match, 2).flatMap((lineField) => {
+        const lineNumber = intValue(field(message(lineField), 1));
+        return lineNumber == null ? [] : [lineNumber];
+      }),
+    }];
+  });
+
+  return { type: "grep", toolCallId, matchedFiles, error };
+}
+
+function decodeFileGlobResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  if (!toolCallId) {
+    return undefined;
+  }
+
+  const fileGlob = message(field(toolCallResultFields, 9));
+  if (fileGlob.length) {
+    const error = stringValue(field(message(field(fileGlob, 2)), 1));
+    const matchedFiles = (stringValue(field(message(field(fileGlob, 1)), 1)) ?? "")
+      .split(/\r?\n/)
+      .map((path) => path.trim())
+      .filter(Boolean);
+    return { type: "file_glob", toolCallId, matchedFiles, error };
+  }
+
+  const fileGlobV2 = message(field(toolCallResultFields, 15));
+  if (!fileGlobV2.length) {
+    return undefined;
+  }
+
+  const error = stringValue(field(message(field(fileGlobV2, 2)), 1));
+  const success = message(field(fileGlobV2, 1));
+  const matchedFiles = fields(success, 1).flatMap((matchField) => {
+    const filePath = stringValue(field(message(matchField), 1));
+    return filePath ? [filePath] : [];
+  });
+  const warnings = stringValue(field(success, 2));
+  return { type: "file_glob", toolCallId, matchedFiles, warnings, error };
+}
+
+function decodeApplyFileDiffsResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  if (!toolCallId) {
+    return undefined;
+  }
+
+  const applyFileDiffs = message(field(toolCallResultFields, 5));
+  if (!applyFileDiffs.length) {
+    return undefined;
+  }
+
+  const error = stringValue(field(message(field(applyFileDiffs, 2)), 1));
+  const success = message(field(applyFileDiffs, 1));
+  const updatedFiles = [
+    ...fields(success, 1).flatMap((fileField) => {
+      const filePath = stringValue(field(message(fileField), 1));
+      return filePath ? [filePath] : [];
+    }),
+    ...fields(success, 2).flatMap((updatedFileField) => {
+      const filePath = stringValue(field(message(field(message(updatedFileField), 1)), 1));
+      return filePath ? [filePath] : [];
+    }),
+  ];
+  const deletedFiles = fields(success, 3).flatMap((deletedFileField) => {
+    const filePath = stringValue(field(message(deletedFileField), 1));
+    return filePath ? [filePath] : [];
+  });
+
+  return { type: "apply_file_diffs", toolCallId, updatedFiles, deletedFiles, error };
+}
+
+function decodeSuggestPlanResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  const toolCallId = stringValue(field(toolCallResultFields, 1));
+  if (!toolCallId) {
+    return undefined;
+  }
+
+  const suggestPlan = message(field(toolCallResultFields, 6));
+  if (!suggestPlan.length) {
+    return undefined;
+  }
+
+  const editedPlan = message(field(suggestPlan, 2));
+  if (editedPlan.length) {
+    return {
+      type: "suggest_plan",
+      toolCallId,
+      status: "edited",
+      planText: stringValue(field(editedPlan, 1)) ?? "",
+    };
+  }
+
+  return { type: "suggest_plan", toolCallId, status: "accepted" };
+}
+
+function decodeToolResult(toolCallResultFields: ProtoField[]): WarpToolResult | undefined {
+  return decodeReadFilesResult(toolCallResultFields)
+    ?? decodeRunShellCommandResult(toolCallResultFields)
+    ?? decodeGrepResult(toolCallResultFields)
+    ?? decodeFileGlobResult(toolCallResultFields)
+    ?? decodeApplyFileDiffsResult(toolCallResultFields)
+    ?? decodeSuggestPlanResult(toolCallResultFields);
+}
+
+function decodeToolResults(requestFields: ProtoField[]): WarpToolResult[] {
   const input = message(field(requestFields, 2));
-  const results: ReadFilesToolResult[] = [];
+  const results: WarpToolResult[] = [];
 
   const userInputs = message(field(input, 6));
   for (const userInputField of fields(userInputs, 1)) {
     const userInput = message(userInputField);
-    const decoded = decodeReadFilesResult(message(field(userInput, 2)));
+    const decoded = decodeToolResult(message(field(userInput, 2)));
     if (decoded) {
       results.push(decoded);
     }
   }
 
-  const deprecatedToolCallResult = decodeReadFilesResult(message(field(input, 3)));
+  const deprecatedToolCallResult = decodeToolResult(message(field(input, 3)));
   if (deprecatedToolCallResult) {
     results.push(deprecatedToolCallResult);
   }
@@ -339,6 +586,10 @@ function encodeLineRange(range: { start: number; end: number }): Uint8Array {
   ]);
 }
 
+function optionalIntField(fieldNumber: number, value: number | undefined): Uint8Array {
+  return value == null ? new Uint8Array() : int64Field(fieldNumber, value);
+}
+
 function encodeFieldMask(paths: string[]): Uint8Array {
   return concat(paths.map((path) => stringField(1, path)));
 }
@@ -392,20 +643,140 @@ function encodeReadFilesToolCall(params: {
   ]);
 }
 
-function encodeReadFilesToolCallMessage(params: {
+function encodeRunShellCommandToolCall(params: RunShellCommandToolCall & { toolCallId: string }): Uint8Array {
+  const runShellCommand = concat([
+    stringField(1, params.command),
+    boolField(2, params.isReadOnly),
+    boolField(3, params.usesPager),
+    boolField(5, params.isRisky),
+    boolField(6, params.waitUntilComplete),
+  ]);
+
+  return concat([
+    stringField(1, params.toolCallId),
+    messageField(2, runShellCommand),
+  ]);
+}
+
+function encodeGrepToolCall(params: GrepToolCall & { toolCallId: string }): Uint8Array {
+  const grep = concat([
+    ...params.queries.map((query) => stringField(1, query)),
+    stringField(2, params.path ?? "."),
+  ]);
+
+  return concat([
+    stringField(1, params.toolCallId),
+    messageField(9, grep),
+  ]);
+}
+
+function encodeFileGlobToolCall(params: FileGlobToolCall & { toolCallId: string }): Uint8Array {
+  const fileGlob = concat([
+    ...params.patterns.map((pattern) => stringField(1, pattern)),
+    stringField(2, params.searchDir ?? "."),
+    optionalIntField(3, params.maxMatches),
+    optionalIntField(4, params.maxDepth),
+    optionalIntField(5, params.minDepth),
+  ]);
+
+  return concat([
+    stringField(1, params.toolCallId),
+    messageField(15, fileGlob),
+  ]);
+}
+
+function encodeApplyFileDiffsToolCall(params: ApplyFileDiffsToolCall & { toolCallId: string }): Uint8Array {
+  const applyFileDiffs = concat([
+    stringField(1, params.summary),
+    ...((params.diffs ?? []).map((diff) => messageField(2, concat([
+      stringField(1, diff.filePath),
+      stringField(2, diff.search),
+      stringField(3, diff.replace),
+    ])))),
+    ...((params.newFiles ?? []).map((file) => messageField(3, concat([
+      stringField(1, file.filePath),
+      stringField(2, file.content),
+    ])))),
+    ...((params.deletedFiles ?? []).map((file) => messageField(4, stringField(1, file.filePath)))),
+    ...((params.v4aUpdates ?? []).map((update) => messageField(5, concat([
+      stringField(1, update.filePath),
+      stringField(2, update.moveTo),
+      ...update.hunks.map((hunk) => messageField(3, concat([
+        ...((hunk.changeContext ?? []).map((context) => stringField(1, context))),
+        stringField(2, hunk.preContext),
+        stringField(3, hunk.old),
+        stringField(4, hunk.new),
+        stringField(5, hunk.postContext),
+      ]))),
+    ])))),
+  ]);
+
+  return concat([
+    stringField(1, params.toolCallId),
+    messageField(6, applyFileDiffs),
+  ]);
+}
+
+function encodeSuggestPlanToolCall(params: SuggestPlanToolCall & { toolCallId: string }): Uint8Array {
+  const suggestPlan = concat([
+    stringField(1, params.summary),
+    ...params.tasks.map((task) => messageField(2, encodeTask({
+      taskId: randomUUID(),
+      description: task.description,
+    }))),
+  ]);
+
+  return concat([
+    stringField(1, params.toolCallId),
+    messageField(7, suggestPlan),
+  ]);
+}
+
+function encodeToolCall(params: WarpToolCall): Uint8Array {
+  switch (params.tool.type) {
+    case "run_shell_command":
+      return encodeRunShellCommandToolCall({ ...params.tool, toolCallId: params.toolCallId });
+    case "read_files":
+      return encodeReadFilesToolCall({ toolCallId: params.toolCallId, files: params.tool.files });
+    case "grep":
+      return encodeGrepToolCall({ ...params.tool, toolCallId: params.toolCallId });
+    case "file_glob":
+      return encodeFileGlobToolCall({ ...params.tool, toolCallId: params.toolCallId });
+    case "apply_file_diffs":
+      return encodeApplyFileDiffsToolCall({ ...params.tool, toolCallId: params.toolCallId });
+    case "suggest_plan":
+      return encodeSuggestPlanToolCall({ ...params.tool, toolCallId: params.toolCallId });
+  }
+}
+
+function encodeToolCallMessage(params: {
   messageId: string;
   taskId: string;
   requestId: string;
-  toolCallId: string;
-  files: ReadFilesToolCallFile[];
-}): Uint8Array {
+} & WarpToolCall): Uint8Array {
   return concat([
     stringField(1, params.messageId),
-    messageField(4, encodeReadFilesToolCall(params)),
+    messageField(4, encodeToolCall(params)),
     stringField(11, params.taskId),
     stringField(13, params.requestId),
     messageField(14, encodeTimestamp(new Date())),
   ]);
+}
+
+export function encodeAddToolCall(params: {
+  messageId: string;
+  taskId: string;
+  requestId: string;
+} & WarpToolCall): Uint8Array {
+  const toolCallMessage = encodeToolCallMessage(params);
+  const addMessagesToTask = concat([
+    stringField(1, params.taskId),
+    messageField(2, toolCallMessage),
+  ]);
+  const clientAction = messageField(3, addMessagesToTask);
+  const clientActions = messageField(1, clientAction);
+
+  return messageField(2, clientActions);
 }
 
 export function encodeAddReadFilesToolCall(params: {
@@ -415,15 +786,10 @@ export function encodeAddReadFilesToolCall(params: {
   toolCallId: string;
   files: ReadFilesToolCallFile[];
 }): Uint8Array {
-  const toolCallMessage = encodeReadFilesToolCallMessage(params);
-  const addMessagesToTask = concat([
-    stringField(1, params.taskId),
-    messageField(2, toolCallMessage),
-  ]);
-  const clientAction = messageField(3, addMessagesToTask);
-  const clientActions = messageField(1, clientAction);
-
-  return messageField(2, clientActions);
+  return encodeAddToolCall({
+    ...params,
+    tool: { type: "read_files", files: params.files },
+  });
 }
 
 export function encodeAppendAgentOutput(params: {
@@ -470,21 +836,38 @@ export function encodeBase64Url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
-function formatToolResultsPrompt(toolResults: ReadFilesToolResult[]): string {
+function formatToolResult(result: WarpToolResult): string {
+  const header = `${result.type} result for tool_call_id=${result.toolCallId}`;
+  if ("error" in result && result.error) {
+    return `${header}\nError: ${result.error}`;
+  }
+
+  switch (result.type) {
+    case "read_files":
+      return `${header}\n${result.files.map((file) => `File: ${file.filePath}\n${file.content}`).join("\n\n")}`;
+    case "run_shell_command":
+      return `${header}\nCommand: ${result.command ?? ""}\nExit code: ${result.exitCode ?? ""}\nOutput:\n${result.output ?? ""}`;
+    case "grep":
+      return `${header}\n${result.matchedFiles.map((file) => {
+        const lines = file.lineNumbers.length ? ` lines ${file.lineNumbers.join(", ")}` : "";
+        return `${file.filePath}${lines}`;
+      }).join("\n")}`;
+    case "file_glob":
+      return `${header}\n${result.matchedFiles.join("\n")}${result.warnings ? `\nWarnings:\n${result.warnings}` : ""}`;
+    case "apply_file_diffs":
+      return `${header}\nUpdated files:\n${result.updatedFiles.join("\n")}\nDeleted files:\n${result.deletedFiles.join("\n")}`;
+    case "suggest_plan":
+      return `${header}\nStatus: ${result.status}${result.planText ? `\nPlan:\n${result.planText}` : ""}`;
+  }
+}
+
+function formatToolResultsPrompt(toolResults: WarpToolResult[]): string {
   if (!toolResults.length) {
     return "";
   }
 
   return [
     "Tool results are available. Use them to continue answering the user's original request.",
-    ...toolResults.map((result) => {
-      const header = `ReadFiles result for tool_call_id=${result.toolCallId}`;
-      if (result.error) {
-        return `${header}\nError: ${result.error}`;
-      }
-
-      const files = result.files.map((file) => `File: ${file.filePath}\n${file.content}`).join("\n\n");
-      return `${header}\n${files}`;
-    }),
+    ...toolResults.map(formatToolResult),
   ].join("\n\n");
 }

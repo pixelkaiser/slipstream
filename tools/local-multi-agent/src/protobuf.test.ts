@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   encodeAddAgentOutput,
   encodeAddReadFilesToolCall,
+  encodeAddToolCall,
   encodeAppendAgentOutput,
   encodeCreateTask,
   decodeWarpRequest,
@@ -34,6 +35,17 @@ function lengthDelimitedField(fieldNumber: number, value: Uint8Array): Uint8Arra
 
 function stringField(fieldNumber: number, value: string): Uint8Array {
   return lengthDelimitedField(fieldNumber, Buffer.from(value));
+}
+
+function varintField(fieldNumber: number, value: number): Uint8Array {
+  return Uint8Array.from([...encodeVarint(fieldNumber << 3), ...encodeVarint(value)]);
+}
+
+function toolResultRequest(toolCallResult: Uint8Array): Uint8Array {
+  const userInput = lengthDelimitedField(2, toolCallResult);
+  const userInputs = lengthDelimitedField(1, userInput);
+  const input = lengthDelimitedField(6, userInputs);
+  return lengthDelimitedField(2, input);
 }
 
 test("decodes the fields needed from a Warp request", () => {
@@ -142,6 +154,7 @@ test("decodes read_files tool call results from user inputs", () => {
 
   assert.deepEqual(decoded.toolResults, [
     {
+      type: "read_files",
       toolCallId: "call-read-files",
       files: [{ filePath: "src/main.ts", content: "console.log('warp');" }],
       error: undefined,
@@ -149,6 +162,61 @@ test("decodes read_files tool call results from user inputs", () => {
   ]);
   assert.match(decoded.prompt, /src\/main\.ts/);
   assert.match(decoded.prompt, /console\.log/);
+});
+
+test("decodes non-file tool call results from user inputs", () => {
+  const shellFinished = Buffer.concat([
+    stringField(1, "ok"),
+    varintField(2, 0),
+  ]);
+  const runShellResult = Buffer.concat([
+    stringField(1, "call-shell"),
+    lengthDelimitedField(2, Buffer.concat([
+      stringField(3, "pwd"),
+      lengthDelimitedField(5, shellFinished),
+    ])),
+  ]);
+  assert.deepEqual(decodeWarpRequest(toolResultRequest(runShellResult)).toolResults, [
+    {
+      type: "run_shell_command",
+      toolCallId: "call-shell",
+      command: "pwd",
+      output: "ok",
+      exitCode: 0,
+    },
+  ]);
+
+  const grepMatch = Buffer.concat([
+    stringField(1, "src/main.ts"),
+    lengthDelimitedField(2, varintField(1, 12)),
+  ]);
+  const grepResult = Buffer.concat([
+    stringField(1, "call-grep"),
+    lengthDelimitedField(8, lengthDelimitedField(1, lengthDelimitedField(1, grepMatch))),
+  ]);
+  assert.deepEqual(decodeWarpRequest(toolResultRequest(grepResult)).toolResults, [
+    {
+      type: "grep",
+      toolCallId: "call-grep",
+      matchedFiles: [{ filePath: "src/main.ts", lineNumbers: [12] }],
+      error: undefined,
+    },
+  ]);
+
+  const globMatch = stringField(1, "src/main.ts");
+  const globResult = Buffer.concat([
+    stringField(1, "call-glob"),
+    lengthDelimitedField(15, lengthDelimitedField(1, lengthDelimitedField(1, globMatch))),
+  ]);
+  assert.deepEqual(decodeWarpRequest(toolResultRequest(globResult)).toolResults, [
+    {
+      type: "file_glob",
+      toolCallId: "call-glob",
+      matchedFiles: ["src/main.ts"],
+      warnings: undefined,
+      error: undefined,
+    },
+  ]);
 });
 
 test("encodes response events as protobuf payloads", () => {
@@ -165,6 +233,48 @@ test("encodes response events as protobuf payloads", () => {
   });
   assert.ok(Buffer.from(toolCall).includes("call-read-files"));
   assert.ok(Buffer.from(toolCall).includes("src/main.ts"));
+  const otherToolCalls = [
+    encodeAddToolCall({
+      messageId: "message",
+      taskId: "root",
+      requestId: "request",
+      toolCallId: "call-shell",
+      tool: { type: "run_shell_command", command: "pwd", isReadOnly: true },
+    }),
+    encodeAddToolCall({
+      messageId: "message",
+      taskId: "root",
+      requestId: "request",
+      toolCallId: "call-grep",
+      tool: { type: "grep", queries: ["TODO"], path: "." },
+    }),
+    encodeAddToolCall({
+      messageId: "message",
+      taskId: "root",
+      requestId: "request",
+      toolCallId: "call-glob",
+      tool: { type: "file_glob", patterns: ["*.ts"], searchDir: "src" },
+    }),
+    encodeAddToolCall({
+      messageId: "message",
+      taskId: "root",
+      requestId: "request",
+      toolCallId: "call-apply",
+      tool: {
+        type: "apply_file_diffs",
+        summary: "edit file",
+        diffs: [{ filePath: "src/main.ts", search: "old", replace: "new" }],
+      },
+    }),
+    encodeAddToolCall({
+      messageId: "message",
+      taskId: "root",
+      requestId: "request",
+      toolCallId: "call-plan",
+      tool: { type: "suggest_plan", summary: "plan", tasks: [{ description: "Do work" }] },
+    }),
+  ];
+  assert.ok(otherToolCalls.every((encoded) => encoded.length > 0));
 });
 
 test("encodes streaming agent output append events with the text field mask", () => {

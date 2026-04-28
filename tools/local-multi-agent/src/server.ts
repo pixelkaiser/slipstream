@@ -3,13 +3,14 @@ import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   encodeAddAgentOutput,
-  encodeAddReadFilesToolCall,
+  encodeAddToolCall,
   encodeCreateTask,
   decodeWarpRequest,
   encodeStreamFinishedDone,
   encodeStreamFinishedInternalError,
   encodeStreamInit,
   type ReadFilesToolCallFile,
+  type WarpToolCall,
 } from "./protobuf.js";
 import { resolveProviderModel } from "./model.js";
 import { log } from "./logger.js";
@@ -112,6 +113,163 @@ function readFilesToolSchema(): object {
   };
 }
 
+function runShellCommandToolSchema(): object {
+  return {
+    type: "function",
+    function: {
+      name: "run_shell_command",
+      description: "Run a shell command in the user's current terminal context.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          command: { type: "string" },
+          is_read_only: { type: "boolean", description: "Whether the command only reads state." },
+          is_risky: { type: "boolean", description: "Whether the command may modify files, processes, or external state." },
+          uses_pager: { type: "boolean" },
+          wait_until_complete: { type: "boolean" },
+        },
+        required: ["command"],
+      },
+    },
+  };
+}
+
+function grepToolSchema(): object {
+  return {
+    type: "function",
+    function: {
+      name: "grep",
+      description: "Search for text or patterns in files under a path.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          queries: { type: "array", items: { type: "string" }, minItems: 1 },
+          query: { type: "string" },
+          path: { type: "string", description: "File or directory to search. Defaults to the current directory." },
+        },
+      },
+    },
+  };
+}
+
+function fileGlobToolSchema(): object {
+  return {
+    type: "function",
+    function: {
+      name: "file_glob",
+      description: "Find files whose names match glob patterns.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          patterns: { type: "array", items: { type: "string" }, minItems: 1 },
+          pattern: { type: "string" },
+          search_dir: { type: "string", description: "Directory to search. Defaults to the current directory." },
+          max_matches: { type: "integer", minimum: 0 },
+          max_depth: { type: "integer", minimum: 0 },
+          min_depth: { type: "integer", minimum: 0 },
+        },
+      },
+    },
+  };
+}
+
+function applyFileDiffsToolSchema(): object {
+  return {
+    type: "function",
+    function: {
+      name: "apply_file_diffs",
+      description: "Request edits to local files using search/replace diffs, file creation, deletion, or V4A hunks.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          summary: { type: "string" },
+          diffs: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                file_path: { type: "string" },
+                search: { type: "string" },
+                replace: { type: "string" },
+              },
+              required: ["file_path"],
+            },
+          },
+          new_files: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                file_path: { type: "string" },
+                content: { type: "string" },
+              },
+              required: ["file_path", "content"],
+            },
+          },
+          deleted_files: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                file_path: { type: "string" },
+              },
+              required: ["file_path"],
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function suggestPlanToolSchema(): object {
+  return {
+    type: "function",
+    function: {
+      name: "suggest_plan",
+      description: "Suggest a plan for the user to review before continuing.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          summary: { type: "string" },
+          tasks: {
+            type: "array",
+            minItems: 1,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                description: { type: "string" },
+              },
+              required: ["description"],
+            },
+          },
+        },
+        required: ["summary", "tasks"],
+      },
+    },
+  };
+}
+
+function localToolSchemas(): object[] {
+  return [
+    readFilesToolSchema(),
+    fileGlobToolSchema(),
+    grepToolSchema(),
+    runShellCommandToolSchema(),
+    applyFileDiffsToolSchema(),
+    suggestPlanToolSchema(),
+  ];
+}
+
 function extractStreamingContent(payload: unknown): string {
   if (!payload || typeof payload !== "object") {
     return "";
@@ -181,10 +339,6 @@ function shouldEnableTools(): boolean {
 }
 
 function parseReadFilesToolCall(toolCall: ProviderToolCall): ReadFilesToolCallFile[] | undefined {
-  if (toolCall.name !== "read_files") {
-    return undefined;
-  }
-
   const args = JSON.parse(toolCall.argumentsText || "{}") as { files?: unknown; paths?: unknown };
   const files = Array.isArray(args.files)
     ? args.files
@@ -224,6 +378,166 @@ function parseReadFilesToolCall(toolCall: ProviderToolCall): ReadFilesToolCallFi
   });
 
   return parsed.length ? parsed : undefined;
+}
+
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return [value.trim()];
+  }
+  return [];
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return Number.isInteger(value) ? Number(value) : undefined;
+}
+
+function parseToolCall(toolCall: ProviderToolCall): WarpToolCall | undefined {
+  const args = JSON.parse(toolCall.argumentsText || "{}") as Record<string, unknown>;
+
+  switch (toolCall.name) {
+    case "read_files": {
+      const files = parseReadFilesToolCall(toolCall);
+      return files ? { toolCallId: toolCall.id, tool: { type: "read_files", files } } : undefined;
+    }
+    case "run_shell_command": {
+      const command = args.command;
+      if (typeof command !== "string" || !command.trim()) {
+        return undefined;
+      }
+      return {
+        toolCallId: toolCall.id,
+        tool: {
+          type: "run_shell_command",
+          command,
+          isReadOnly: typeof args.is_read_only === "boolean" ? args.is_read_only : undefined,
+          isRisky: typeof args.is_risky === "boolean"
+            ? args.is_risky
+            : typeof args.is_read_only === "boolean"
+              ? !args.is_read_only
+              : true,
+          usesPager: typeof args.uses_pager === "boolean" ? args.uses_pager : undefined,
+          waitUntilComplete: typeof args.wait_until_complete === "boolean" ? args.wait_until_complete : undefined,
+        },
+      };
+    }
+    case "grep": {
+      const queries = stringList(args.queries).concat(stringList(args.query));
+      if (!queries.length) {
+        return undefined;
+      }
+      return {
+        toolCallId: toolCall.id,
+        tool: {
+          type: "grep",
+          queries,
+          path: typeof args.path === "string" && args.path.trim() ? args.path.trim() : undefined,
+        },
+      };
+    }
+    case "file_glob": {
+      const patterns = stringList(args.patterns).concat(stringList(args.pattern));
+      if (!patterns.length) {
+        return undefined;
+      }
+      return {
+        toolCallId: toolCall.id,
+        tool: {
+          type: "file_glob",
+          patterns,
+          searchDir: typeof args.search_dir === "string" && args.search_dir.trim() ? args.search_dir.trim() : undefined,
+          maxMatches: optionalNumber(args.max_matches),
+          maxDepth: optionalNumber(args.max_depth),
+          minDepth: optionalNumber(args.min_depth),
+        },
+      };
+    }
+    case "apply_file_diffs": {
+      return {
+        toolCallId: toolCall.id,
+        tool: {
+          type: "apply_file_diffs",
+          summary: typeof args.summary === "string" ? args.summary : "Apply file edits",
+          diffs: Array.isArray(args.diffs)
+            ? args.diffs.flatMap((diff): Array<{ filePath: string; search?: string; replace?: string }> => {
+                if (!diff || typeof diff !== "object") {
+                  return [];
+                }
+                const filePath = (diff as { file_path?: unknown; filePath?: unknown }).file_path
+                  ?? (diff as { filePath?: unknown }).filePath;
+                if (typeof filePath !== "string" || !filePath.trim()) {
+                  return [];
+                }
+                return [{
+                  filePath,
+                  search: typeof (diff as { search?: unknown }).search === "string"
+                    ? (diff as { search: string }).search
+                    : undefined,
+                  replace: typeof (diff as { replace?: unknown }).replace === "string"
+                    ? (diff as { replace: string }).replace
+                    : undefined,
+                }];
+              })
+            : undefined,
+          newFiles: Array.isArray(args.new_files)
+            ? args.new_files.flatMap((file): Array<{ filePath: string; content: string }> => {
+                if (!file || typeof file !== "object") {
+                  return [];
+                }
+                const filePath = (file as { file_path?: unknown; filePath?: unknown }).file_path
+                  ?? (file as { filePath?: unknown }).filePath;
+                const content = (file as { content?: unknown }).content;
+                return typeof filePath === "string" && typeof content === "string"
+                  ? [{ filePath, content }]
+                  : [];
+              })
+            : undefined,
+          deletedFiles: Array.isArray(args.deleted_files)
+            ? args.deleted_files.flatMap((file): Array<{ filePath: string }> => {
+                if (!file || typeof file !== "object") {
+                  return [];
+                }
+                const filePath = (file as { file_path?: unknown; filePath?: unknown }).file_path
+                  ?? (file as { filePath?: unknown }).filePath;
+                return typeof filePath === "string" ? [{ filePath }] : [];
+              })
+            : undefined,
+        },
+      };
+    }
+    case "suggest_plan": {
+      const tasks = Array.isArray(args.tasks)
+        ? args.tasks.flatMap((task): Array<{ description: string }> => {
+            if (typeof task === "string") {
+              return task.trim() ? [{ description: task.trim() }] : [];
+            }
+            if (!task || typeof task !== "object") {
+              return [];
+            }
+            const description = (task as { description?: unknown; title?: unknown }).description
+              ?? (task as { title?: unknown }).title;
+            return typeof description === "string" && description.trim()
+              ? [{ description: description.trim() }]
+              : [];
+          })
+        : [];
+      if (!tasks.length) {
+        return undefined;
+      }
+      return {
+        toolCallId: toolCall.id,
+        tool: {
+          type: "suggest_plan",
+          summary: typeof args.summary === "string" ? args.summary : "Plan",
+          tasks,
+        },
+      };
+    }
+    default:
+      return undefined;
+  }
 }
 
 function promptForProvider(warpRequest: ReturnType<typeof decodeWarpRequest>): string {
@@ -284,7 +598,7 @@ async function streamChatCompletion(params: {
     messages,
     temperature: 0.2,
     stream: true,
-    ...(shouldEnableTools() ? { tools: [readFilesToolSchema()], tool_choice: "auto" } : {}),
+    ...(shouldEnableTools() ? { tools: localToolSchemas(), tool_choice: "auto" } : {}),
   };
 
   const completionResponse = await fetch(`${baseUrl}/chat/completions`, {
@@ -439,19 +753,18 @@ async function handleMultiAgent(
       }
 
       for (const toolCall of providerResponse.toolCalls) {
-        const files = parseReadFilesToolCall(toolCall);
-        if (!files) {
+        const parsedToolCall = parseToolCall(toolCall);
+        if (!parsedToolCall) {
           throw new Error(`Unsupported provider tool call: ${toolCall.name}`);
         }
 
         sendEvent(
-          "add_read_files_tool_call",
-          encodeAddReadFilesToolCall({
+          `add_${parsedToolCall.tool.type}_tool_call`,
+          encodeAddToolCall({
             messageId: randomUUID(),
             taskId: warpRequest.rootTaskId,
             requestId: warpRequest.requestId,
-            toolCallId: toolCall.id,
-            files,
+            ...parsedToolCall,
           }),
         );
       }
