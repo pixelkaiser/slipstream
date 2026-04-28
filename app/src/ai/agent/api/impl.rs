@@ -140,6 +140,7 @@ pub async fn generate_multi_agent_output(
         server_api.as_ref(),
         &request,
         params.local_multi_agent_server_root_url.as_deref(),
+        params.openai_base_url.as_deref(),
     )
     .await;
     match response_stream {

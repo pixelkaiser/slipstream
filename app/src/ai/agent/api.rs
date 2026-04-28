@@ -121,6 +121,7 @@ pub struct RequestParams {
     /// `custom_model_providers`: the selected model's `config_key` indexes into this
     /// registry. `None` when no custom router is selected.
     pub custom_model_routers: Option<warp_multi_agent_api::request::settings::CustomModelRouters>,
+    pub openai_base_url: Option<String>,
     pub local_multi_agent_server_root_url: Option<String>,
     pub allow_use_of_warp_credits: bool,
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
@@ -306,6 +307,7 @@ impl RequestParams {
             .keys()
             .local_multi_agent_server_root_url
             .clone();
+        let openai_base_url = ApiKeyManager::as_ref(app).keys().openai_base_url.clone();
         let allow_use_of_warp_credits = *AISettings::as_ref(app).can_use_warp_credits_for_fallback;
 
         let app_execution_mode = AppExecutionMode::as_ref(app);
@@ -383,6 +385,7 @@ impl RequestParams {
             api_keys,
             custom_model_providers,
             custom_model_routers,
+            openai_base_url,
             local_multi_agent_server_root_url,
             allow_use_of_warp_credits,
             autonomy_level,
