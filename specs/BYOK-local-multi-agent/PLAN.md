@@ -187,7 +187,7 @@ For each `/ai/multi-agent` request:
 
 1. Decode protobuf request.
 2. Resolve or generate `conversation_id`.
-3. Generate `request_id` and `run_id`.
+3. Generate `request_id`.
 4. Emit `ResponseEvent.StreamInit`.
 5. Find or create a task.
 6. Add the user message if needed.
@@ -330,3 +330,4 @@ End-to-end:
 - Fixed new-conversation task creation by emitting `CreateTask` before `AddMessagesToTask` when the inbound request has no server task in `task_context`; this addresses `Conversation(TaskNotFound)` from targeting a synthetic fallback task ID.
 - Smoke-tested the taskless request path; the service now emits four SSE events for a new conversation: `StreamInit`, `CreateTask`, `AddMessagesToTask`, and `StreamFinished.Done`.
 - Added JSON-line logging for local service startup, HTTP request routing, Warp request metadata, provider request metadata, errors, completion summaries, and debug-level SSE event emission. Sensitive key/token/auth fields are redacted.
+- Stopped sending a synthetic `run_id` in local `StreamInit` events so Warp does not try to sync a non-hosted task with the hosted GraphQL task API.
