@@ -589,6 +589,21 @@ function formatToolResultForProvider(result: ReturnType<typeof decodeWarpRequest
   }
 }
 
+function formatUserMessageForProvider(warpRequest: ReturnType<typeof decodeWarpRequest>): string {
+  const prompt = warpRequest.prompt || "Please use the attached context.";
+  if (!warpRequest.contextText) {
+    return prompt;
+  }
+
+  return [
+    "Attached context:",
+    warpRequest.contextText,
+    "",
+    "User request:",
+    prompt,
+  ].join("\n");
+}
+
 function stateForConversation(conversationId: string): { messages: ProviderChatMessage[] } {
   const existing = conversationState.get(conversationId);
   if (existing) {
@@ -611,10 +626,10 @@ function pendingProviderMessages(warpRequest: ReturnType<typeof decodeWarpReques
         content: formatToolResultForProvider(result),
       });
     }
-  } else if (warpRequest.prompt) {
+  } else if (warpRequest.prompt || warpRequest.contextText) {
     pendingMessages.push({
       role: "user",
-      content: warpRequest.prompt,
+      content: formatUserMessageForProvider(warpRequest),
     });
   }
 
@@ -782,6 +797,7 @@ async function handleMultiAgent(
     taskId: warpRequest.rootTaskId,
     shouldCreateRootTask: warpRequest.shouldCreateRootTask,
     promptChars: warpRequest.prompt.length,
+    contextChars: warpRequest.contextText?.length ?? 0,
     warpModel: warpRequest.model ?? null,
     hasRequestApiKey: warpRequest.openAiApiKey != null,
     hasOpenAiBaseUrlHeader: requestOpenAiBaseUrl != null,
