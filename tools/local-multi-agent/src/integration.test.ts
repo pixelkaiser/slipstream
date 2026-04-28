@@ -14,9 +14,35 @@ function stringField(fieldNumber: number, value: string): Uint8Array {
   return lengthDelimitedField(fieldNumber, Buffer.from(value));
 }
 
-function warpPromptRequest(prompt: string): Uint8Array {
+function metadata(conversationId?: string): Uint8Array {
+  return conversationId ? lengthDelimitedField(4, stringField(1, conversationId)) : new Uint8Array();
+}
+
+function warpPromptRequest(prompt: string, conversationId?: string): Uint8Array {
   const deprecatedUserQuery = lengthDelimitedField(2, stringField(1, prompt));
-  return lengthDelimitedField(2, deprecatedUserQuery);
+  return Buffer.concat([lengthDelimitedField(2, deprecatedUserQuery), metadata(conversationId)]);
+}
+
+function warpReadFilesResultRequest(params: {
+  conversationId: string;
+  toolCallId: string;
+  filePath: string;
+  content: string;
+}): Uint8Array {
+  const fileContent = Buffer.concat([
+    stringField(1, params.filePath),
+    stringField(2, params.content),
+  ]);
+  const textFilesSuccess = lengthDelimitedField(1, fileContent);
+  const readFilesResult = lengthDelimitedField(1, textFilesSuccess);
+  const toolCallResult = Buffer.concat([
+    stringField(1, params.toolCallId),
+    lengthDelimitedField(3, readFilesResult),
+  ]);
+  const userInput = lengthDelimitedField(2, toolCallResult);
+  const userInputs = lengthDelimitedField(1, userInput);
+  const input = lengthDelimitedField(6, userInputs);
+  return Buffer.concat([lengthDelimitedField(2, input), metadata(params.conversationId)]);
 }
 
 async function readBody(request: http.IncomingMessage): Promise<string> {
@@ -127,14 +153,118 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
     const events = streamText.split("\n\n").filter(Boolean);
 
     assert.equal(providerPath, "/v1/chat/completions");
-    assert.deepEqual(providerBody, {
-      model: "mock-model",
-      messages: [{ role: "user", content: "hello provider" }],
-      temperature: 0.2,
-      stream: true,
-    });
+    assert.equal((providerBody as { model?: unknown }).model, "mock-model");
+    assert.deepEqual((providerBody as { messages?: unknown }).messages, [{ role: "user", content: "hello provider" }]);
+    assert.equal((providerBody as { stream?: unknown }).stream, true);
+    assert.equal((providerBody as { tool_choice?: unknown }).tool_choice, "auto");
+    assert.equal(Array.isArray((providerBody as { tools?: unknown }).tools), true);
     assert.equal(events.length, 4);
     assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
+  } catch (error) {
+    const diagnostics = [
+      `stdout:\n${stdout.join("")}`,
+      `stderr:\n${stderr.join("")}`,
+    ].join("\n");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${diagnostics}`);
+  } finally {
+    stopChild(child);
+    await closeServer(provider);
+  }
+});
+
+test("translates an OpenAI read_files tool call into Warp SSE events", { timeout: 10_000 }, async () => {
+  const providerBodies: unknown[] = [];
+  const provider = http.createServer(async (request, response) => {
+    const providerBody = JSON.parse(await readBody(request));
+    providerBodies.push(providerBody);
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+    });
+    if (providerBodies.length === 1) {
+      response.write(`data: ${JSON.stringify({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call-read-files",
+                  type: "function",
+                  function: {
+                    name: "read_files",
+                    arguments: JSON.stringify({ files: [{ name: "src/main.ts" }] }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      })}\n\n`);
+    } else {
+      response.write('data: {"choices":[{"delta":{"content":"used file contents"}}]}\n\n');
+    }
+    response.write("data: [DONE]\n\n");
+    response.end();
+  });
+  const providerPort = await listenOnLoopback(provider);
+
+  const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
+  const servicePort = await listenOnLoopback(serviceProbe);
+  await closeServer(serviceProbe);
+
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const child = spawn(process.execPath, ["dist/server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(servicePort),
+      OPENAI_API_KEY: "sk-local-test",
+      OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
+      OPENAI_MODEL: "mock-model",
+      LOG_LEVEL: "error",
+    },
+  });
+  child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
+  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+
+  try {
+    await waitForHealth(servicePort, child);
+    const response = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpPromptRequest("read src/main.ts", "conversation-tools")),
+    });
+
+    assert.equal(response.status, 200);
+    const streamText = await response.text();
+    const events = streamText.split("\n\n").filter(Boolean);
+
+    assert.equal((providerBodies[0] as { tool_choice?: unknown }).tool_choice, "auto");
+    assert.equal(Array.isArray((providerBodies[0] as { tools?: unknown }).tools), true);
+    assert.equal(events.length, 4);
+    assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
+
+    const followUpResponse = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpReadFilesResultRequest({
+        conversationId: "conversation-tools",
+        toolCallId: "call-read-files",
+        filePath: "src/main.ts",
+        content: "console.log('tool result');",
+      })),
+    });
+    assert.equal(followUpResponse.status, 200);
+    const followUpEvents = (await followUpResponse.text()).split("\n\n").filter(Boolean);
+    assert.equal(followUpEvents.length, 4);
+    const followUpMessages = (providerBodies[1] as { messages?: Array<{ content?: string }> }).messages ?? [];
+    assert.match(followUpMessages[0]?.content ?? "", /Original user request:\nread src\/main\.ts/);
+    assert.match(followUpMessages[0]?.content ?? "", /console\.log\('tool result'\)/);
   } catch (error) {
     const diagnostics = [
       `stdout:\n${stdout.join("")}`,
