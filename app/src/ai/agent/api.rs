@@ -117,6 +117,7 @@ pub struct RequestParams {
 
     /// User-provided API keys for AI providers (BYO API Key).
     pub api_keys: Option<warp_multi_agent_api::request::settings::ApiKeys>,
+    pub local_multi_agent_server_root_url: Option<String>,
     pub allow_use_of_warp_credits_with_byok: bool,
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
     pub isolation_level: warp_multi_agent_api::IsolationLevel,
@@ -239,6 +240,10 @@ impl RequestParams {
             user_workspaces.is_byo_api_key_enabled(),
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
         );
+        let local_multi_agent_server_root_url = ApiKeyManager::as_ref(app)
+            .keys()
+            .local_multi_agent_server_root_url
+            .clone();
         let allow_use_of_warp_credits_with_byok =
             *AISettings::as_ref(app).can_use_warp_credits_with_byok;
 
@@ -321,6 +326,7 @@ impl RequestParams {
             planning_enabled: true,
             should_redact_secrets,
             api_keys,
+            local_multi_agent_server_root_url,
             allow_use_of_warp_credits_with_byok,
             autonomy_level,
             isolation_level,
