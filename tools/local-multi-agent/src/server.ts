@@ -3,6 +3,7 @@ import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   encodeAddAgentOutput,
+  encodeCreateTask,
   decodeWarpRequest,
   encodeBase64Url,
   encodeStreamFinishedDone,
@@ -177,6 +178,16 @@ async function handleMultiAgent(
 
   try {
     if (!passiveSuggestions) {
+      if (warpRequest.shouldCreateRootTask) {
+        writeSse(
+          response,
+          encodeCreateTask({
+            taskId: warpRequest.rootTaskId,
+            description: warpRequest.prompt,
+          }),
+        );
+      }
+
       const messageId = randomUUID();
       const output = await collectAssistantOutput(
         streamChatCompletion({

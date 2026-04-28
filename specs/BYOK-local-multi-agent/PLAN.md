@@ -326,3 +326,5 @@ End-to-end:
 - Temporarily changed the local service to buffer provider stream chunks and emit one final `AddMessagesToTask` event. Per-chunk `AppendToMessageContent` caused `Conversation(ExchangeNotFound)` in the Warp UI because the local service was not yet matching Warp's exchange sequencing contract.
 - Added unit tests for model alias mapping and buffered provider stream collection.
 - Smoke-tested the buffered response path; the local service now emits exactly three SSE events for a successful request: `StreamInit`, one `AddMessagesToTask`, and `StreamFinished.Done`.
+- Fixed new-conversation task creation by emitting `CreateTask` before `AddMessagesToTask` when the inbound request has no server task in `task_context`; this addresses `Conversation(TaskNotFound)` from targeting a synthetic fallback task ID.
+- Smoke-tested the taskless request path; the service now emits four SSE events for a new conversation: `StreamInit`, `CreateTask`, `AddMessagesToTask`, and `StreamFinished.Done`.
