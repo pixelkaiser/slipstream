@@ -8,6 +8,8 @@ use warp_core::channel::ChannelState;
 use warp_server_client::base_client::EVAL_USER_ID_HEADER;
 use warp_server_client::base_client::{AmbientHeaderPolicy, BaseClient};
 
+const OPENAI_BASE_URL_HEADER: &str = "X-Warp-OpenAI-Base-URL";
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Failed to authenticate multi-agent request")]
@@ -47,7 +49,7 @@ pub async fn generate_multi_agent_output(
     client: &BaseClient,
     request: &warp_multi_agent_api::Request,
 ) -> Result<OutputStream, Error> {
-    generate_multi_agent_output_with_server_root_url(client, request, None).await
+    generate_multi_agent_output_with_server_root_url(client, request, None, None).await
 }
 
 /// Opens a decoded multi-agent response event stream, optionally routing through an alternate
@@ -56,6 +58,7 @@ pub async fn generate_multi_agent_output_with_server_root_url(
     client: &BaseClient,
     request: &warp_multi_agent_api::Request,
     server_root_url_override: Option<&str>,
+    openai_base_url: Option<&str>,
 ) -> Result<OutputStream, Error> {
     let auth_token = client
         .get_or_refresh_access_token()
@@ -79,6 +82,12 @@ pub async fn generate_multi_agent_output_with_server_root_url(
         .map_err(Error::AmbientHeaders)?
     {
         request_builder = request_builder.header(name, value);
+    }
+
+    if server_root_url_override.is_some() {
+        if let Some(openai_base_url) = openai_base_url {
+            request_builder = request_builder.header(OPENAI_BASE_URL_HEADER, openai_base_url);
+        }
     }
 
     #[cfg(feature = "agent_mode_evals")]

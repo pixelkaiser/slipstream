@@ -14,9 +14,15 @@ import {
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const defaultBaseUrl = "https://api.openai.com/v1";
 const maxRequestBytes = 25 * 1024 * 1024;
+const openAiBaseUrlHeader = "x-warp-openai-base-url";
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 function sendJson(response: http.ServerResponse, status: number, payload: unknown): void {
@@ -71,6 +77,7 @@ function extractStreamingContent(payload: unknown): string {
 async function* streamChatCompletion(params: {
   prompt: string;
   apiKey?: string;
+  baseUrl?: string;
   model?: string;
 }): AsyncGenerator<string> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
@@ -78,7 +85,7 @@ async function* streamChatCompletion(params: {
     throw new Error("OPENAI_API_KEY is not set and the Warp request did not include an OpenAI key.");
   }
 
-  const baseUrl = trimTrailingSlash(process.env.OPENAI_BASE_URL ?? defaultBaseUrl);
+  const baseUrl = trimTrailingSlash(nonEmpty(params.baseUrl) ?? nonEmpty(process.env.OPENAI_BASE_URL) ?? defaultBaseUrl);
   const model = process.env.OPENAI_MODEL ?? params.model;
   if (!model) {
     throw new Error("OPENAI_MODEL is not set and the Warp request did not include a base model.");
@@ -154,6 +161,8 @@ async function handleMultiAgent(
 ): Promise<void> {
   const body = await readBody(request);
   const warpRequest = decodeWarpRequest(body);
+  const openAiBaseUrl = request.headers[openAiBaseUrlHeader];
+  const requestOpenAiBaseUrl = Array.isArray(openAiBaseUrl) ? openAiBaseUrl[0] : openAiBaseUrl;
 
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -181,6 +190,7 @@ async function handleMultiAgent(
       for await (const chunk of streamChatCompletion({
         prompt: warpRequest.prompt,
         apiKey: warpRequest.openAiApiKey,
+        baseUrl: requestOpenAiBaseUrl,
         model: warpRequest.model,
       })) {
         writeSse(
