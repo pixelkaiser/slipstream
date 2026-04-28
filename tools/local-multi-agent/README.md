@@ -1,6 +1,6 @@
 # Local Multi-Agent API
 
-This is a local development implementation of Warp's `/ai/multi-agent` protocol. It accepts Warp's protobuf request body, calls an OpenAI-compatible `/chat/completions` endpoint, and streams protobuf response events back over server-sent events.
+This is a local development implementation of Warp's `/ai/multi-agent` protocol. It accepts Warp's protobuf request body, calls an OpenAI-compatible `/chat/completions` endpoint, and streams protobuf response events back over server-sent events. Assistant text is forwarded incrementally: the first provider content chunk creates the Warp assistant message and later chunks append to that same message.
 
 It is intentionally a thin single-agent adapter. It can translate OpenAI-compatible function calls for Warp client-executed tools, but durable orchestration and rich passive suggestions remain follow-up work in `specs/BYOK-local-multi-agent/PLAN.md`.
 
