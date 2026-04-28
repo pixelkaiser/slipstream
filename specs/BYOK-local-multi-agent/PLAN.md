@@ -167,6 +167,8 @@ warp-build-oss:
 - [x] Emit minimal task/message client actions.
 - [x] Emit `ReadFiles` tool-call messages from OpenAI-compatible tool calls.
 - [x] Decode `ReadFilesResult` inputs from Warp for follow-up requests.
+- [x] Emit `FileGlob`, `Grep`, `RunShellCommand`, `ApplyFileDiffs`, and `SuggestPlan` tool-call messages from OpenAI-compatible tool calls.
+- [x] Decode `FileGlob`, `Grep`, `RunShellCommand`, `ApplyFileDiffs`, and `SuggestPlan` results from Warp for follow-up requests.
 - [ ] Stream assistant output through message append actions.
 - [x] Emit `StreamFinished.Done` as the final successful event.
 - [x] Map generic provider failures to Warp `InternalError` finish reason.
@@ -215,11 +217,11 @@ Return `StreamFinished.InternalError` for unsupported variants until implemented
 Add tools incrementally in this order:
 
 1. [x] `ReadFiles`
-2. `FileGlob`
-3. `Grep`
-4. `RunShellCommand`
-5. `ApplyFileDiffs`
-6. `SuggestPlan`
+2. [x] `FileGlob`
+3. [x] `Grep`
+4. [x] `RunShellCommand`
+5. [x] `ApplyFileDiffs`
+6. [x] `SuggestPlan`
 
 For each tool:
 
@@ -251,6 +253,7 @@ Local service:
 - [x] Unit test prompt extraction.
 - [x] Integration test with a mock OpenAI-compatible server.
 - [x] Integration test translating an OpenAI-compatible `read_files` tool call to Warp SSE events.
+- [x] Integration test translating every supported OpenAI-compatible tool call to Warp SSE events.
 - [x] Manual smoke test for `/health`.
 
 Warp client:
@@ -329,3 +332,4 @@ End-to-end:
 - Added storage-layer validation for BYOK OpenAI Base URL and Local Multi-Agent Server URL settings; only absolute `http`/`https` URLs with a host are persisted, and trailing slashes are normalized.
 - Removed raw global server-root override scope from this plan; local BYOK remains targeted to the multi-agent endpoints.
 - Added the first local tool-call path for `ReadFiles`: the service advertises an OpenAI-compatible `read_files` tool, accumulates streamed provider tool-call deltas, emits Warp `Message.ToolCall` events, decodes `ReadFilesResult` inputs on follow-up requests, keeps a minimal in-memory prompt cache so tool-result turns include the original user request, and has unit/integration coverage for the protobuf and SSE paths.
+- Added the remaining planned local tool-call paths: `FileGlob`, `Grep`, `RunShellCommand`, `ApplyFileDiffs`, and `SuggestPlan`. The service now advertises all supported tool schemas, converts streamed OpenAI-compatible tool calls into Warp `Message.ToolCall` events, decodes their Warp `ToolCallResult` follow-up inputs, and includes unit/integration coverage for the expanded set.
