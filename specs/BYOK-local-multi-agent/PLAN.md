@@ -172,7 +172,7 @@ warp-build-oss:
 - [ ] Stream assistant output through message append actions.
 - [x] Emit `StreamFinished.Done` as the final successful event.
 - [x] Map generic provider failures to Warp `InternalError` finish reason.
-- [ ] Add in-memory conversation/task state keyed by conversation ID.
+- [x] Add in-memory conversation transcript state keyed by conversation ID.
 - [ ] Add optional JSON persistence for local state.
 - [x] Document local run workflow.
 
@@ -252,6 +252,7 @@ Local service:
 - [x] Unit test SSE event formatting.
 - [x] Unit test prompt extraction.
 - [x] Integration test with a mock OpenAI-compatible server.
+- [x] Integration test preserving OpenAI-compatible conversation history across turns.
 - [x] Integration test translating an OpenAI-compatible `read_files` tool call to Warp SSE events.
 - [x] Integration test translating every supported OpenAI-compatible tool call to Warp SSE events.
 - [x] Manual smoke test for `/health`.
@@ -333,3 +334,10 @@ End-to-end:
 - Removed raw global server-root override scope from this plan; local BYOK remains targeted to the multi-agent endpoints.
 - Added the first local tool-call path for `ReadFiles`: the service advertises an OpenAI-compatible `read_files` tool, accumulates streamed provider tool-call deltas, emits Warp `Message.ToolCall` events, decodes `ReadFilesResult` inputs on follow-up requests, keeps a minimal in-memory prompt cache so tool-result turns include the original user request, and has unit/integration coverage for the protobuf and SSE paths.
 - Added the remaining planned local tool-call paths: `FileGlob`, `Grep`, `RunShellCommand`, `ApplyFileDiffs`, and `SuggestPlan`. The service now advertises all supported tool schemas, converts streamed OpenAI-compatible tool calls into Warp `Message.ToolCall` events, decodes their Warp `ToolCallResult` follow-up inputs, and includes unit/integration coverage for the expanded set.
+
+### 2026-04-29
+
+- Replaced the minimal local prompt cache with in-memory OpenAI-compatible conversation transcripts keyed by Warp conversation ID. Follow-up turns now include prior user messages, assistant responses, assistant tool calls, and Warp tool results as provider chat messages.
+- Added integration coverage for multi-turn provider history and updated the read-files tool follow-up test to assert the provider receives a real assistant-tool-result transcript instead of a flattened prompt.
+- Noted that the local transcript state is process-local; restarting the service clears history unless optional persistence is added later.
+- The Warp log warning `No metadata returned for conversation` is a separate hosted metadata lookup and not the source of local provider context loss.
