@@ -24,6 +24,8 @@ Set these environment variables before starting the service:
 
 Supported tool-call names are `read_files`, `file_glob`, `grep`, `run_shell_command`, `apply_file_diffs`, and `suggest_plan`. Warp executes the tool call locally and sends the result back to this service on the next request.
 
+The service keeps OpenAI-compatible chat history in memory per Warp conversation ID, including assistant tool calls and tool results. Restarting the service clears this local history.
+
 The service logs JSON lines for startup, HTTP requests, Warp multi-agent requests, provider requests, errors, and completion summaries. API keys and authorization-like fields are redacted.
 
 Point Warp's BYOK `Local Multi-Agent Server URL` field at:

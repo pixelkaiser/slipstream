@@ -20,7 +20,7 @@ const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const defaultBaseUrl = "https://api.openai.com/v1";
 const maxRequestBytes = 25 * 1024 * 1024;
 const openAiBaseUrlHeader = "x-warp-openai-base-url";
-const conversationState = new Map<string, { lastUserPrompt?: string }>();
+const conversationState = new Map<string, { messages: ProviderChatMessage[] }>();
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
@@ -64,10 +64,35 @@ type ProviderToolCall = {
   argumentsText: string;
 };
 
+type ProviderChatMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content?: string;
+  tool_call_id?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }>;
+};
+
 type ProviderResponse = {
   content: string;
   toolCalls: ProviderToolCall[];
 };
+
+function providerToolCallMessage(toolCall: ProviderToolCall): NonNullable<ProviderChatMessage["tool_calls"]>[number] {
+  return {
+    id: toolCall.id,
+    type: "function",
+    function: {
+      name: toolCall.name,
+      arguments: toolCall.argumentsText,
+    },
+  };
+}
 
 function readFilesToolSchema(): object {
   return {
@@ -540,29 +565,93 @@ function parseToolCall(toolCall: ProviderToolCall): WarpToolCall | undefined {
   }
 }
 
-function promptForProvider(warpRequest: ReturnType<typeof decodeWarpRequest>): string {
-  const state = conversationState.get(warpRequest.conversationId) ?? {};
-  if (warpRequest.toolResults.length > 0 && state.lastUserPrompt) {
-    return [
-      "Original user request:",
-      state.lastUserPrompt,
-      "",
-      warpRequest.prompt,
-    ].join("\n");
+function formatToolResultForProvider(result: ReturnType<typeof decodeWarpRequest>["toolResults"][number]): string {
+  if ("error" in result && result.error) {
+    return `Error: ${result.error}`;
   }
 
-  if (warpRequest.prompt && warpRequest.toolResults.length === 0) {
-    conversationState.set(warpRequest.conversationId, {
-      ...state,
-      lastUserPrompt: warpRequest.prompt,
+  switch (result.type) {
+    case "read_files":
+      return result.files.map((file) => `File: ${file.filePath}\n${file.content}`).join("\n\n");
+    case "run_shell_command":
+      return `Command: ${result.command ?? ""}\nExit code: ${result.exitCode ?? ""}\nOutput:\n${result.output ?? ""}`;
+    case "grep":
+      return result.matchedFiles.map((file) => {
+        const lines = file.lineNumbers.length ? ` lines ${file.lineNumbers.join(", ")}` : "";
+        return `${file.filePath}${lines}`;
+      }).join("\n");
+    case "file_glob":
+      return `${result.matchedFiles.join("\n")}${result.warnings ? `\nWarnings:\n${result.warnings}` : ""}`;
+    case "apply_file_diffs":
+      return `Updated files:\n${result.updatedFiles.join("\n")}\nDeleted files:\n${result.deletedFiles.join("\n")}`;
+    case "suggest_plan":
+      return `Status: ${result.status}${result.planText ? `\nPlan:\n${result.planText}` : ""}`;
+  }
+}
+
+function stateForConversation(conversationId: string): { messages: ProviderChatMessage[] } {
+  const existing = conversationState.get(conversationId);
+  if (existing) {
+    return existing;
+  }
+
+  const created = { messages: [] };
+  conversationState.set(conversationId, created);
+  return created;
+}
+
+function pendingProviderMessages(warpRequest: ReturnType<typeof decodeWarpRequest>): ProviderChatMessage[] {
+  const pendingMessages: ProviderChatMessage[] = [];
+
+  if (warpRequest.toolResults.length > 0) {
+    for (const result of warpRequest.toolResults) {
+      pendingMessages.push({
+        role: "tool",
+        tool_call_id: result.toolCallId,
+        content: formatToolResultForProvider(result),
+      });
+    }
+  } else if (warpRequest.prompt) {
+    pendingMessages.push({
+      role: "user",
+      content: warpRequest.prompt,
     });
   }
 
-  return warpRequest.prompt;
+  return pendingMessages;
+}
+
+function prepareProviderMessages(warpRequest: ReturnType<typeof decodeWarpRequest>): {
+  messages: ProviderChatMessage[];
+  pendingMessages: ProviderChatMessage[];
+} {
+  const state = stateForConversation(warpRequest.conversationId);
+  const pendingMessages = pendingProviderMessages(warpRequest);
+
+  return {
+    messages: state.messages.concat(pendingMessages),
+    pendingMessages,
+  };
+}
+
+function rememberProviderResponse(
+  conversationId: string,
+  pendingMessages: ProviderChatMessage[],
+  providerResponse: ProviderResponse,
+): void {
+  const state = stateForConversation(conversationId);
+  state.messages.push(...pendingMessages);
+  state.messages.push({
+    role: "assistant",
+    content: providerResponse.content,
+    ...(providerResponse.toolCalls.length
+      ? { tool_calls: providerResponse.toolCalls.map(providerToolCallMessage) }
+      : {}),
+  });
 }
 
 async function streamChatCompletion(params: {
-  prompt: string;
+  messages: ProviderChatMessage[];
   apiKey?: string;
   baseUrl?: string;
   model?: string;
@@ -582,7 +671,8 @@ async function streamChatCompletion(params: {
     baseUrl,
     model,
     warpModel: params.model ?? null,
-    promptChars: params.prompt.length,
+    messageCount: params.messages.length,
+    promptChars: params.messages.reduce((sum, message) => sum + (message.content?.length ?? 0), 0),
     baseUrlSource: nonEmpty(params.baseUrl) ? "request_header" : nonEmpty(process.env.OPENAI_BASE_URL) ? "env" : "default",
   });
 
@@ -590,7 +680,7 @@ async function streamChatCompletion(params: {
     process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT
       ? { role: "system", content: process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT }
       : undefined,
-    { role: "user", content: params.prompt || "Continue." },
+    ...params.messages,
   ].filter((message) => message != null);
 
   const requestBody = {
@@ -728,9 +818,11 @@ async function handleMultiAgent(
         );
       }
 
-      const providerPrompt = promptForProvider(warpRequest);
+      const providerMessages = prepareProviderMessages(warpRequest);
       const providerResponse = await streamChatCompletion({
-        prompt: providerPrompt,
+        messages: providerMessages.messages.length
+          ? providerMessages.messages
+          : [{ role: "user", content: "Continue." }],
         apiKey: warpRequest.openAiApiKey,
         baseUrl: requestOpenAiBaseUrl,
         model: warpRequest.model,
@@ -739,6 +831,8 @@ async function handleMultiAgent(
       if (!providerResponse.content && !providerResponse.toolCalls.length) {
         throw new Error("OpenAI-compatible endpoint returned no assistant content or tool calls.");
       }
+
+      rememberProviderResponse(warpRequest.conversationId, providerMessages.pendingMessages, providerResponse);
 
       if (providerResponse.content) {
         sendEvent(
