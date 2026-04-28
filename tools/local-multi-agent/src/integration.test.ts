@@ -167,7 +167,7 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
     assert.equal(Array.isArray((providerBody as { tools?: unknown }).tools), true);
     assert.deepEqual(
       ((providerBody as { tools?: Array<{ function?: { name?: string } }> }).tools ?? []).map((tool) => tool.function?.name),
-      ["read_files", "file_glob", "grep", "run_shell_command", "apply_file_diffs", "suggest_plan"],
+      ["read_files", "file_glob", "grep", "search_codebase", "run_shell_command", "apply_file_diffs", "suggest_plan"],
     );
     assert.equal(events.length, 4);
     assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
@@ -465,6 +465,13 @@ test("translates all supported OpenAI tool calls into Warp SSE events", { timeou
       },
     },
     {
+      id: "call-search",
+      function: {
+        name: "search_codebase",
+        arguments: JSON.stringify({ query: "auth flow", path_filters: ["src"] }),
+      },
+    },
+    {
       id: "call-shell",
       function: {
         name: "run_shell_command",
@@ -544,7 +551,7 @@ test("translates all supported OpenAI tool calls into Warp SSE events", { timeou
 
     assert.equal(response.status, 200);
     const events = (await response.text()).split("\n\n").filter(Boolean);
-    assert.equal(events.length, 8);
+    assert.equal(events.length, 9);
     assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
   } catch (error) {
     const diagnostics = [

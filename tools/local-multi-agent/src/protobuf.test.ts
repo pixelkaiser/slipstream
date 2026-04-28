@@ -10,6 +10,10 @@ import {
   encodeAgentOutput,
   encodeBase64Url,
   encodeStreamFinishedDone,
+  encodeStreamFinishedContextWindowExceeded,
+  encodeStreamFinishedInvalidApiKey,
+  encodeStreamFinishedLlmUnavailable,
+  encodeStreamFinishedQuotaLimit,
   encodeStreamInit,
 } from "./protobuf.js";
 
@@ -29,8 +33,7 @@ function encodeVarint(value: number): Uint8Array {
 }
 
 function lengthDelimitedField(fieldNumber: number, value: Uint8Array): Uint8Array {
-  assert.ok(value.length < 128, "test helper only supports one-byte lengths");
-  return Uint8Array.from([...encodeVarint((fieldNumber << 3) | 2), value.length, ...value]);
+  return Uint8Array.from([...encodeVarint((fieldNumber << 3) | 2), ...encodeVarint(value.length), ...value]);
 }
 
 function stringField(fieldNumber: number, value: string): Uint8Array {
@@ -84,7 +87,6 @@ test("decodes the fields needed from a Warp request", () => {
       rootTaskId: "root",
       shouldCreateRootTask: false,
       prompt: "hello warp",
-      contextText: undefined,
       toolResults: [],
       openAiApiKey: "sk-testing",
       model: undefined,
@@ -114,12 +116,65 @@ test("extracts supported prompt input variants", () => {
       input: lengthDelimitedField(13, stringField(1, "summarize prompt")),
       expected: "summarize prompt",
     },
+    {
+      name: "cli agent user query",
+      input: lengthDelimitedField(6, lengthDelimitedField(1, lengthDelimitedField(3, lengthDelimitedField(1, stringField(1, "cli prompt"))))),
+      expected: "cli prompt",
+    },
+    {
+      name: "create environment",
+      input: lengthDelimitedField(14, stringField(1, "/repo")),
+      expected: "Create a development environment for:\n/repo",
+    },
   ];
 
   for (const item of cases) {
     const request = lengthDelimitedField(2, item.input);
     assert.equal(decodeWarpRequest(request).prompt, item.expected, item.name);
   }
+});
+
+test("decodes extended context fields and images", () => {
+  const os = lengthDelimitedField(2, Buffer.concat([
+    stringField(1, "Linux"),
+    stringField(2, "Ubuntu"),
+  ]));
+  const shell = lengthDelimitedField(3, Buffer.concat([
+    stringField(1, "zsh"),
+    stringField(2, "5.9"),
+  ]));
+  const image = lengthDelimitedField(7, Buffer.concat([
+    lengthDelimitedField(1, Uint8Array.from([1, 2, 3])),
+    stringField(2, "image/png"),
+  ]));
+  const codebase = lengthDelimitedField(8, Buffer.concat([
+    stringField(1, "warp"),
+    stringField(2, "/Users/me/warp"),
+  ]));
+  const git = lengthDelimitedField(11, Buffer.concat([
+    stringField(1, "abc123"),
+    stringField(2, "byok"),
+  ]));
+  const skill = lengthDelimitedField(12, lengthDelimitedField(1, Buffer.concat([
+    stringField(2, "local-skill"),
+    stringField(3, "Do local work"),
+  ])));
+  const lsp = lengthDelimitedField(13, lengthDelimitedField(1, Buffer.concat([
+    stringField(1, "/Users/me/warp"),
+    stringField(2, "rust-analyzer"),
+  ])));
+  const input = lengthDelimitedField(1, Buffer.concat([os, shell, image, codebase, git, skill, lsp]));
+  const request = lengthDelimitedField(2, input);
+
+  const decoded = decodeWarpRequest(request);
+
+  assert.match(decoded.contextText ?? "", /Operating system: Linux Ubuntu/);
+  assert.match(decoded.contextText ?? "", /Shell: zsh 5\.9/);
+  assert.match(decoded.contextText ?? "", /Indexed codebases:\nwarp: \/Users\/me\/warp/);
+  assert.match(decoded.contextText ?? "", /Git: branch=byok, head=abc123/);
+  assert.match(decoded.contextText ?? "", /Available skills:\nlocal-skill: Do local work/);
+  assert.match(decoded.contextText ?? "", /Available LSP servers:\nrust-analyzer/);
+  assert.deepEqual(decoded.contextImages, [{ data: "AQID", mimeType: "image/png" }]);
 });
 
 test("decodes attached selected text and command context", () => {
@@ -246,9 +301,54 @@ test("decodes non-file tool call results from user inputs", () => {
   ]);
 });
 
+test("decodes additional tool call results as generic provider content", () => {
+  const file = Buffer.concat([
+    stringField(1, "src/lib.ts"),
+    stringField(2, "export {};"),
+  ]);
+  const searchCodebaseResult = Buffer.concat([
+    stringField(1, "call-search"),
+    lengthDelimitedField(4, lengthDelimitedField(1, lengthDelimitedField(1, file))),
+  ]);
+  assert.deepEqual(decodeWarpRequest(toolResultRequest(searchCodebaseResult)).toolResults, [
+    {
+      type: "generic",
+      toolCallId: "call-search",
+      name: "search_codebase",
+      content: "File: src/lib.ts\nexport {};",
+      error: undefined,
+    },
+  ]);
+
+  const readShellOutput = Buffer.concat([
+    stringField(1, "call-read-shell"),
+    lengthDelimitedField(22, Buffer.concat([
+      stringField(1, "npm test"),
+      lengthDelimitedField(3, Buffer.concat([
+        stringField(1, "ok"),
+        varintField(2, 0),
+        stringField(3, "cmd-1"),
+      ])),
+    ])),
+  ]);
+  assert.deepEqual(decodeWarpRequest(toolResultRequest(readShellOutput)).toolResults, [
+    {
+      type: "generic",
+      toolCallId: "call-read-shell",
+      name: "read_shell_command_output",
+      content: "Command: npm test\nCommand ID: cmd-1\nExit code: 0\nOutput:\nok",
+      error: undefined,
+    },
+  ]);
+});
+
 test("encodes response events as protobuf payloads", () => {
   assert.equal(encodeBase64Url(encodeStreamInit("c", "r")), "CgYKAWMSAXI=");
   assert.equal(encodeBase64Url(encodeStreamFinishedDone()), "GgISAA==");
+  assert.ok(encodeStreamFinishedInvalidApiKey("mock-model").length > 0);
+  assert.ok(encodeStreamFinishedLlmUnavailable().length > 0);
+  assert.ok(encodeStreamFinishedContextWindowExceeded().length > 0);
+  assert.ok(encodeStreamFinishedQuotaLimit().length > 0);
   assert.ok(encodeAgentOutput({ taskId: "root", requestId: "req", text: "ok" }).length > 0);
   assert.ok(encodeCreateTask({ taskId: "root", description: "hello" }).length > 0);
   const toolCall = encodeAddReadFilesToolCall({
@@ -274,6 +374,13 @@ test("encodes response events as protobuf payloads", () => {
       requestId: "request",
       toolCallId: "call-grep",
       tool: { type: "grep", queries: ["TODO"], path: "." },
+    }),
+    encodeAddToolCall({
+      messageId: "message",
+      taskId: "root",
+      requestId: "request",
+      toolCallId: "call-search",
+      tool: { type: "search_codebase", query: "auth flow", pathFilters: ["src"] },
     }),
     encodeAddToolCall({
       messageId: "message",
