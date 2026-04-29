@@ -78,6 +78,10 @@ To build and run Warp from source:
 
 See [WARP.md](WARP.md) for the full engineering guide, including coding style, testing, and platform-specific notes.
 
+### Local Tool Service
+
+The [local multi-agent service](tools/local-multi-agent/README.md) provides a local `/ai/multi-agent` endpoint and local GraphQL integration config storage for no-cloud development. It can run from source or as a Docker image published by CI.
+
 ## Joining the Team
 
 Interested in joining the team? See our [open roles](https://www.warp.dev/careers).
