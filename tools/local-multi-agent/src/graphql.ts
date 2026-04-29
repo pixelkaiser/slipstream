@@ -176,15 +176,20 @@ function inferOperationName(request: GraphqlRequest, opFromQueryString?: string 
     "suggestCloudEnvironmentImage",
     "getUpdatedCloudObjects",
     "updatedCloudObjects",
+    "getCloudEnvironments",
+    "getRequestLimitInfo",
+    "getReferralInfo",
     "getFeatureModelChoices",
     "featureModelChoice",
     "freeAvailableModels",
     "getUserSettings",
+    "listAIConversations",
     "conversationUsage",
     "getConversationUsage",
     "getUser",
     "getWorkspacesMetadataForUser",
     "workspacesMetadataForUser",
+    "updateUserSettings",
     "pricingInfo",
   ]) {
     if (query.includes(candidate)) {
@@ -243,6 +248,10 @@ function canonicalOperationName(name: string): string {
     case "getUpdatedCloudObjects":
     case "updatedCloudObjects":
       return "updatedCloudObjects";
+    case "GetCloudEnvironmentsQuery":
+    case "GetCloudEnvironments":
+    case "getCloudEnvironments":
+      return "getCloudEnvironments";
     case "CreateGenericStringObject":
     case "createGenericStringObject":
       return "createGenericStringObject";
@@ -266,6 +275,19 @@ function canonicalOperationName(name: string): string {
     case "GetUserSettings":
     case "getUserSettings":
       return "getUserSettings";
+    case "UpdateUserSettings":
+    case "updateUserSettings":
+      return "updateUserSettings";
+    case "ListAIConversationMetadata":
+    case "ListAIConversations":
+    case "listAIConversations":
+      return "listAIConversations";
+    case "GetRequestLimitInfo":
+    case "getRequestLimitInfo":
+      return "getRequestLimitInfo";
+    case "GetReferralInfo":
+    case "getReferralInfo":
+      return "getReferralInfo";
     case "GetConversationUsage":
     case "getConversationUsage":
     case "conversationUsage":
@@ -703,6 +725,86 @@ function getUserSettings(): unknown {
   };
 }
 
+function getReferralInfo(): unknown {
+  return {
+    data: {
+      user: {
+        __typename: "UserOutput",
+        user: {
+          referrals: {
+            referralCode: "",
+            numberClaimed: 0,
+            isReferred: false,
+          },
+        },
+      },
+    },
+  };
+}
+
+function getRequestLimitInfo(): unknown {
+  return {
+    data: {
+      user: {
+        __typename: "UserOutput",
+        user: {
+          workspaces: [],
+          requestLimitInfo: {
+            isUnlimited: true,
+            requestsUsedSinceLastRefresh: 0,
+            requestLimit: 1_000_000,
+            nextRefreshTime: "2999-01-01T00:00:00.000Z",
+            requestLimitRefreshDuration: "MONTHLY",
+            isUnlimitedVoice: true,
+            voiceRequestLimit: 1_000_000,
+            voiceRequestsUsedSinceLastRefresh: 0,
+            isUnlimitedCodebaseIndices: true,
+            maxCodebaseIndices: 1_000_000,
+            maxFilesPerRepo: 1_000_000,
+            embeddingGenerationBatchSize: 100,
+          },
+          bonusGrants: [],
+        },
+      },
+    },
+  };
+}
+
+function updateUserSettings(): unknown {
+  return {
+    data: {
+      updateUserSettings: {
+        __typename: "UpdateUserSettingsOutput",
+        responseContext: responseContext(),
+      },
+    },
+  };
+}
+
+function listAIConversations(): unknown {
+  return {
+    data: {
+      listAIConversations: {
+        __typename: "ListAIConversationsOutput",
+        conversations: [],
+        responseContext: responseContext(),
+      },
+    },
+  };
+}
+
+function getCloudEnvironments(): unknown {
+  return {
+    data: {
+      getCloudEnvironments: {
+        __typename: "GetCloudEnvironmentsOutput",
+        cloudEnvironments: [],
+        responseContext: responseContext(),
+      },
+    },
+  };
+}
+
 function getConversationUsage(): unknown {
   return {
     data: {
@@ -952,6 +1054,8 @@ export async function handleLocalGraphqlRequest(
         return { status: 200, diagnostics, payload: bulkCreateObjects(store, variables) };
       case "updatedCloudObjects":
         return { status: 200, diagnostics, payload: getUpdatedCloudObjects(store) };
+      case "getCloudEnvironments":
+        return { status: 200, diagnostics, payload: getCloudEnvironments() };
       case "featureModelChoice":
         return { status: 200, diagnostics, payload: await getFeatureModelChoices() };
       case "freeAvailableModels":
@@ -960,6 +1064,14 @@ export async function handleLocalGraphqlRequest(
         return { status: 200, diagnostics, payload: await getUser() };
       case "getUserSettings":
         return { status: 200, diagnostics, payload: getUserSettings() };
+      case "updateUserSettings":
+        return { status: 200, diagnostics, payload: updateUserSettings() };
+      case "listAIConversations":
+        return { status: 200, diagnostics, payload: listAIConversations() };
+      case "getRequestLimitInfo":
+        return { status: 200, diagnostics, payload: getRequestLimitInfo() };
+      case "getReferralInfo":
+        return { status: 200, diagnostics, payload: getReferralInfo() };
       case "getConversationUsage":
         return { status: 200, diagnostics, payload: getConversationUsage() };
       case "workspacesMetadataForUser":
