@@ -269,6 +269,27 @@ test("returns local no-cloud responses for startup cloud metadata operations", a
   });
 });
 
+test("accepts Rust generated GraphQL operation names from operationName and op query parameter", async () => {
+  await withStore(async (store) => {
+    const updatedObjectsData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "getUpdatedCloudObjects",
+      variables: {},
+    }, store)) as { updatedCloudObjects?: { __typename?: string } };
+    assert.equal(updatedObjectsData.updatedCloudObjects?.__typename, "UpdatedCloudObjectsOutput");
+
+    const workspacesData = await dataOf(handleLocalGraphqlRequest({
+      variables: {},
+    }, store, "getWorkspacesMetadataForUser")) as { user?: { __typename?: string } };
+    assert.equal(workspacesData.user?.__typename, "UserOutput");
+
+    const modelChoicesData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "getFeatureModelChoices",
+      variables: {},
+    }, store)) as { user?: { __typename?: string } };
+    assert.equal(modelChoicesData.user?.__typename, "UserOutput");
+  });
+});
+
 test("populates local model choices from the configured v1/models endpoint", async () => {
   let authHeader: string | undefined;
   const provider = http.createServer((_request, response) => {
