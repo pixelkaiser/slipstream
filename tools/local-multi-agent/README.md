@@ -6,6 +6,8 @@ It is intentionally a thin single-agent adapter. It can translate OpenAI-compati
 
 ## Run
 
+### From Source
+
 ```sh
 npm install
 cp .env.example .env
@@ -24,6 +26,39 @@ Set these environment variables before starting the service:
 - `LOCAL_GRAPHQL_DB_PATH` sets the SQLite path for local integration GraphQL config. Defaults to `./local-graphql.sqlite` from this package.
 - `LOG_LEVEL` defaults to `info`; use `debug` to log individual SSE events.
 - `PORT` defaults to `8787`
+- `HOST` defaults to `127.0.0.1` for source runs. The Docker image sets `HOST=0.0.0.0` so published ports work.
+
+### With Docker
+
+Build the image locally:
+
+```sh
+docker build -t warp-local-multi-agent .
+```
+
+Run it with a persistent SQLite volume:
+
+```sh
+docker volume create warp-local-multi-agent-data
+
+docker run --rm \
+  -p 8787:8787 \
+  -v warp-local-multi-agent-data:/data \
+  -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+  -e OPENAI_BASE_URL="${OPENAI_BASE_URL:-http://host.docker.internal:11434/v1}" \
+  -e OPENAI_MODEL="${OPENAI_MODEL:-Qwen/Qwen3.6-27B-FP8}" \
+  warp-local-multi-agent
+```
+
+CI publishes the same image to GitHub Container Registry as:
+
+```text
+ghcr.io/<owner>/warp-local-multi-agent
+```
+
+For Linux hosts, replace `host.docker.internal` with an address reachable from the container, or add Docker's host gateway mapping.
+
+## Behavior
 
 Supported tool-call names are `read_files`, `file_glob`, `grep`, `search_codebase`, `run_shell_command`, `apply_file_diffs`, and `suggest_plan`. Warp executes the tool call locally and sends the result back to this service on the next request.
 
