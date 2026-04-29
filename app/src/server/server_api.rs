@@ -125,6 +125,20 @@ pub(crate) fn no_cloud_mode_enabled() -> bool {
     }
 }
 
+pub(crate) fn apply_local_no_cloud_env_defaults(explicit_url: Option<&str>) {
+    if std::env::var_os(WARP_NO_CLOUD_ENV).is_none() {
+        std::env::set_var(WARP_NO_CLOUD_ENV, "1");
+    }
+
+    if no_cloud_mode_enabled() && std::env::var_os(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV).is_none()
+    {
+        std::env::set_var(
+            warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV,
+            explicit_url.unwrap_or(LOCAL_NO_CLOUD_SERVER_ROOT_URL),
+        );
+    }
+}
+
 pub(crate) fn server_root_url_for_local_no_cloud(explicit_url: Option<&str>) -> Option<&str> {
     explicit_url.or_else(|| no_cloud_mode_enabled().then_some(LOCAL_NO_CLOUD_SERVER_ROOT_URL))
 }
@@ -1486,9 +1500,10 @@ impl SingletonEntity for ServerApiProvider {}
 #[cfg(test)]
 mod tests {
     use super::{
-        multi_agent_output_url, no_cloud_mode_enabled, server_root_url_for_local_no_cloud,
-        server_root_url_override_for_startup, should_send_authenticated_graphql_context,
-        LOCAL_NO_CLOUD_SERVER_ROOT_URL, WARP_NO_CLOUD_ENV,
+        apply_local_no_cloud_env_defaults, multi_agent_output_url, no_cloud_mode_enabled,
+        server_root_url_for_local_no_cloud, server_root_url_override_for_startup,
+        should_send_authenticated_graphql_context, LOCAL_NO_CLOUD_SERVER_ROOT_URL,
+        WARP_NO_CLOUD_ENV,
     };
 
     fn restore_env_var(name: &str, previous: Option<std::ffi::OsString>) {
@@ -1617,6 +1632,66 @@ mod tests {
         );
 
         restore_env_var(WARP_NO_CLOUD_ENV, previous);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn local_no_cloud_defaults_are_written_to_process_env() {
+        let previous_no_cloud = std::env::var_os(WARP_NO_CLOUD_ENV);
+        let previous_server_root = std::env::var_os(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV);
+
+        std::env::remove_var(WARP_NO_CLOUD_ENV);
+        std::env::remove_var(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV);
+
+        apply_local_no_cloud_env_defaults(None);
+
+        assert_eq!(std::env::var(WARP_NO_CLOUD_ENV).as_deref(), Ok("1"));
+        assert_eq!(
+            std::env::var(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV).as_deref(),
+            Ok(LOCAL_NO_CLOUD_SERVER_ROOT_URL)
+        );
+
+        restore_env_var(WARP_NO_CLOUD_ENV, previous_no_cloud);
+        restore_env_var(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV, previous_server_root);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn local_no_cloud_env_defaults_respect_explicit_disable() {
+        let previous_no_cloud = std::env::var_os(WARP_NO_CLOUD_ENV);
+        let previous_server_root = std::env::var_os(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV);
+
+        std::env::set_var(WARP_NO_CLOUD_ENV, "0");
+        std::env::remove_var(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV);
+
+        apply_local_no_cloud_env_defaults(None);
+
+        assert_eq!(std::env::var(WARP_NO_CLOUD_ENV).as_deref(), Ok("0"));
+        assert!(std::env::var_os(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV).is_none());
+
+        restore_env_var(WARP_NO_CLOUD_ENV, previous_no_cloud);
+        restore_env_var(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV, previous_server_root);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn local_no_cloud_env_defaults_preserve_explicit_server_root() {
+        let previous_no_cloud = std::env::var_os(WARP_NO_CLOUD_ENV);
+        let previous_server_root = std::env::var_os(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV);
+
+        std::env::remove_var(WARP_NO_CLOUD_ENV);
+        std::env::remove_var(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV);
+
+        apply_local_no_cloud_env_defaults(Some("http://localhost:9999"));
+
+        assert_eq!(std::env::var(WARP_NO_CLOUD_ENV).as_deref(), Ok("1"));
+        assert_eq!(
+            std::env::var(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV).as_deref(),
+            Ok("http://localhost:9999")
+        );
+
+        restore_env_var(WARP_NO_CLOUD_ENV, previous_no_cloud);
+        restore_env_var(warp_cli::SERVER_ROOT_URL_OVERRIDE_ENV, previous_server_root);
     }
 
     #[test]
