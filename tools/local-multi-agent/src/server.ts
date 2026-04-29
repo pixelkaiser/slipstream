@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import {
   encodeAddAgentOutput,
   encodeAddToolCall,
@@ -21,6 +22,8 @@ import {
 import { resolveProviderModel } from "./model.js";
 import { log } from "./logger.js";
 import { formatSseDataEvent } from "./sse.js";
+import { handleLocalGraphqlRequest } from "./graphql.js";
+import { IntegrationStore } from "./integrationStore.js";
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const defaultBaseUrl = "https://api.openai.com/v1";
@@ -28,6 +31,9 @@ const maxRequestBytes = 25 * 1024 * 1024;
 const openAiBaseUrlHeader = "x-warp-openai-base-url";
 const conversationState = new Map<string, { messages: ProviderChatMessage[] }>();
 const localStatePath = process.env.LOCAL_STATE_PATH?.trim() || undefined;
+const localGraphqlDbPath = process.env.LOCAL_GRAPHQL_DB_PATH?.trim()
+  || fileURLToPath(new URL("../local-graphql.sqlite", import.meta.url));
+const integrationStore = new IntegrationStore(localGraphqlDbPath);
 const maxConversationMessages = Math.max(
   4,
   Number.parseInt(process.env.LOCAL_MAX_HISTORY_MESSAGES ?? "80", 10) || 80,
@@ -1169,6 +1175,24 @@ const server = http.createServer((request, response) => {
       return;
     }
 
+    if (method === "POST" && url.pathname === "/graphql/v2") {
+      const body = Buffer.from(await readBody(request)).toString("utf8");
+      const graphqlRequest = JSON.parse(body) as unknown;
+      const result = handleLocalGraphqlRequest(
+        graphqlRequest && typeof graphqlRequest === "object" ? graphqlRequest : {},
+        integrationStore,
+        url.searchParams.get("op"),
+      );
+      sendJson(response, result.status, result.payload);
+      log("info", "http_response", {
+        method,
+        path: url.pathname,
+        statusCode: response.statusCode,
+        durationMs: Date.now() - startedAt,
+      });
+      return;
+    }
+
     sendJson(response, 404, { error: "not_found" });
     log("warn", "http_response", {
       method,
@@ -1197,6 +1221,7 @@ server.listen(port, "127.0.0.1", () => {
     hasOpenAiModelEnv: nonEmpty(process.env.OPENAI_MODEL) != null,
     hasModelAliasesEnv: nonEmpty(process.env.LOCAL_MODEL_ALIASES) != null,
     hasLocalStatePath: localStatePath != null,
+    localGraphqlDbPath,
     maxConversationMessages,
   });
 });
