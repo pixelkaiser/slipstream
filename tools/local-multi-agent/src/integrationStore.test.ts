@@ -148,3 +148,44 @@ test("persists AI conversation transcripts across reopen", () => {
     rmSync(dir, { force: true, recursive: true });
   }
 });
+
+test("creates updates and persists generic string objects across reopen", () => {
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-graphql-"));
+  const dbPath = join(dir, "test.sqlite");
+  let uid = "";
+
+  const first = new IntegrationStore(dbPath);
+  try {
+    const created = first.createGenericStringObject({
+      clientId: "client-mcp-1",
+      format: "JsonMCPServer",
+      serializedModel: JSON.stringify({
+        name: "local-mcp",
+        uuid: "00000000-0000-0000-0000-000000000001",
+        transport_type: { CLIServer: { command: "node", args: ["server.js"], cwd_parameter: null, static_env_vars: [] } },
+      }),
+    });
+    uid = created.uid;
+
+    const updated = first.updateGenericStringObject(uid, JSON.stringify({
+      name: "local-mcp-updated",
+      uuid: "00000000-0000-0000-0000-000000000001",
+      transport_type: { CLIServer: { command: "node", args: ["updated.js"], cwd_parameter: null, static_env_vars: [] } },
+    }));
+    assert.equal(updated.uid, uid);
+    assert.equal(updated.format, "JsonMCPServer");
+  } finally {
+    first.close();
+  }
+
+  const second = new IntegrationStore(dbPath);
+  try {
+    const persisted = second.getGenericStringObject(uid);
+    assert.equal(persisted?.format, "JsonMCPServer");
+    assert.equal(JSON.parse(persisted?.serializedModel ?? "{}").name, "local-mcp-updated");
+    assert.deepEqual(second.listGenericStringObjects().map((object) => object.uid), [uid]);
+  } finally {
+    second.close();
+    rmSync(dir, { force: true, recursive: true });
+  }
+});

@@ -269,6 +269,123 @@ test("returns local no-cloud responses for startup cloud metadata operations", a
   });
 });
 
+test("persists generic string MCP server objects through local GraphQL cloud-object operations", async () => {
+  await withStore(async (store) => {
+    const serializedModel = JSON.stringify({
+      name: "local-mcp",
+      uuid: "00000000-0000-0000-0000-000000000001",
+      transport_type: {
+        CLIServer: {
+          command: "node",
+          args: ["server.js"],
+          cwd_parameter: null,
+          static_env_vars: [],
+        },
+      },
+    });
+
+    const createData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "CreateGenericStringObject",
+      variables: {
+        input: {
+          owner: { type: "User" },
+          genericStringObject: {
+            clientId: "client-mcp-1",
+            format: "JsonMCPServer",
+            serializedModel,
+          },
+        },
+      },
+    }, store));
+
+    const created = createData.createGenericStringObject as {
+      clientId?: string;
+      genericStringObject?: {
+        format?: string;
+        metadata?: { uid?: string; parent?: { __typename?: string; type?: string } };
+        permissions?: { space?: { __typename?: string; type?: string } };
+        serializedModel?: string;
+      };
+    };
+    const uid = created.genericStringObject?.metadata?.uid;
+    assert.equal(created.clientId, "client-mcp-1");
+    assert.equal(created.genericStringObject?.format, "JsonMCPServer");
+    assert.equal(created.genericStringObject?.metadata?.parent?.__typename, "Space");
+    assert.equal(created.genericStringObject?.metadata?.parent?.type, "User");
+    assert.equal(created.genericStringObject?.permissions?.space?.__typename, "Space");
+    assert.equal(created.genericStringObject?.permissions?.space?.type, "User");
+    assert.ok(uid);
+
+    const updatedModel = JSON.stringify({
+      name: "local-mcp-updated",
+      uuid: "00000000-0000-0000-0000-000000000001",
+      transport_type: {
+        CLIServer: {
+          command: "node",
+          args: ["updated.js"],
+          cwd_parameter: null,
+          static_env_vars: [],
+        },
+      },
+    });
+    const updateData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "UpdateGenericStringObject",
+      variables: {
+        input: {
+          uid,
+          serializedModel: updatedModel,
+        },
+      },
+    }, store));
+    assert.equal(
+      (updateData.updateGenericStringObject as { update?: { __typename?: string } }).update?.__typename,
+      "ObjectUpdateSuccess",
+    );
+
+    const bulkData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "BulkCreateObjects",
+      variables: {
+        input: {
+          genericStringObjects: {
+            owner: { type: "User" },
+            objects: [{
+              clientId: "client-template-1",
+              format: "JsonTemplatableMCPServer",
+              serializedModel: JSON.stringify({
+                name: "template-mcp",
+                uuid: "00000000-0000-0000-0000-000000000002",
+                icon: "Warp",
+                description: "",
+                json_template: {
+                  mcp_servers: {},
+                  variables: [],
+                },
+              }),
+            }],
+          },
+        },
+      },
+    }, store));
+    assert.equal(
+      (bulkData.bulkCreateObjects as { genericStringObjects?: { objects?: unknown[] } }).genericStringObjects?.objects?.length,
+      1,
+    );
+
+    const updatedObjects = (await dataOf(handleLocalGraphqlRequest({
+      operationName: "GetUpdatedCloudObjects",
+      variables: { input: { forceRefresh: true } },
+    }, store))).updatedCloudObjects as {
+      genericStringObjects?: Array<{ format?: string; serializedModel?: string }>;
+    };
+    const objectsByFormat = new Map(updatedObjects.genericStringObjects?.map((object) => [object.format, object]));
+    assert.deepEqual([...objectsByFormat.keys()].sort(), ["JsonMCPServer", "JsonTemplatableMCPServer"]);
+    assert.equal(
+      JSON.parse(objectsByFormat.get("JsonMCPServer")?.serializedModel ?? "{}").name,
+      "local-mcp-updated",
+    );
+  });
+});
+
 test("accepts Rust generated GraphQL operation names from operationName and op query parameter", async () => {
   await withStore(async (store) => {
     const updatedObjectsData = await dataOf(handleLocalGraphqlRequest({
