@@ -92,6 +92,7 @@ fn multi_agent_output_url(
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
 const EXPERIMENT_ID_HEADER: &str = "X-Warp-Experiment-Id";
+const WARP_NO_CLOUD_ENV: &str = "WARP_NO_CLOUD";
 
 /// We use a special error code header `X-Warp-Error-Code` to allow the server to send
 /// more specific error code information, so that the client can discern between different
@@ -112,6 +113,19 @@ pub(crate) const AGENT_SOURCE_HEADER: &str = "X-Oz-Api-Source";
 
 #[cfg(feature = "agent_mode_evals")]
 pub const EVAL_USER_ID_HEADER: &str = "X-Eval-User-ID";
+
+fn no_cloud_mode_enabled() -> bool {
+    std::env::var(WARP_NO_CLOUD_ENV).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn should_send_authenticated_graphql_context() -> bool {
+    !no_cloud_mode_enabled()
+}
 
 /// IDs in the staging database that were created specifically for evals.
 /// These users have a clean state where they haven't been referred nor have referred anyone (which causes a popup in the client).
@@ -550,22 +564,29 @@ impl ServerApi {
 
         Box::pin(async move {
             let operation_name = operation.operation_name().map(Cow::into_owned);
-            let auth_token = self
-                .get_or_refresh_access_token()
-                .await
-                .context("Failed to get access token for GraphQL request")?;
+            let send_authenticated_context = should_send_authenticated_graphql_context();
+            let auth_token = if send_authenticated_context {
+                self.get_or_refresh_access_token()
+                    .await
+                    .context("Failed to get access token for GraphQL request")?
+                    .bearer_token()
+            } else {
+                None
+            };
 
             #[cfg(feature = "agent_mode_evals")]
             let mut headers = headers;
             #[cfg(not(feature = "agent_mode_evals"))]
             let mut headers = std::collections::HashMap::new();
 
-            for (name, value) in self.ambient_agent_headers().await? {
-                headers.insert(name.to_string(), value);
+            if send_authenticated_context {
+                for (name, value) in self.ambient_agent_headers().await? {
+                    headers.insert(name.to_string(), value);
+                }
             }
 
             let options = warp_graphql::client::RequestOptions {
-                auth_token: auth_token.bearer_token(),
+                auth_token,
                 timeout,
                 headers,
                 ..default_request_options()
@@ -1447,7 +1468,17 @@ impl SingletonEntity for ServerApiProvider {}
 
 #[cfg(test)]
 mod tests {
-    use super::multi_agent_output_url;
+    use super::{
+        multi_agent_output_url, no_cloud_mode_enabled, should_send_authenticated_graphql_context,
+        WARP_NO_CLOUD_ENV,
+    };
+
+    fn restore_env_var(name: &str, previous: Option<std::ffi::OsString>) {
+        match previous {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
 
     #[test]
     fn multi_agent_output_url_uses_default_agent_path_with_override() {
@@ -1471,5 +1502,28 @@ mod tests {
             multi_agent_output_url(true, false, Some("http://127.0.0.1:8787")),
             "http://127.0.0.1:8787/ai/passive-suggestions"
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn no_cloud_mode_uses_explicit_truthy_env_values() {
+        let previous = std::env::var_os(WARP_NO_CLOUD_ENV);
+
+        std::env::remove_var(WARP_NO_CLOUD_ENV);
+        assert!(!no_cloud_mode_enabled());
+
+        for value in ["1", "true", "yes", "on"] {
+            std::env::set_var(WARP_NO_CLOUD_ENV, value);
+            assert!(no_cloud_mode_enabled());
+            assert!(!should_send_authenticated_graphql_context());
+        }
+
+        for value in ["0", "false", "no", "off", ""] {
+            std::env::set_var(WARP_NO_CLOUD_ENV, value);
+            assert!(!no_cloud_mode_enabled());
+            assert!(should_send_authenticated_graphql_context());
+        }
+
+        restore_env_var(WARP_NO_CLOUD_ENV, previous);
     }
 }
