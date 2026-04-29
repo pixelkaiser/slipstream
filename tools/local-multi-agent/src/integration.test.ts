@@ -115,6 +115,19 @@ function sseEventBytes(event: string): Buffer {
   return Buffer.from(event.replace(/^data: /, "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
 }
 
+function maybeHandleProviderModelsRequest(request: http.IncomingMessage, response: http.ServerResponse): boolean {
+  if (request.method !== "GET" || request.url !== "/v1/models") {
+    return false;
+  }
+
+  response.writeHead(200, { "content-type": "application/json" });
+  response.end(JSON.stringify({
+    object: "list",
+    data: [{ id: "mock-model", context_length: 131072 }],
+  }));
+  return true;
+}
+
 test("serves local GraphQL integration config over HTTP", { timeout: 10_000 }, async () => {
   const provider = http.createServer((request, response) => {
     if (request.url !== "/v1/models") {
@@ -282,6 +295,10 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
   let providerPath: string | undefined;
   let providerBody: unknown;
   const provider = http.createServer(async (request, response) => {
+    if (maybeHandleProviderModelsRequest(request, response)) {
+      return;
+    }
+
     providerPath = request.url;
     providerBody = JSON.parse(await readBody(request));
     response.writeHead(200, {
@@ -339,7 +356,17 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
     assert.equal(Array.isArray((providerBody as { tools?: unknown }).tools), true);
     assert.deepEqual(
       ((providerBody as { tools?: Array<{ function?: { name?: string } }> }).tools ?? []).map((tool) => tool.function?.name),
-      ["read_files", "file_glob", "grep", "search_codebase", "run_shell_command", "apply_file_diffs", "suggest_plan"],
+      [
+        "read_files",
+        "file_glob",
+        "grep",
+        "search_codebase",
+        "run_shell_command",
+        "apply_file_diffs",
+        "suggest_plan",
+        "read_mcp_resource",
+        "call_mcp_tool",
+      ],
     );
     assert.equal(events.length, 5);
     assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
@@ -363,6 +390,10 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
 test("passes attached selected text context to the provider", { timeout: 10_000 }, async () => {
   let providerBody: unknown;
   const provider = http.createServer(async (request, response) => {
+    if (maybeHandleProviderModelsRequest(request, response)) {
+      return;
+    }
+
     providerBody = JSON.parse(await readBody(request));
     response.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
@@ -432,8 +463,12 @@ test("passes attached selected text context to the provider", { timeout: 10_000 
 
 test("keeps provider conversation history across turns and service restarts", { timeout: 10_000 }, async () => {
   const providerBodies: unknown[] = [];
-  const provider = http.createServer(async (_request, response) => {
-    providerBodies.push(JSON.parse(await readBody(_request)));
+  const provider = http.createServer(async (request, response) => {
+    if (maybeHandleProviderModelsRequest(request, response)) {
+      return;
+    }
+
+    providerBodies.push(JSON.parse(await readBody(request)));
     response.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
     });
@@ -527,6 +562,10 @@ test("keeps provider conversation history across turns and service restarts", { 
 test("translates an OpenAI read_files tool call into Warp SSE events", { timeout: 10_000 }, async () => {
   const providerBodies: unknown[] = [];
   const provider = http.createServer(async (request, response) => {
+    if (maybeHandleProviderModelsRequest(request, response)) {
+      return;
+    }
+
     const providerBody = JSON.parse(await readBody(request));
     providerBodies.push(providerBody);
     response.writeHead(200, {
@@ -698,8 +737,26 @@ test("translates all supported OpenAI tool calls into Warp SSE events", { timeou
         arguments: JSON.stringify({ summary: "plan", tasks: [{ description: "Do work" }] }),
       },
     },
+    {
+      id: "call-mcp-resource",
+      function: {
+        name: "read_mcp_resource",
+        arguments: JSON.stringify({ uri: "mcp://local/resource", server_id: "local-server" }),
+      },
+    },
+    {
+      id: "call-mcp-tool",
+      function: {
+        name: "call_mcp_tool",
+        arguments: JSON.stringify({ name: "list_items", server_id: "local-server", args: { limit: 2 } }),
+      },
+    },
   ];
-  const provider = http.createServer(async (_request, response) => {
+  const provider = http.createServer(async (request, response) => {
+    if (maybeHandleProviderModelsRequest(request, response)) {
+      return;
+    }
+
     response.writeHead(200, {
       "content-type": "text/event-stream; charset=utf-8",
     });
@@ -756,7 +813,7 @@ test("translates all supported OpenAI tool calls into Warp SSE events", { timeou
 
     assert.equal(response.status, 200);
     const events = (await response.text()).split("\n\n").filter(Boolean);
-    assert.equal(events.length, 9);
+    assert.equal(events.length, 11);
     assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
   } catch (error) {
     const diagnostics = [
