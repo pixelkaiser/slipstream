@@ -226,3 +226,42 @@ test("upserts unknown generic string objects from update requests", () => {
     rmSync(dir, { force: true, recursive: true });
   }
 });
+
+test("infers AI execution profile format for MCP allowlist profile updates", () => {
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-graphql-"));
+  const dbPath = join(dir, "test.sqlite");
+  const uid = "existing-local-profile";
+  const serializedModel = JSON.stringify({
+    name: "Default",
+    is_default_profile: true,
+    apply_code_diffs: "AgentDecides",
+    read_files: "AgentDecides",
+    execute_commands: "AlwaysAsk",
+    write_to_pty: "AlwaysAsk",
+    mcp_permissions: "AgentDecides",
+    ask_user_question: "AskExceptInAutoApprove",
+    command_denylist: [],
+    command_allowlist: [],
+    directory_allowlist: [],
+    mcp_allowlist: ["00000000-0000-0000-0000-000000000010"],
+    mcp_denylist: [],
+    computer_use: "Never",
+    base_model: "Qwen/Qwen3.6-27B-FP8",
+    coding_model: null,
+    cli_agent_model: "ultra-fast",
+    computer_use_model: null,
+    autosync_plans_to_warp_drive: true,
+    web_search_enabled: true,
+  });
+
+  const store = new IntegrationStore(dbPath);
+  try {
+    const updated = store.updateGenericStringObject(uid, serializedModel);
+    assert.equal(updated.uid, uid);
+    assert.equal(updated.format, "JsonAIExecutionProfile");
+    assert.equal(store.getGenericStringObject(uid)?.format, "JsonAIExecutionProfile");
+  } finally {
+    store.close();
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
