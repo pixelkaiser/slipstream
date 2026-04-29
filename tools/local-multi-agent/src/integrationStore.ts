@@ -152,6 +152,32 @@ function normalizeGenericStringObjectFormat(value: string): string {
   return format;
 }
 
+function inferGenericStringObjectFormat(serializedModel: string): string {
+  const fallback = "JsonMCPServer";
+
+  try {
+    const parsed = JSON.parse(serializedModel) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return fallback;
+    }
+
+    const model = parsed as Record<string, unknown>;
+    if (Object.hasOwn(model, "storage_key")) {
+      return "JsonPreference";
+    }
+    if (Object.hasOwn(model, "template") || Object.hasOwn(model, "json_template")) {
+      return "JsonTemplatableMCPServer";
+    }
+    if (Object.hasOwn(model, "transport_type") || Object.hasOwn(model, "command")) {
+      return "JsonMCPServer";
+    }
+  } catch {
+    return fallback;
+  }
+
+  return fallback;
+}
+
 function applyNullableString(current: string | null, next: string | null | undefined, isUpdate: boolean): string | null {
   if (next == null) {
     return isUpdate ? current : null;
@@ -425,7 +451,45 @@ export class IntegrationStore {
   updateGenericStringObject(uid: string, serializedModel: string): GenericStringObjectRecord {
     const existing = this.getGenericStringObject(uid);
     if (!existing) {
-      throw new Error(`generic string object not found: ${uid}`);
+      const now = new Date().toISOString();
+      const record: GenericStringObjectRecord = {
+        uid,
+        clientId: null,
+        format: inferGenericStringObjectFormat(serializedModel),
+        serializedModel,
+        revisionTs: now,
+        metadataLastUpdatedTs: now,
+        permissionsLastUpdatedTs: now,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      this.db.prepare(`
+        INSERT INTO generic_string_objects (
+          uid,
+          client_id,
+          format,
+          serialized_model,
+          revision_ts,
+          metadata_last_updated_ts,
+          permissions_last_updated_ts,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          @uid,
+          @clientId,
+          @format,
+          @serializedModel,
+          @revisionTs,
+          @metadataLastUpdatedTs,
+          @permissionsLastUpdatedTs,
+          @createdAt,
+          @updatedAt
+        )
+      `).run(record);
+
+      return record;
     }
 
     const now = new Date().toISOString();
