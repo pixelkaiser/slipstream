@@ -121,3 +121,30 @@ test("finds providers using an environment and persists across reopen", () => {
     rmSync(dir, { force: true, recursive: true });
   }
 });
+
+test("persists AI conversation transcripts across reopen", () => {
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-graphql-"));
+  const dbPath = join(dir, "test.sqlite");
+  const messages = [
+    { role: "user", content: "first prompt" },
+    { role: "assistant", content: "first answer" },
+  ];
+  const first = new IntegrationStore(dbPath);
+  try {
+    first.upsertAiConversation("conversation-1", messages);
+  } finally {
+    first.close();
+  }
+
+  const second = new IntegrationStore(dbPath);
+  try {
+    assert.deepEqual(second.getAiConversation("conversation-1")?.messages, messages);
+    assert.deepEqual(
+      second.listAiConversations().map((conversation) => conversation.conversationId),
+      ["conversation-1"],
+    );
+  } finally {
+    second.close();
+    rmSync(dir, { force: true, recursive: true });
+  }
+});

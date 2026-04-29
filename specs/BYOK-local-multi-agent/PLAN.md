@@ -174,7 +174,7 @@ warp-build-oss:
 - [x] Emit `StreamFinished.Done` as the final successful event.
 - [x] Map provider authentication, quota, availability, context-window, and generic failures to Warp stream finish reasons.
 - [x] Add in-memory conversation transcript state keyed by conversation ID.
-- [x] Add optional JSON persistence for local state.
+- [x] Persist local conversation transcript state in the shared SQLite local store.
 - [x] Document local run workflow.
 
 ## MVP Protocol Behavior
@@ -256,7 +256,7 @@ Local service:
 - [x] Unit test selected text, command, environment, image, and generic tool result extraction.
 - [x] Integration test with a mock OpenAI-compatible server.
 - [x] Integration test forwarding selected text context to the provider.
-- [x] Integration test preserving OpenAI-compatible conversation history across turns.
+- [x] Integration test preserving OpenAI-compatible conversation history across turns and service restarts.
 - [x] Integration test translating an OpenAI-compatible `read_files` tool call to Warp SSE events.
 - [x] Integration test translating every supported OpenAI-compatible tool call to Warp SSE events.
 - [x] Manual smoke test for `/health`.
@@ -358,3 +358,4 @@ End-to-end:
 - Added local service test coverage that loads the generated descriptors and checks the hand-rolled wire field numbers against the generated request, response, client action, and message schemas.
 - Verified `make warp-build-oss` completes and produces `target/debug/bundle/osx/WarpOss.app`.
 - Added `make warp-local-signing-identity` and local macOS build-script support for a stable self-signed `Warp Local Development` code-signing identity so debug app rebuilds do not have to fall back to ad-hoc signing.
+- Replaced optional JSON transcript persistence with an `ai_conversations` SQLite table in the same local database used by the GraphQL integration backend. The local service now reloads provider transcripts from SQLite on startup and the integration test validates conversation continuity across a service restart.

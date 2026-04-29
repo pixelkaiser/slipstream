@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -31,7 +30,6 @@ const defaultBaseUrl = "https://api.openai.com/v1";
 const maxRequestBytes = 25 * 1024 * 1024;
 const openAiBaseUrlHeader = "x-warp-openai-base-url";
 const conversationState = new Map<string, { messages: ProviderChatMessage[] }>();
-const localStatePath = process.env.LOCAL_STATE_PATH?.trim() || undefined;
 const localGraphqlDbPath = process.env.LOCAL_GRAPHQL_DB_PATH?.trim()
   || fileURLToPath(new URL("../local-graphql.sqlite", import.meta.url));
 const integrationStore = new IntegrationStore(localGraphqlDbPath);
@@ -732,46 +730,42 @@ function isProviderChatMessage(value: unknown): value is ProviderChatMessage {
   return role === "system" || role === "user" || role === "assistant" || role === "tool";
 }
 
-function loadConversationState(): void {
-  if (!localStatePath) {
-    return;
-  }
+function messagesFromStoredConversation(messages: unknown[]): ProviderChatMessage[] {
+  return messages.filter(isProviderChatMessage).slice(-maxConversationMessages);
+}
 
+function loadConversationState(): void {
   try {
-    const parsed = JSON.parse(readFileSync(localStatePath, "utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return;
-    }
-    for (const [conversationId, state] of Object.entries(parsed)) {
-      const messages = (state as { messages?: unknown }).messages;
-      if (Array.isArray(messages)) {
-        conversationState.set(conversationId, {
-          messages: messages.filter(isProviderChatMessage).slice(-maxConversationMessages),
-        });
-      }
+    const conversations = integrationStore.listAiConversations();
+    for (const conversation of conversations) {
+      conversationState.set(conversation.conversationId, {
+        messages: messagesFromStoredConversation(conversation.messages),
+      });
     }
     log("info", "conversation_state_loaded", {
-      path: localStatePath,
+      path: localGraphqlDbPath,
       conversationCount: conversationState.size,
     });
   } catch (error) {
     log("warn", "conversation_state_load_failed", {
-      path: localStatePath,
+      path: localGraphqlDbPath,
       message: error instanceof Error ? error.message : String(error),
     });
   }
 }
 
-function persistConversationState(): void {
-  if (!localStatePath) {
+function persistConversationState(conversationId: string): void {
+  const state = conversationState.get(conversationId);
+  if (!state) {
     return;
   }
 
   try {
-    writeFileSync(localStatePath, JSON.stringify(Object.fromEntries(conversationState), null, 2));
+    integrationStore.upsertAiConversation(conversationId, state.messages);
   } catch (error) {
     log("warn", "conversation_state_persist_failed", {
-      path: localStatePath,
+      path: localGraphqlDbPath,
+      conversationId,
       message: error instanceof Error ? error.message : String(error),
     });
   }
@@ -808,6 +802,15 @@ function stateForConversation(conversationId: string): { messages: ProviderChatM
   const existing = conversationState.get(conversationId);
   if (existing) {
     return existing;
+  }
+
+  const persisted = integrationStore.getAiConversation(conversationId);
+  if (persisted) {
+    const loaded = {
+      messages: messagesFromStoredConversation(persisted.messages),
+    };
+    conversationState.set(conversationId, loaded);
+    return loaded;
   }
 
   const created = { messages: [] };
@@ -864,7 +867,7 @@ function rememberProviderResponse(
       : {}),
   });
   trimConversationState(state);
-  persistConversationState();
+  persistConversationState(conversationId);
 }
 
 async function streamChatCompletion(params: {
@@ -1221,8 +1224,8 @@ server.listen(port, host, () => {
     hasOpenAiBaseUrlEnv: nonEmpty(process.env.OPENAI_BASE_URL) != null,
     hasOpenAiModelEnv: nonEmpty(process.env.OPENAI_MODEL) != null,
     hasModelAliasesEnv: nonEmpty(process.env.LOCAL_MODEL_ALIASES) != null,
-    hasLocalStatePath: localStatePath != null,
     localGraphqlDbPath,
+    conversationStateCount: conversationState.size,
     maxConversationMessages,
   });
 });
