@@ -1704,4 +1704,80 @@ mod tests {
             UpdatedCloudObjectsResult::UpdatedCloudObjectsOutput(_)
         ));
     }
+
+    #[test]
+    fn local_feature_model_choices_response_deserializes_into_rust_graphql_type() {
+        use warp_graphql::queries::get_feature_model_choices::{
+            GetFeatureModelChoices, UserResult,
+        };
+
+        let response = r#"{
+            "data": {
+                "user": {
+                    "__typename": "UserOutput",
+                    "user": {
+                        "workspaces": [{
+                            "featureModelChoice": {
+                                "agentMode": {
+                                    "defaultId": "local-model",
+                                    "preferredCodexModelId": null,
+                                    "choices": [{
+                                        "displayName": "local-model",
+                                        "baseModelName": "local-model",
+                                        "id": "local-model",
+                                        "reasoningLevel": null,
+                                        "usageMetadata": {
+                                            "requestMultiplier": 1,
+                                            "creditMultiplier": null
+                                        },
+                                        "description": null,
+                                        "disableReason": null,
+                                        "visionSupported": true,
+                                        "spec": null,
+                                        "provider": "UNKNOWN",
+                                        "hostConfigs": [{
+                                            "enabled": true,
+                                            "modelRoutingHost": "DIRECT_API"
+                                        }],
+                                        "pricing": {
+                                            "discountPercentage": null
+                                        }
+                                    }]
+                                },
+                                "planning": {
+                                    "defaultId": "local-model",
+                                    "preferredCodexModelId": null,
+                                    "choices": []
+                                },
+                                "coding": {
+                                    "defaultId": "local-model",
+                                    "preferredCodexModelId": null,
+                                    "choices": []
+                                },
+                                "cliAgent": {
+                                    "defaultId": "local-model",
+                                    "preferredCodexModelId": null,
+                                    "choices": []
+                                },
+                                "computerUseAgent": {
+                                    "defaultId": "local-model",
+                                    "preferredCodexModelId": null,
+                                    "choices": []
+                                }
+                            }
+                        }]
+                    }
+                }
+            }
+        }"#;
+
+        let parsed: cynic::GraphQlResponse<GetFeatureModelChoices> =
+            serde_json::from_str(response).expect("local service response should deserialize");
+
+        assert!(parsed.errors.is_none());
+        let data = parsed
+            .data
+            .expect("local service response should include data");
+        assert!(matches!(data.user, UserResult::UserOutput(_)));
+    }
 }
