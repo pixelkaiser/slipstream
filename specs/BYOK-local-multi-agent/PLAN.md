@@ -170,6 +170,8 @@ warp-build-oss:
 - [x] Decode `ReadFilesResult` inputs from Warp for follow-up requests.
 - [x] Emit `FileGlob`, `Grep`, `SearchCodebase`, `RunShellCommand`, `ApplyFileDiffs`, and `SuggestPlan` tool-call messages from OpenAI-compatible tool calls.
 - [x] Decode `FileGlob`, `Grep`, `SearchCodebase`, `RunShellCommand`, `ApplyFileDiffs`, `SuggestPlan`, and generic follow-up results from Warp for follow-up requests.
+- [x] Emit `ReadMCPResource` and `CallMCPTool` tool-call messages from OpenAI-compatible tool calls.
+- [x] Decode `ReadMCPResourceResult` and `CallMCPToolResult` follow-up results from Warp for provider context.
 - [x] Stream assistant output through message append actions.
 - [x] Emit `StreamFinished.Done` as the final successful event.
 - [x] Map provider authentication, quota, availability, context-window, and generic failures to Warp stream finish reasons.
@@ -359,3 +361,4 @@ End-to-end:
 - Verified `make warp-build-oss` completes and produces `target/debug/bundle/osx/WarpOss.app`.
 - Added `make warp-local-signing-identity` and local macOS build-script support for a stable self-signed `Warp Local Development` code-signing identity so debug app rebuilds do not have to fall back to ad-hoc signing.
 - Replaced optional JSON transcript persistence with an `ai_conversations` SQLite table in the same local database used by the GraphQL integration backend. The local service now reloads provider transcripts from SQLite on startup and the integration test validates conversation continuity across a service restart.
+- Added local MCP tool-call bridging: the service now advertises `read_mcp_resource` and `call_mcp_tool`, encodes them as Warp `ReadMCPResource` / `CallMCPTool` tool-call messages, and feeds the corresponding Warp results back into provider history.
