@@ -129,6 +129,7 @@ test("decodes the fields needed from a Warp request", () => {
       shouldCreateRootTask: false,
       prompt: "hello warp",
       toolResults: [],
+      mcpTools: [],
       openAiApiKey: "sk-testing",
       model: undefined,
     },

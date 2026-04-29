@@ -18,8 +18,14 @@ export type WarpRequestSummary = {
   contextText?: string;
   contextImages?: Array<{ data: string; mimeType: string }>;
   toolResults: WarpToolResult[];
+  mcpTools: McpToolSummary[];
   openAiApiKey?: string;
   model?: string;
+};
+
+export type McpToolSummary = {
+  name: string;
+  serverId?: string;
 };
 
 export type ReadFilesToolCallFile = {
@@ -656,13 +662,14 @@ function decodeReferencedAttachments(requestFields: ProtoField[]): string[] {
   return sections;
 }
 
-function decodeMcpContext(requestFields: ProtoField[]): string[] {
+function decodeMcpContext(requestFields: ProtoField[]): { sections: string[]; tools: McpToolSummary[] } {
   const mcpContext = message(field(requestFields, 6));
   if (!mcpContext.length) {
-    return [];
+    return { sections: [], tools: [] };
   }
 
   const sections: string[] = [];
+  const mcpTools: McpToolSummary[] = [];
   const legacyResources = fields(mcpContext, 1).flatMap((resourceField): string[] => {
     const resource = message(resourceField);
     const uri = stringValue(field(resource, 1));
@@ -674,6 +681,9 @@ function decodeMcpContext(requestFields: ProtoField[]): string[] {
     const tool = message(toolField);
     const name = stringValue(field(tool, 1));
     const description = stringValue(field(tool, 2));
+    if (name) {
+      mcpTools.push({ name });
+    }
     return name || description ? [`${name ?? "tool"}${description ? `: ${description}` : ""}`] : [];
   });
 
@@ -699,6 +709,12 @@ function decodeMcpContext(requestFields: ProtoField[]): string[] {
       const tool = message(toolField);
       const toolName = stringValue(field(tool, 1));
       const toolDescription = stringValue(field(tool, 2));
+      if (toolName) {
+        mcpTools.push({
+          name: toolName,
+          ...(id ? { serverId: id } : {}),
+        });
+      }
       return toolName || toolDescription ? [`${toolName ?? "tool"}${toolDescription ? `: ${toolDescription}` : ""}`] : [];
     });
     if (name || description || id || resources.length || tools.length) {
@@ -711,7 +727,7 @@ function decodeMcpContext(requestFields: ProtoField[]): string[] {
     }
   }
 
-  return sections;
+  return { sections, tools: mcpTools };
 }
 
 function decodeFileContent(fileContentFields: ProtoField[]): { filePath: string; content: string } | undefined {
@@ -1122,10 +1138,11 @@ export function decodeWarpRequest(bytes: Uint8Array): WarpRequestSummary {
   const decodedRootTaskId = decodeRootTaskId(requestFields);
   const toolResults = decodeToolResults(requestFields);
   const attachedContext = decodeAttachedContext(requestFields);
+  const mcpContext = decodeMcpContext(requestFields);
   const contextSections = [
     attachedContext.contextText,
     ...decodeReferencedAttachments(requestFields),
-    ...decodeMcpContext(requestFields),
+    ...mcpContext.sections,
   ].filter((section): section is string => Boolean(section));
   const contextText = contextSections.length ? contextSections.join("\n\n") : undefined;
 
@@ -1138,6 +1155,7 @@ export function decodeWarpRequest(bytes: Uint8Array): WarpRequestSummary {
     ...(contextText ? { contextText } : {}),
     ...(attachedContext.contextImages ? { contextImages: attachedContext.contextImages } : {}),
     toolResults,
+    mcpTools: mcpContext.tools,
     openAiApiKey,
     model,
   };
