@@ -15,6 +15,7 @@ import {
   encodeStreamFinishedLlmUnavailable,
   encodeStreamFinishedQuotaLimit,
   encodeStreamInit,
+  type McpToolSummary,
   type ReadFilesToolCallFile,
   type WarpToolCall,
 } from "./protobuf.js";
@@ -422,6 +423,22 @@ function localToolSchemas(): object[] {
   ];
 }
 
+function localToolUseSystemPrompt(mcpTools: McpToolSummary[]): string {
+  const mcpToolNames = [...new Set(mcpTools.map((tool) => tool.name))].sort();
+  const mcpToolText = mcpToolNames.length
+    ? `\nAvailable MCP tool names from request context include: ${mcpToolNames.join(", ")}.`
+    : "";
+
+  return [
+    "Use only the OpenAI function tools explicitly provided in this request.",
+    "To call any MCP tool, always use the provided call_mcp_tool function.",
+    "Do not emit provider tool calls named after MCP tools directly, such as list_issues or search_docs.",
+    "For call_mcp_tool, set name to the exact MCP tool name from the request context and pass the MCP tool arguments in args.",
+    "If the MCP context includes a server_id for the desired tool, include that server_id. This is required when multiple MCP servers expose the same tool name.",
+    mcpToolText,
+  ].join("\n");
+}
+
 function extractStreamingContent(payload: unknown): string {
   if (!payload || typeof payload !== "object") {
     return "";
@@ -695,7 +712,31 @@ function optionalObject(value: unknown): Record<string, unknown> | undefined {
   return undefined;
 }
 
-function parseToolCall(toolCall: ProviderToolCall): WarpToolCall | undefined {
+function parseNativeMcpToolCall(
+  toolCall: ProviderToolCall,
+  args: Record<string, unknown>,
+  mcpTools: McpToolSummary[],
+): WarpToolCall | undefined {
+  const matchingTools = mcpTools.filter((tool) => tool.name === toolCall.name);
+  if (matchingTools.length !== 1) {
+    return undefined;
+  }
+
+  const serverId = matchingTools[0]?.serverId;
+  const singleArgsObject = Object.keys(args).length === 1 ? optionalObject(args.args) : undefined;
+
+  return {
+    toolCallId: toolCall.id,
+    tool: {
+      type: "call_mcp_tool",
+      name: toolCall.name,
+      ...(serverId ? { serverId } : {}),
+      args: singleArgsObject ?? args,
+    },
+  };
+}
+
+function parseToolCall(toolCall: ProviderToolCall, mcpTools: McpToolSummary[] = []): WarpToolCall | undefined {
   const args = JSON.parse(toolCall.argumentsText || "{}") as Record<string, unknown>;
 
   switch (toolCall.name) {
@@ -891,7 +932,7 @@ function parseToolCall(toolCall: ProviderToolCall): WarpToolCall | undefined {
       };
     }
     default:
-      return undefined;
+      return parseNativeMcpToolCall(toolCall, args, mcpTools);
   }
 }
 
@@ -1170,6 +1211,7 @@ async function streamChatCompletion(params: {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  mcpTools?: McpToolSummary[];
   onContentChunk?: (chunk: string) => void;
 }): Promise<ProviderResponse> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
@@ -1198,13 +1240,16 @@ async function streamChatCompletion(params: {
     baseUrlSource: nonEmpty(params.baseUrl) ? "request_header" : nonEmpty(process.env.OPENAI_BASE_URL) ? "env" : "default",
   });
 
-  const messages: ProviderChatMessage[] = [
-    process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT
-      ? { role: "system" as const, content: process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT }
-      : undefined,
-    ...params.messages,
-  ].filter((message): message is ProviderChatMessage => message != null);
   const tools = shouldEnableTools() ? localToolSchemas() : undefined;
+  const systemMessages = [
+    tools ? localToolUseSystemPrompt(params.mcpTools ?? []) : undefined,
+    process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT,
+  ].filter((content): content is string => Boolean(content?.trim()))
+    .map((content): ProviderChatMessage => ({ role: "system", content }));
+  const messages: ProviderChatMessage[] = [
+    ...systemMessages,
+    ...params.messages,
+  ];
 
   const requestBody = {
     model,
@@ -1374,6 +1419,7 @@ async function handleMultiAgent(
         apiKey: warpRequest.openAiApiKey,
         baseUrl: requestOpenAiBaseUrl,
         model: warpRequest.model,
+        mcpTools: warpRequest.mcpTools,
         onContentChunk: (chunk) => {
           if (!streamedAgentOutput) {
             streamedAgentOutput = true;
@@ -1421,7 +1467,7 @@ async function handleMultiAgent(
       }
 
       for (const toolCall of providerResponse.toolCalls) {
-        const parsedToolCall = parseToolCall(toolCall);
+        const parsedToolCall = parseToolCall(toolCall, warpRequest.mcpTools);
         if (!parsedToolCall) {
           throw new LocalAgentError(`Unsupported provider tool call: ${toolCall.name}`);
         }
