@@ -25,6 +25,7 @@ Set these environment variables before starting the service:
 - `LOCAL_MODEL_ALIASES` optionally maps Warp model IDs to provider model IDs as JSON. Built-in aliases map `auto`, `auto-efficient`, `auto-coding`, and `auto-reasoning` to `Qwen/Qwen3.6-27B-FP8`.
 - `LOCAL_ENABLE_TOOLS=false` disables local tool-call advertisement. Tools are enabled by default.
 - `LOCAL_MAX_HISTORY_MESSAGES` limits in-memory provider transcript messages per conversation. Defaults to `80`.
+- `LOCAL_MODEL_CONTEXT_TOKENS` optionally provides context-window sizes when `/models` does not expose them. It accepts either a single token count or a JSON object keyed by provider model ID, for example `{"Qwen/Qwen3.6-27B-FP8":262144,"default":131072}`. Without provider metadata or an override, the service uses 128k tokens as the default context window.
 - `LOCAL_GRAPHQL_DB_PATH` sets the SQLite path for local integration GraphQL config and AI conversation transcripts. Defaults to `./local-graphql.sqlite` from this package.
 - `LOG_LEVEL` defaults to `info`; use `debug` to log individual SSE events.
 - `PORT` defaults to `8787`
@@ -61,13 +62,15 @@ For Linux hosts, replace `host.docker.internal` with an address reachable from t
 
 ## Behavior
 
-Supported tool-call names are `read_files`, `file_glob`, `grep`, `search_codebase`, `run_shell_command`, `apply_file_diffs`, and `suggest_plan`. Warp executes the tool call locally and sends the result back to this service on the next request.
+Supported tool-call names are `read_files`, `file_glob`, `grep`, `search_codebase`, `run_shell_command`, `apply_file_diffs`, `suggest_plan`, `read_mcp_resource`, and `call_mcp_tool`. Warp executes the tool call locally and sends the result back to this service on the next request.
 
 The service keeps OpenAI-compatible chat history per Warp conversation ID, including assistant tool calls and tool results. Active conversations are cached in memory and persisted to SQLite so restarts can continue with prior provider context.
 
 For user prompts, the service also forwards supported Warp input context to the provider. This currently includes selected text, referenced attachments, attached executed shell command blocks, running command snapshots, attached text files, images, current directory, OS/shell/time, git metadata, codebase/project-rule summaries, skills, LSP server summaries, and MCP server/resource/tool summaries.
 
 The service logs JSON lines for startup, HTTP requests, Warp multi-agent requests, provider requests, errors, and completion summaries. API keys and authorization-like fields are redacted.
+
+When the provider's OpenAI-compatible `/models` response includes a context-window field such as `context_length`, `max_context_length`, `max_model_len`, `max_sequence_length`, or `n_ctx`, the service estimates local conversation context usage and sends it to Warp in `StreamFinished.conversation_usage_metadata`. Providers are not required to return this metadata, so the service falls back to known local model defaults, then 128k tokens, unless `LOCAL_MODEL_CONTEXT_TOKENS` is set.
 
 ## Protobufs
 

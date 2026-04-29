@@ -381,6 +381,38 @@ test("decodes additional tool call results as generic provider content", () => {
       error: undefined,
     },
   ]);
+
+  const mcpResourceContent = Buffer.concat([
+    stringField(1, "mcp://local/resource"),
+    lengthDelimitedField(2, stringField(1, "resource text")),
+  ]);
+  const readMcpResource = Buffer.concat([
+    stringField(1, "call-mcp-resource"),
+    lengthDelimitedField(11, lengthDelimitedField(1, lengthDelimitedField(1, mcpResourceContent))),
+  ]);
+  assert.deepEqual(decodeWarpRequest(toolResultRequest(readMcpResource)).toolResults, [
+    {
+      type: "generic",
+      toolCallId: "call-mcp-resource",
+      name: "read_mcp_resource",
+      content: "Resource: mcp://local/resource\nresource text",
+      error: undefined,
+    },
+  ]);
+
+  const callMcpTool = Buffer.concat([
+    stringField(1, "call-mcp-tool"),
+    lengthDelimitedField(12, lengthDelimitedField(1, lengthDelimitedField(1, lengthDelimitedField(1, stringField(1, "tool text"))))),
+  ]);
+  assert.deepEqual(decodeWarpRequest(toolResultRequest(callMcpTool)).toolResults, [
+    {
+      type: "generic",
+      toolCallId: "call-mcp-tool",
+      name: "call_mcp_tool",
+      content: "tool text",
+      error: undefined,
+    },
+  ]);
 });
 
 test("encodes response events as protobuf payloads", () => {
@@ -448,8 +480,24 @@ test("encodes response events as protobuf payloads", () => {
       toolCallId: "call-plan",
       tool: { type: "suggest_plan", summary: "plan", tasks: [{ description: "Do work" }] },
     }),
+    encodeAddToolCall({
+      messageId: "message",
+      taskId: "root",
+      requestId: "request",
+      toolCallId: "call-mcp-resource",
+      tool: { type: "read_mcp_resource", uri: "mcp://local/resource", serverId: "local-server" },
+    }),
+    encodeAddToolCall({
+      messageId: "message",
+      taskId: "root",
+      requestId: "request",
+      toolCallId: "call-mcp-tool",
+      tool: { type: "call_mcp_tool", name: "list_items", serverId: "local-server", args: { limit: 2 } },
+    }),
   ];
   assert.ok(otherToolCalls.every((encoded) => encoded.length > 0));
+  assert.ok(Buffer.from(otherToolCalls.at(-2) ?? []).includes("mcp://local/resource"));
+  assert.ok(Buffer.from(otherToolCalls.at(-1) ?? []).includes("list_items"));
 });
 
 test("encodes streaming agent output append events with the text field mask", () => {
