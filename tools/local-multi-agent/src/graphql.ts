@@ -1,5 +1,11 @@
 import { defaultModel } from "./model.js";
-import type { IntegrationConfigPatch, IntegrationRecord, IntegrationStore } from "./integrationStore.js";
+import type {
+  GenericStringObjectInput,
+  GenericStringObjectRecord,
+  IntegrationConfigPatch,
+  IntegrationRecord,
+  IntegrationStore,
+} from "./integrationStore.js";
 
 export type GraphqlResult = {
   status: number;
@@ -142,6 +148,9 @@ function inferOperationName(request: GraphqlRequest, opFromQueryString?: string 
   for (const candidate of [
     "createSimpleIntegration",
     "simpleIntegrations",
+    "createGenericStringObject",
+    "updateGenericStringObject",
+    "bulkCreateObjects",
     "getOAuthConnectTxStatus",
     "getIntegrationsUsingEnvironment",
     "userGithubInfo",
@@ -199,6 +208,15 @@ function canonicalOperationName(name: string): string {
     case "getUpdatedCloudObjects":
     case "updatedCloudObjects":
       return "updatedCloudObjects";
+    case "CreateGenericStringObject":
+    case "createGenericStringObject":
+      return "createGenericStringObject";
+    case "UpdateGenericStringObject":
+    case "updateGenericStringObject":
+      return "updateGenericStringObject";
+    case "BulkCreateObjects":
+    case "bulkCreateObjects":
+      return "bulkCreateObjects";
     case "GetFeatureModelChoices":
     case "getFeatureModelChoices":
     case "featureModelChoice":
@@ -663,7 +681,146 @@ function getConversationUsage(): unknown {
   };
 }
 
-function getUpdatedCloudObjects(): unknown {
+const localUserUid = "local-user";
+
+function responseContext(): { serverVersion: string } {
+  return { serverVersion: "local" };
+}
+
+function genericStringObjectInputFromValue(value: unknown): GenericStringObjectInput {
+  const object = asObject(value);
+  const clientId = optionalString(valueAt(object, "clientId", "client_id"));
+  const format = requiredString(valueAt(object, "format"), "genericStringObject.format");
+  const serializedModel = requiredString(
+    valueAt(object, "serializedModel", "serialized_model"),
+    "genericStringObject.serializedModel",
+  );
+  const uniquenessKey = asObject(valueAt(object, "uniquenessKey", "uniqueness_key"));
+
+  return {
+    clientId,
+    format,
+    serializedModel,
+    uniquenessKey: Object.keys(uniquenessKey).length > 0
+      ? {
+          key: requiredString(valueAt(uniquenessKey, "key"), "genericStringObject.uniquenessKey.key"),
+          uniquePer: requiredString(valueAt(uniquenessKey, "uniquePer", "unique_per"), "genericStringObject.uniquenessKey.uniquePer"),
+        }
+      : null,
+  };
+}
+
+function objectMetadata(record: GenericStringObjectRecord): unknown {
+  return {
+    __typename: "ObjectMetadata",
+    creatorUid: localUserUid,
+    currentEditorUid: null,
+    isWelcomeObject: false,
+    lastEditorUid: localUserUid,
+    metadataLastUpdatedTs: record.metadataLastUpdatedTs,
+    parent: {
+      __typename: "Space",
+      type: "User",
+      uid: localUserUid,
+    },
+    revisionTs: record.revisionTs,
+    trashedTs: null,
+    uid: record.uid,
+  };
+}
+
+function objectPermissions(record: GenericStringObjectRecord): unknown {
+  return {
+    __typename: "ObjectPermissions",
+    anyoneLinkSharing: null,
+    guests: [],
+    lastUpdatedTs: record.permissionsLastUpdatedTs,
+    space: {
+      __typename: "Space",
+      type: "User",
+      uid: localUserUid,
+    },
+  };
+}
+
+function genericStringObjectPayload(record: GenericStringObjectRecord): unknown {
+  return {
+    __typename: "GenericStringObject",
+    format: record.format,
+    metadata: objectMetadata(record),
+    permissions: objectPermissions(record),
+    serializedModel: record.serializedModel,
+  };
+}
+
+function createGenericStringObjectOutput(record: GenericStringObjectRecord): unknown {
+  return {
+    __typename: "CreateGenericStringObjectOutput",
+    clientId: record.clientId ?? record.uid,
+    genericStringObject: genericStringObjectPayload(record),
+    responseContext: responseContext(),
+    revisionTs: record.revisionTs,
+  };
+}
+
+function createGenericStringObject(store: IntegrationStore, variables: Record<string, unknown>): unknown {
+  const input = inputOf(variables);
+  const record = store.createGenericStringObject(
+    genericStringObjectInputFromValue(valueAt(input, "genericStringObject", "generic_string_object")),
+  );
+
+  return {
+    data: {
+      createGenericStringObject: createGenericStringObjectOutput(record),
+    },
+  };
+}
+
+function bulkCreateObjects(store: IntegrationStore, variables: Record<string, unknown>): unknown {
+  const input = inputOf(variables);
+  const genericStringObjects = asObject(valueAt(input, "genericStringObjects", "generic_string_objects"));
+  const objects = valueAt(genericStringObjects, "objects");
+  if (!Array.isArray(objects)) {
+    throw new Error("input.genericStringObjects.objects is required");
+  }
+
+  const records = store.bulkCreateGenericStringObjects(objects.map(genericStringObjectInputFromValue));
+  return {
+    data: {
+      bulkCreateObjects: {
+        __typename: "BulkCreateObjectsOutput",
+        genericStringObjects: {
+          __typename: "BulkCreateGenericStringObjectsOutput",
+          objects: records.map(createGenericStringObjectOutput),
+        },
+        responseContext: responseContext(),
+      },
+    },
+  };
+}
+
+function updateGenericStringObject(store: IntegrationStore, variables: Record<string, unknown>): unknown {
+  const input = inputOf(variables);
+  const uid = requiredString(valueAt(input, "uid"), "uid");
+  const serializedModel = requiredString(valueAt(input, "serializedModel", "serialized_model"), "serializedModel");
+  const record = store.updateGenericStringObject(uid, serializedModel);
+
+  return {
+    data: {
+      updateGenericStringObject: {
+        __typename: "UpdateGenericStringObjectOutput",
+        responseContext: responseContext(),
+        update: {
+          __typename: "ObjectUpdateSuccess",
+          lastEditorUid: localUserUid,
+          revisionTs: record.revisionTs,
+        },
+      },
+    },
+  };
+}
+
+function getUpdatedCloudObjects(store: IntegrationStore): unknown {
   return {
     data: {
       updatedCloudObjects: {
@@ -676,12 +833,10 @@ function getUpdatedCloudObjects(): unknown {
           workflowUids: [],
         },
         folders: [],
-        genericStringObjects: [],
+        genericStringObjects: store.listGenericStringObjects().map(genericStringObjectPayload),
         mcpGallery: [],
         notebooks: [],
-        responseContext: {
-          serverVersion: "local",
-        },
+        responseContext: responseContext(),
         userProfiles: [],
         workflows: [],
       },
@@ -752,8 +907,14 @@ export async function handleLocalGraphqlRequest(
         return { status: 200, payload: userRepoAuthStatus(variables) };
       case "suggestCloudEnvironmentImage":
         return { status: 200, payload: suggestCloudEnvironmentImage() };
+      case "createGenericStringObject":
+        return { status: 200, payload: createGenericStringObject(store, variables) };
+      case "updateGenericStringObject":
+        return { status: 200, payload: updateGenericStringObject(store, variables) };
+      case "bulkCreateObjects":
+        return { status: 200, payload: bulkCreateObjects(store, variables) };
       case "updatedCloudObjects":
-        return { status: 200, payload: getUpdatedCloudObjects() };
+        return { status: 200, payload: getUpdatedCloudObjects(store) };
       case "featureModelChoice":
         return { status: 200, payload: await getFeatureModelChoices() };
       case "freeAvailableModels":

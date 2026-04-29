@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 
 export type IntegrationConfigPatch = {
   basePrompt?: string | null;
@@ -35,6 +36,25 @@ export type AiConversationRecord = {
   updatedAt: string;
 };
 
+export type GenericStringObjectInput = {
+  clientId?: string | null;
+  format: string;
+  serializedModel: string;
+  uniquenessKey?: { key: string; uniquePer: string } | null;
+};
+
+export type GenericStringObjectRecord = {
+  uid: string;
+  clientId: string | null;
+  format: string;
+  serializedModel: string;
+  revisionTs: string;
+  metadataLastUpdatedTs: string;
+  permissionsLastUpdatedTs: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type IntegrationRow = {
   provider_slug: string;
   enabled: 0 | 1;
@@ -50,6 +70,18 @@ type IntegrationRow = {
 type AiConversationRow = {
   conversation_id: string;
   messages_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type GenericStringObjectRow = {
+  uid: string;
+  client_id: string | null;
+  format: string;
+  serialized_model: string;
+  revision_ts: string;
+  metadata_last_updated_ts: string;
+  permissions_last_updated_ts: string;
   created_at: string;
   updated_at: string;
 };
@@ -96,6 +128,28 @@ function rowToAiConversationRecord(row: AiConversationRow): AiConversationRecord
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function rowToGenericStringObjectRecord(row: GenericStringObjectRow): GenericStringObjectRecord {
+  return {
+    uid: row.uid,
+    clientId: row.client_id,
+    format: row.format,
+    serializedModel: row.serialized_model,
+    revisionTs: row.revision_ts,
+    metadataLastUpdatedTs: row.metadata_last_updated_ts,
+    permissionsLastUpdatedTs: row.permissions_last_updated_ts,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function normalizeGenericStringObjectFormat(value: string): string {
+  const format = value.trim();
+  if (!format) {
+    throw new Error("generic string object format is required");
+  }
+  return format;
 }
 
 function applyNullableString(current: string | null, next: string | null | undefined, isUpdate: boolean): string | null {
@@ -158,6 +212,19 @@ export class IntegrationStore {
       CREATE TABLE IF NOT EXISTS ai_conversations (
         conversation_id TEXT PRIMARY KEY NOT NULL,
         messages_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS generic_string_objects (
+        uid TEXT PRIMARY KEY NOT NULL,
+        client_id TEXT,
+        format TEXT NOT NULL,
+        serialized_model TEXT NOT NULL,
+        revision_ts TEXT NOT NULL,
+        metadata_last_updated_ts TEXT NOT NULL,
+        permissions_last_updated_ts TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -304,5 +371,98 @@ export class IntegrationStore {
       .prepare("SELECT * FROM ai_conversations ORDER BY updated_at ASC")
       .all() as AiConversationRow[];
     return rows.map(rowToAiConversationRecord);
+  }
+
+  createGenericStringObject(input: GenericStringObjectInput): GenericStringObjectRecord {
+    const now = new Date().toISOString();
+    const record: GenericStringObjectRecord = {
+      uid: `local-gso-${randomUUID()}`,
+      clientId: input.clientId ?? null,
+      format: normalizeGenericStringObjectFormat(input.format),
+      serializedModel: input.serializedModel,
+      revisionTs: now,
+      metadataLastUpdatedTs: now,
+      permissionsLastUpdatedTs: now,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    this.db.prepare(`
+      INSERT INTO generic_string_objects (
+        uid,
+        client_id,
+        format,
+        serialized_model,
+        revision_ts,
+        metadata_last_updated_ts,
+        permissions_last_updated_ts,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        @uid,
+        @clientId,
+        @format,
+        @serializedModel,
+        @revisionTs,
+        @metadataLastUpdatedTs,
+        @permissionsLastUpdatedTs,
+        @createdAt,
+        @updatedAt
+      )
+    `).run(record);
+
+    return record;
+  }
+
+  bulkCreateGenericStringObjects(inputs: readonly GenericStringObjectInput[]): GenericStringObjectRecord[] {
+    const createMany = this.db.transaction((objects: readonly GenericStringObjectInput[]) => {
+      return objects.map((object) => this.createGenericStringObject(object));
+    });
+    return createMany(inputs) as GenericStringObjectRecord[];
+  }
+
+  updateGenericStringObject(uid: string, serializedModel: string): GenericStringObjectRecord {
+    const existing = this.getGenericStringObject(uid);
+    if (!existing) {
+      throw new Error(`generic string object not found: ${uid}`);
+    }
+
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE generic_string_objects
+      SET
+        serialized_model = @serializedModel,
+        revision_ts = @revisionTs,
+        metadata_last_updated_ts = @metadataLastUpdatedTs,
+        updated_at = @updatedAt
+      WHERE uid = @uid
+    `).run({
+      uid,
+      serializedModel,
+      revisionTs: now,
+      metadataLastUpdatedTs: now,
+      updatedAt: now,
+    });
+
+    const updated = this.getGenericStringObject(uid);
+    if (!updated) {
+      throw new Error(`generic string object disappeared after update: ${uid}`);
+    }
+    return updated;
+  }
+
+  getGenericStringObject(uid: string): GenericStringObjectRecord | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM generic_string_objects WHERE uid = ?")
+      .get(uid) as GenericStringObjectRow | undefined;
+    return row ? rowToGenericStringObjectRecord(row) : undefined;
+  }
+
+  listGenericStringObjects(): GenericStringObjectRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM generic_string_objects ORDER BY created_at ASC, uid ASC")
+      .all() as GenericStringObjectRow[];
+    return rows.map(rowToGenericStringObjectRecord);
   }
 }
