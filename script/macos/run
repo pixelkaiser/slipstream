@@ -127,8 +127,23 @@ if [[ ",$FEATURES," =~ ",heap_usage_tracking," ]]; then
 fi
 
 echo "Codesigning app..."
-SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
-codesign --force --deep --options runtime --sign "${SIGNING_CERT:--}" "$WARP_APP_PATH" --entitlements script/Debug-Entitlements.plist
+LOCAL_SIGNING_NAME="${WARP_LOCAL_CODESIGN_IDENTITY_NAME:-Warp Local Development}"
+if [ -n "${WARP_CODESIGN_IDENTITY:-}" ]; then
+  SIGNING_CERT="$WARP_CODESIGN_IDENTITY"
+elif SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)" && [ -n "$SIGNING_CERT" ]; then
+  :
+else
+  SIGNING_CERT="$(security find-identity -p codesigning -v | awk -v name="$LOCAL_SIGNING_NAME" 'index($0, "\"" name "\"") > 0 {print $2; exit}')"
+fi
+
+if [ -z "$SIGNING_CERT" ]; then
+  SIGNING_CERT="-"
+  echo "Warning: no valid code-signing identity found; using ad-hoc signing." >&2
+  echo "Run 'make warp-local-signing-identity' to create a stable local signing identity." >&2
+else
+  echo "Using code-signing identity: $SIGNING_CERT"
+fi
+codesign --force --deep --options runtime --sign "$SIGNING_CERT" "$WARP_APP_PATH" --entitlements script/Debug-Entitlements.plist
 
 if [ "$DONT_OPEN" = false ] ; then
     if  [ "$OPEN_WITH_LAUNCHD" = true ]; then
