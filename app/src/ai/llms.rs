@@ -17,7 +17,7 @@ use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
 use crate::network::{NetworkStatus, NetworkStatusEvent, NetworkStatusKind};
 use crate::report_error;
-use crate::server::server_api::ServerApiProvider;
+use crate::server::server_api::{no_cloud_mode_enabled, ServerApiProvider};
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::workspaces::user_workspaces::{UserWorkspaces, UserWorkspacesEvent};
 
@@ -652,14 +652,17 @@ impl LLMPreferences {
             me.rebuild_custom_model_routers(ctx);
         }
 
-        // In agent mode eval builds, eagerly kick off a fetch of the model list from the server
-        // so that it's available by the time test steps like `set_preferred_agent_mode_llm` run.
-        // In production, this is handled reactively (on auth complete, network online, etc.)
-        // to avoid duplicate requests at startup.
-        #[cfg(feature = "agent_mode_evals")]
-        me.refresh_available_models(ctx);
+        // In agent mode eval and no-cloud builds, eagerly kick off a fetch of the model list.
+        // Normal cloud mode handles this reactively on auth complete, network online, etc.
+        if Self::should_refresh_models_on_init() {
+            me.refresh_available_models(ctx);
+        }
 
         me
+    }
+
+    fn should_refresh_models_on_init() -> bool {
+        cfg!(feature = "agent_mode_evals") || no_cloud_mode_enabled()
     }
 
     /// Returns the `LLMInfo` for the base LLM to be used for an Agent Mode request.
