@@ -58,3 +58,6 @@ desired_behavior.md
 
 # Don't include the python cache for bundled skills.
 __pycache__/
+
+# Local tool service runtime artifacts.
+tools/local-multi-agent/*.log
