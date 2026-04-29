@@ -287,6 +287,18 @@ test("accepts Rust generated GraphQL operation names from operationName and op q
       variables: {},
     }, store)) as { user?: { __typename?: string } };
     assert.equal(modelChoicesData.user?.__typename, "UserOutput");
+
+    const userSettingsData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "GetUserSettings",
+      variables: {},
+    }, store)) as { user?: { user?: { settings?: { isTelemetryEnabled?: boolean } } } };
+    assert.equal(userSettingsData.user?.user?.settings?.isTelemetryEnabled, false);
+
+    const conversationUsageData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "GetConversationUsage",
+      variables: {},
+    }, store)) as { user?: { user?: { conversationUsage?: unknown[] } } };
+    assert.deepEqual(conversationUsageData.user?.user?.conversationUsage, []);
   });
 });
 
@@ -332,8 +344,8 @@ test("populates local model choices from the configured v1/models endpoint", asy
         const agentMode = user.user?.workspaces?.[0]?.featureModelChoice?.agentMode;
         assert.equal(agentMode?.defaultId, "local-qwen");
         assert.deepEqual(agentMode?.choices?.map((choice) => choice.id), ["local-qwen", "local-coder"]);
-        assert.equal(agentMode?.choices?.[0]?.provider, "Unknown");
-        assert.equal(agentMode?.choices?.[0]?.hostConfigs?.[0]?.modelRoutingHost, "DirectApi");
+        assert.equal(agentMode?.choices?.[0]?.provider, "UNKNOWN");
+        assert.equal(agentMode?.choices?.[0]?.hostConfigs?.[0]?.modelRoutingHost, "DIRECT_API");
         assert.equal(authHeader, "Bearer sk-local-test");
 
         const freeData = await dataOf(handleLocalGraphqlRequest({
@@ -386,11 +398,17 @@ test("uses query string operation name and rejects unsupported operations", asyn
     }, store, "SimpleIntegrations");
     await expectOk(ok);
 
-    const unsupported = await handleLocalGraphqlRequest({
+    const user = await dataOf(handleLocalGraphqlRequest({
       operationName: "GetUser",
+      variables: {},
+    }, store));
+    assert.equal((user.user as { __typename?: string }).__typename, "UserOutput");
+
+    const unsupported = await handleLocalGraphqlRequest({
+      operationName: "UnsupportedOperation",
       variables: {},
     }, store);
     assert.equal(unsupported.status, 400);
-    assert.match(JSON.stringify(unsupported.payload), /unsupported_operation: GetUser/);
+    assert.match(JSON.stringify(unsupported.payload), /unsupported_operation: UnsupportedOperation/);
   });
 });
