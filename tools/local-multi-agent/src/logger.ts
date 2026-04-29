@@ -1,3 +1,7 @@
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
 type LogLevel = "debug" | "info" | "warn" | "error";
 
 const logLevelPriority: Record<LogLevel, number> = {
@@ -30,6 +34,15 @@ function sanitize(fields: Record<string, unknown>): Record<string, unknown> {
   );
 }
 
+export function logFilePath(): string | undefined {
+  const configured = process.env.LOCAL_SERVICE_LOG_PATH?.trim();
+  if (configured === "false" || configured === "off" || configured === "0") {
+    return undefined;
+  }
+
+  return configured || fileURLToPath(new URL("../local-service.log", import.meta.url));
+}
+
 export function log(level: LogLevel, event: string, fields: Record<string, unknown> = {}): void {
   if (!shouldLog(level)) {
     return;
@@ -49,5 +62,22 @@ export function log(level: LogLevel, event: string, fields: Record<string, unkno
     console.warn(line);
   } else {
     console.log(line);
+  }
+
+  const path = logFilePath();
+  if (path) {
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      appendFileSync(path, `${line}\n`, "utf8");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "error",
+        event: "log_file_write_failed",
+        path,
+        message,
+      }));
+    }
   }
 }

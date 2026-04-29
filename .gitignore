@@ -61,3 +61,6 @@ __pycache__/
 
 # Project notes
 .note/
+
+# Local tool service runtime artifacts.
+tools/local-multi-agent/*.log
