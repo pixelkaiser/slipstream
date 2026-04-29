@@ -386,6 +386,52 @@ test("persists generic string MCP server objects through local GraphQL cloud-obj
   });
 });
 
+test("upserts generic string objects when local mode receives update before create", async () => {
+  await withStore(async (store) => {
+    const uid = "client-known-mcp-object";
+    const serializedModel = JSON.stringify({
+      name: "updated-before-create",
+      uuid: "00000000-0000-0000-0000-000000000003",
+      transport_type: {
+        CLIServer: {
+          command: "node",
+          args: ["server.js"],
+          cwd_parameter: null,
+          static_env_vars: [],
+        },
+      },
+    });
+
+    const updateData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "UpdateGenericStringObject",
+      variables: {
+        input: {
+          revisionTs: "client-revision",
+          serializedModel,
+          uid,
+        },
+      },
+    }, store));
+    assert.equal(
+      (updateData.updateGenericStringObject as { update?: { __typename?: string } }).update?.__typename,
+      "ObjectUpdateSuccess",
+    );
+
+    const updatedObjects = (await dataOf(handleLocalGraphqlRequest({
+      operationName: "GetUpdatedCloudObjects",
+      variables: { input: { forceRefresh: true } },
+    }, store))).updatedCloudObjects as {
+      genericStringObjects?: Array<{ format?: string; metadata?: { uid?: string }; serializedModel?: string }>;
+    };
+    assert.deepEqual(updatedObjects.genericStringObjects?.map((object) => object.metadata?.uid), [uid]);
+    assert.equal(updatedObjects.genericStringObjects?.[0]?.format, "JsonMCPServer");
+    assert.equal(
+      JSON.parse(updatedObjects.genericStringObjects?.[0]?.serializedModel ?? "{}").name,
+      "updated-before-create",
+    );
+  });
+});
+
 test("accepts Rust generated GraphQL operation names from operationName and op query parameter", async () => {
   await withStore(async (store) => {
     const updatedObjectsData = await dataOf(handleLocalGraphqlRequest({
