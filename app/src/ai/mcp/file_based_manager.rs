@@ -28,10 +28,20 @@ pub struct FileBasedMCPManager {
     /// They are temporarily stored here and removed to emit FileBasedMCPManagerEvent::CloudEnvMcpScanComplete
     pending_scan_auto_started_servers_by_root:
         HashMap<PathBuf, HashMap<MCPProvider, HashSet<Uuid>>>,
+    /// File-based servers explicitly activated by the user. Keyed by stable installation UUIDs.
+    activated_file_based_server_uuids: HashSet<Uuid>,
 }
 
 impl FileBasedMCPManager {
+    #[allow(dead_code)]
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
+        Self::new_with_activated_servers(Vec::new(), ctx)
+    }
+
+    pub fn new_with_activated_servers(
+        activated_file_based_server_uuids: Vec<Uuid>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Self {
         if FeatureFlag::FileBasedMcp.is_enabled() {
             ctx.subscribe_to_model(&FileMCPWatcher::handle(ctx), |me, _, event, ctx| {
                 me.handle_watcher_event(event, ctx);
@@ -48,6 +58,9 @@ impl FileBasedMCPManager {
             file_based_servers: Default::default(),
             file_based_servers_by_root: Default::default(),
             pending_scan_auto_started_servers_by_root: Default::default(),
+            activated_file_based_server_uuids: activated_file_based_server_uuids
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -140,6 +153,12 @@ impl FileBasedMCPManager {
 
         // Notify the templatable manager to remove orphaned servers and purge their credentials.
         if !removed_servers.is_empty() {
+            for server in &removed_servers {
+                self.activated_file_based_server_uuids
+                    .remove(&server.uuid());
+                Self::persist_file_based_activation(server.uuid(), false, ctx);
+            }
+
             let removed_uuids = removed_servers
                 .iter()
                 .map(|server| server.uuid())
@@ -332,9 +351,12 @@ impl FileBasedMCPManager {
             let AutoStartDecision {
                 should_autostart, ..
             } = self.auto_start_decision(hash, mcp_enabled);
-            if should_autostart {
+            let is_activated = self
+                .activated_file_based_server_uuids
+                .contains(&installation_uuid);
+            if should_autostart || is_activated {
                 log::info!(
-                    "Auto-spawning file-based MCP server '{server_name}' ({installation_uuid})"
+                    "Spawning file-based MCP server '{server_name}' ({installation_uuid})"
                 );
                 auto_started_uuids.push(installation_uuid);
                 to_spawn.push(installation);
@@ -442,6 +464,61 @@ impl FileBasedMCPManager {
             .iter()
             .find(|(_, server)| server.uuid() == installation_uuid)
             .map(|(hash, _)| *hash)
+    }
+
+    pub fn set_server_activation(
+        &mut self,
+        installation_uuid: Uuid,
+        active: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if active {
+            let Some(installation) = self.get_installation_by_uuid(installation_uuid).cloned()
+            else {
+                log::warn!(
+                    "Cannot activate file-based server {installation_uuid}: installation not found"
+                );
+                return;
+            };
+
+            self.activated_file_based_server_uuids
+                .insert(installation_uuid);
+            Self::persist_file_based_activation(installation_uuid, true, ctx);
+            ctx.emit(FileBasedMCPManagerEvent::SpawnServers {
+                installations: vec![installation],
+            });
+        } else {
+            self.activated_file_based_server_uuids
+                .remove(&installation_uuid);
+            Self::persist_file_based_activation(installation_uuid, false, ctx);
+            ctx.emit(FileBasedMCPManagerEvent::DespawnServers {
+                installation_uuids: vec![installation_uuid],
+            });
+        }
+    }
+
+    fn persist_file_based_activation(
+        installation_uuid: Uuid,
+        active: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let global_resource_handles = crate::GlobalResourceHandlesProvider::as_ref(ctx).get();
+
+        let Some(sender) = &global_resource_handles.model_event_sender else {
+            return;
+        };
+
+        let event = if active {
+            crate::persistence::ModelEvent::UpsertFileBasedMCPServerActivation { installation_uuid }
+        } else {
+            crate::persistence::ModelEvent::DeleteFileBasedMCPServerActivations {
+                installation_uuids: vec![installation_uuid],
+            }
+        };
+
+        if let Err(err) = sender.send(event) {
+            log::error!("Failed to save file-based MCP server activation: {err}");
+        }
     }
 
     /// Returns all detected file-based MCP server installations.
