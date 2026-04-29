@@ -261,6 +261,7 @@ export class IntegrationStore {
         updated_at TEXT NOT NULL
       )
     `);
+    this.repairGenericStringObjectFormats();
   }
 
   close(): void {
@@ -537,5 +538,24 @@ export class IntegrationStore {
       .prepare("SELECT * FROM generic_string_objects ORDER BY created_at ASC, uid ASC")
       .all() as GenericStringObjectRow[];
     return rows.map(rowToGenericStringObjectRecord);
+  }
+
+  private repairGenericStringObjectFormats(): void {
+    const rows = this.db
+      .prepare("SELECT uid, format, serialized_model FROM generic_string_objects")
+      .all() as Array<Pick<GenericStringObjectRow, "uid" | "format" | "serialized_model">>;
+
+    const updateFormat = this.db.prepare(`
+      UPDATE generic_string_objects
+      SET format = @format
+      WHERE uid = @uid
+    `);
+
+    for (const row of rows) {
+      const inferredFormat = inferGenericStringObjectFormat(row.serialized_model);
+      if (inferredFormat && inferredFormat !== row.format) {
+        updateFormat.run({ uid: row.uid, format: inferredFormat });
+      }
+    }
   }
 }
