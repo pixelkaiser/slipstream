@@ -1,32 +1,79 @@
 import assert from "node:assert/strict";
+import http from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { handleLocalGraphqlRequest } from "./graphql.js";
 import { IntegrationStore } from "./integrationStore.js";
 
-function withStore(fn: (store: IntegrationStore) => void): void {
+async function withStore(fn: (store: IntegrationStore) => void | Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "warp-local-graphql-"));
   const store = new IntegrationStore(join(dir, "test.sqlite"));
   try {
-    fn(store);
+    await fn(store);
   } finally {
     store.close();
     rmSync(dir, { force: true, recursive: true });
   }
 }
 
-function dataOf(result: ReturnType<typeof handleLocalGraphqlRequest>): Record<string, unknown> {
-  assert.equal(result.status, 200);
-  const payload = result.payload as { data?: unknown };
+async function dataOf(result: ReturnType<typeof handleLocalGraphqlRequest>): Promise<Record<string, unknown>> {
+  const resolved = await result;
+  assert.equal(resolved.status, 200);
+  const payload = resolved.payload as { data?: unknown };
   assert.ok(payload.data);
   return payload.data as Record<string, unknown>;
 }
 
-test("creates and lists simple integrations with GraphQL response field names", () => {
-  withStore((store) => {
-    const createData = dataOf(handleLocalGraphqlRequest({
+async function listenOnLoopback(server: http.Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      assert.notEqual(typeof address, "string");
+      assert.ok(address);
+      resolve((address as AddressInfo).port);
+    });
+  });
+}
+
+async function closeServer(server: http.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function withEnv(env: Record<string, string | undefined>, fn: () => Promise<void>): Promise<void> {
+  const previous = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(env)) {
+    if (value == null) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  return fn().finally(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value == null) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  });
+}
+
+async function expectOk(result: ReturnType<typeof handleLocalGraphqlRequest>): Promise<void> {
+  const resolved = await result;
+  assert.equal(resolved.status, 200);
+}
+
+test("creates and lists simple integrations with GraphQL response field names", async () => {
+  await withStore(async (store) => {
+    const createData = await dataOf(handleLocalGraphqlRequest({
       operationName: "CreateSimpleIntegration",
       variables: {
         integration_type: "linear",
@@ -51,7 +98,7 @@ test("creates and lists simple integrations with GraphQL response field names", 
       txId: null,
     });
 
-    const listData = dataOf(handleLocalGraphqlRequest({
+    const listData = await dataOf(handleLocalGraphqlRequest({
       operationName: "SimpleIntegrations",
       variables: {
         input: { providers: ["linear", "slack"] },
@@ -89,8 +136,8 @@ test("creates and lists simple integrations with GraphQL response field names", 
   });
 });
 
-test("returns deterministic local helper responses", () => {
-  withStore((store) => {
+test("returns deterministic local helper responses", async () => {
+  await withStore(async (store) => {
     store.createOrUpdate({
       integrationType: "slack",
       isUpdate: false,
@@ -98,40 +145,40 @@ test("returns deterministic local helper responses", () => {
       config: { environmentUid: "env-slack" },
     });
 
-    assert.deepEqual(dataOf(handleLocalGraphqlRequest({
+    assert.deepEqual((await dataOf(handleLocalGraphqlRequest({
       operationName: "get_oauth_connect_tx_status",
       variables: { input: { txId: "tx-local" } },
-    }, store)).getOAuthConnectTxStatus, {
+    }, store))).getOAuthConnectTxStatus, {
       __typename: "GetOAuthConnectTxStatusOutput",
       status: "COMPLETED",
     });
 
-    assert.deepEqual(dataOf(handleLocalGraphqlRequest({
+    assert.deepEqual((await dataOf(handleLocalGraphqlRequest({
       operationName: "GetIntegrationsUsingEnvironment",
       variables: { input: { environment_id: "env-slack" } },
-    }, store)).getIntegrationsUsingEnvironment, {
+    }, store))).getIntegrationsUsingEnvironment, {
       __typename: "GetIntegrationsUsingEnvironmentOutput",
       providerNames: ["slack"],
     });
 
-    assert.deepEqual(dataOf(handleLocalGraphqlRequest({
+    assert.deepEqual((await dataOf(handleLocalGraphqlRequest({
       operationName: "user_github_info",
       variables: {},
-    }, store)).userGithubInfo, {
+    }, store))).userGithubInfo, {
       __typename: "GithubConnectedOutput",
       username: "local",
       installedRepos: [],
       appInstallLink: "",
     });
 
-    assert.deepEqual(dataOf(handleLocalGraphqlRequest({
+    assert.deepEqual((await dataOf(handleLocalGraphqlRequest({
       operationName: "user_repo_auth_status",
       variables: {
         input: {
           repos: [{ owner: "warpdotdev", repo: "warp" }],
         },
       },
-    }, store)).userRepoAuthStatus, {
+    }, store))).userRepoAuthStatus, {
       __typename: "UserRepoAuthStatusOutput",
       statuses: [{
         owner: "warpdotdev",
@@ -143,14 +190,14 @@ test("returns deterministic local helper responses", () => {
       txId: null,
     });
 
-    assert.deepEqual(dataOf(handleLocalGraphqlRequest({
+    assert.deepEqual((await dataOf(handleLocalGraphqlRequest({
       operationName: "suggest_cloud_environment_image",
       variables: {
         input: {
           repos: [{ owner: "warpdotdev", repo: "warp" }],
         },
       },
-    }, store)).suggestCloudEnvironmentImage, {
+    }, store))).suggestCloudEnvironmentImage, {
       __typename: "SuggestCloudEnvironmentImageOutput",
       detectedLanguages: [],
       image: "ubuntu:24.04",
@@ -163,9 +210,9 @@ test("returns deterministic local helper responses", () => {
   });
 });
 
-test("returns local no-cloud responses for startup cloud metadata operations", () => {
-  withStore((store) => {
-    assert.deepEqual(dataOf(handleLocalGraphqlRequest({
+test("returns local no-cloud responses for startup cloud metadata operations", async () => {
+  await withStore(async (store) => {
+    assert.deepEqual((await dataOf(handleLocalGraphqlRequest({
       operationName: "GetUpdatedCloudObjects",
       variables: {
         input: {
@@ -176,7 +223,7 @@ test("returns local no-cloud responses for startup cloud metadata operations", (
           workflows: [],
         },
       },
-    }, store)).updatedCloudObjects, {
+    }, store))).updatedCloudObjects, {
       __typename: "UpdatedCloudObjectsOutput",
       actionHistories: [],
       deletedObjectUids: {
@@ -196,7 +243,7 @@ test("returns local no-cloud responses for startup cloud metadata operations", (
       workflows: [],
     });
 
-    assert.deepEqual(dataOf(handleLocalGraphqlRequest({
+    assert.deepEqual(await dataOf(handleLocalGraphqlRequest({
       operationName: "GetWorkspacesMetadataForUser",
       variables: {},
     }, store)), {
@@ -222,14 +269,103 @@ test("returns local no-cloud responses for startup cloud metadata operations", (
   });
 });
 
-test("uses query string operation name and rejects unsupported operations", () => {
-  withStore((store) => {
+test("populates local model choices from the configured v1/models endpoint", async () => {
+  let authHeader: string | undefined;
+  const provider = http.createServer((_request, response) => {
+    authHeader = _request.headers.authorization;
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      object: "list",
+      data: [
+        { id: "local-qwen" },
+        { id: "local-coder" },
+      ],
+    }));
+  });
+  const port = await listenOnLoopback(provider);
+
+  try {
+    await withEnv({
+      OPENAI_API_KEY: "sk-local-test",
+      OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`,
+      OPENAI_MODEL: undefined,
+      LOCAL_MODEL_LIST: undefined,
+    }, async () => {
+      await withStore(async (store) => {
+        const data = await dataOf(handleLocalGraphqlRequest({
+          operationName: "GetFeatureModelChoices",
+          variables: {},
+        }, store));
+        const user = data.user as {
+          user?: {
+            workspaces?: Array<{
+              featureModelChoice?: {
+                agentMode?: {
+                  defaultId?: string;
+                  choices?: Array<{ id?: string; provider?: string; hostConfigs?: Array<{ modelRoutingHost?: string }> }>;
+                };
+              };
+            }>;
+          };
+        };
+        const agentMode = user.user?.workspaces?.[0]?.featureModelChoice?.agentMode;
+        assert.equal(agentMode?.defaultId, "local-qwen");
+        assert.deepEqual(agentMode?.choices?.map((choice) => choice.id), ["local-qwen", "local-coder"]);
+        assert.equal(agentMode?.choices?.[0]?.provider, "Unknown");
+        assert.equal(agentMode?.choices?.[0]?.hostConfigs?.[0]?.modelRoutingHost, "DirectApi");
+        assert.equal(authHeader, "Bearer sk-local-test");
+
+        const freeData = await dataOf(handleLocalGraphqlRequest({
+          operationName: "FreeAvailableModels",
+          variables: { input: {} },
+        }, store));
+        const freeAvailableModels = freeData.freeAvailableModels as {
+          featureModelChoice?: { coding?: { choices?: Array<{ id?: string }> } };
+        };
+        assert.deepEqual(
+          freeAvailableModels.featureModelChoice?.coding?.choices?.map((choice) => choice.id),
+          ["local-qwen", "local-coder"],
+        );
+      });
+    });
+  } finally {
+    await closeServer(provider);
+  }
+});
+
+test("falls back to local configured model when v1/models is unavailable", async () => {
+  await withEnv({
+    OPENAI_BASE_URL: "http://127.0.0.1:1/v1",
+    OPENAI_MODEL: "fallback-model",
+    LOCAL_MODEL_LIST: undefined,
+  }, async () => {
+    await withStore(async (store) => {
+      const data = await dataOf(handleLocalGraphqlRequest({
+        operationName: "GetFeatureModelChoices",
+        variables: {},
+      }, store));
+      const user = data.user as {
+        user?: {
+          workspaces?: Array<{
+            featureModelChoice?: { agentMode?: { defaultId?: string; choices?: Array<{ id?: string }> } };
+          }>;
+        };
+      };
+      const agentMode = user.user?.workspaces?.[0]?.featureModelChoice?.agentMode;
+      assert.equal(agentMode?.defaultId, "fallback-model");
+      assert.deepEqual(agentMode?.choices?.map((choice) => choice.id), ["fallback-model"]);
+    });
+  });
+});
+
+test("uses query string operation name and rejects unsupported operations", async () => {
+  await withStore(async (store) => {
     const ok = handleLocalGraphqlRequest({
       variables: { input: { providers: ["linear"] } },
     }, store, "SimpleIntegrations");
-    assert.equal(ok.status, 200);
+    await expectOk(ok);
 
-    const unsupported = handleLocalGraphqlRequest({
+    const unsupported = await handleLocalGraphqlRequest({
       operationName: "GetUser",
       variables: {},
     }, store);
