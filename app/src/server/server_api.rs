@@ -63,6 +63,8 @@ use crate::settings::PrivacySettingsSnapshot;
 use crate::{settings_view, ChannelState};
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
+const WARP_NO_CLOUD_ENV: &str = "WARP_NO_CLOUD";
+
 /// We use a special error code header `X-Warp-Error-Code` to allow the server to send
 /// more specific error code information, so that the client can discern between different
 /// errors with the same error code.
@@ -76,6 +78,19 @@ const WARP_ERROR_CODE_OUT_OF_CREDITS: &str = "OUT_OF_CREDITS";
 
 /// Error code indicating the user has reached their cloud agent concurrency limit.
 const WARP_ERROR_CODE_AT_CAPACITY: &str = "AT_CLOUD_AGENT_CAPACITY";
+
+fn no_cloud_mode_enabled() -> bool {
+    std::env::var(WARP_NO_CLOUD_ENV).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn should_send_authenticated_graphql_context() -> bool {
+    !no_cloud_mode_enabled()
+}
 
 /// ResponseType received by Client
 #[derive(thiserror::Error, Debug, Serialize, Deserialize)]
@@ -415,7 +430,10 @@ impl ServerApi {
             #[cfg(not(feature = "agent_mode_evals"))]
             path_prefix: None,
         };
-        let authenticated_graphql = AuthenticatedGraphqlConfig::default();
+        let authenticated_graphql = AuthenticatedGraphqlConfig {
+            session_context_enabled: should_send_authenticated_graphql_context(),
+            ..Default::default()
+        };
         let base_client = Arc::new(BaseClient::new(
             client,
             auth_state,
@@ -1342,3 +1360,37 @@ impl Entity for ServerApiProvider {
 }
 
 impl SingletonEntity for ServerApiProvider {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn restore_env_var(name: &str, previous: Option<std::ffi::OsString>) {
+        match previous {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
+    #[test]
+    #[serial_test::serial]
+    fn no_cloud_mode_uses_explicit_truthy_env_values() {
+        let previous = std::env::var_os(WARP_NO_CLOUD_ENV);
+
+        std::env::remove_var(WARP_NO_CLOUD_ENV);
+        assert!(!no_cloud_mode_enabled());
+
+        for value in ["1", "true", "yes", "on"] {
+            std::env::set_var(WARP_NO_CLOUD_ENV, value);
+            assert!(no_cloud_mode_enabled());
+            assert!(!should_send_authenticated_graphql_context());
+        }
+
+        for value in ["0", "false", "no", "off", ""] {
+            std::env::set_var(WARP_NO_CLOUD_ENV, value);
+            assert!(!no_cloud_mode_enabled());
+            assert!(should_send_authenticated_graphql_context());
+        }
+
+        restore_env_var(WARP_NO_CLOUD_ENV, previous);
+    }
+}

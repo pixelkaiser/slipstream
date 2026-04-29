@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 
@@ -111,6 +114,87 @@ function stopChild(child: ChildProcessWithoutNullStreams): void {
 function sseEventBytes(event: string): Buffer {
   return Buffer.from(event.replace(/^data: /, "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
 }
+
+test("serves local GraphQL integration config over HTTP", { timeout: 10_000 }, async () => {
+  const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
+  const servicePort = await listenOnLoopback(serviceProbe);
+  await closeServer(serviceProbe);
+
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-graphql-service-"));
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const child = spawn(process.execPath, ["dist/server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(servicePort),
+      LOG_LEVEL: "error",
+      LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
+    },
+  });
+  child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
+  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+
+  try {
+    await waitForHealth(servicePort, child);
+    const createResponse = await fetch(`http://127.0.0.1:${servicePort}/graphql/v2?op=CreateSimpleIntegration`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        variables: {
+          integration_type: "linear",
+          is_update: false,
+          enabled: true,
+          config: {
+            base_prompt: "Route test prompt",
+            mcp_servers_json: JSON.stringify({ local: { command: "node" } }),
+          },
+        },
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const createJson = await createResponse.json() as {
+      data?: { createSimpleIntegration?: { success?: boolean; authUrl?: string | null } };
+    };
+    assert.equal(createJson.data?.createSimpleIntegration?.success, true);
+    assert.equal(createJson.data?.createSimpleIntegration?.authUrl, null);
+
+    const listResponse = await fetch(`http://127.0.0.1:${servicePort}/graphql/v2`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        operationName: "SimpleIntegrations",
+        variables: { input: { providers: ["linear"] } },
+      }),
+    });
+    assert.equal(listResponse.status, 200);
+    const listJson = await listResponse.json() as {
+      data?: {
+        simpleIntegrations?: {
+          integrations?: Array<{
+            connectionStatus?: string;
+            integrationConfig?: { basePrompt?: string; mcpServersJson?: string };
+          }>;
+        };
+      };
+    };
+    const integration = listJson.data?.simpleIntegrations?.integrations?.[0];
+    assert.equal(integration?.connectionStatus, "ACTIVE");
+    assert.equal(integration?.integrationConfig?.basePrompt, "Route test prompt");
+    assert.deepEqual(JSON.parse(integration?.integrationConfig?.mcpServersJson ?? ""), {
+      local: { command: "node" },
+    });
+  } catch (error) {
+    const diagnostics = [
+      `stdout:\n${stdout.join("")}`,
+      `stderr:\n${stderr.join("")}`,
+    ].join("\n");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${diagnostics}`);
+  } finally {
+    stopChild(child);
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
 
 test("serves a Warp multi-agent request through a mock OpenAI-compatible stream", { timeout: 10_000 }, async () => {
   let providerPath: string | undefined;
