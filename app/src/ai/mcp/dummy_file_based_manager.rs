@@ -12,6 +12,13 @@ impl FileBasedMCPManager {
         Self {}
     }
 
+    pub fn new_with_activated_servers(
+        _activated_file_based_server_uuids: Vec<Uuid>,
+        _ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        Self {}
+    }
+
     pub fn get_servers_for_working_directory(
         &self,
         _cwd: &Path,
@@ -37,6 +44,14 @@ impl FileBasedMCPManager {
         _provider: MCPProvider,
     ) -> Vec<PathBuf> {
         vec![]
+    }
+
+    pub fn set_server_activation(
+        &mut self,
+        _installation_uuid: Uuid,
+        _active: bool,
+        _ctx: &mut ModelContext<Self>,
+    ) {
     }
 }
 

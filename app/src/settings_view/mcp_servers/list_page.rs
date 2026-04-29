@@ -1737,24 +1737,9 @@ impl MCPServersListPageView {
         switch_state: bool,
         ctx: &mut ViewContext<Self>,
     ) {
-        match switch_state {
-            true => {
-                let installation = FileBasedMCPManager::as_ref(ctx)
-                    .get_installation_by_uuid(uuid)
-                    .cloned();
-                if let Some(installation) = installation {
-                    TemplatableMCPServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-                        mgr.spawn_ephemeral_server(installation, ctx);
-                    });
-                } else {
-                    log::warn!("Cannot start file-based server {uuid}: installation not found");
-                }
-            }
-            false => TemplatableMCPServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-                // Shuts down the file-based server without purging credentials.
-                mgr.shutdown_server(uuid, ctx);
-            }),
-        }
+        FileBasedMCPManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.set_server_activation(uuid, switch_state, ctx);
+        });
     }
 
     fn get_title_chip_text(

@@ -15,6 +15,9 @@ lazy_static! {
     static ref HASHER: SipHasher = SipHasher::new_with_keys(0, 0);
 }
 
+const FILE_BASED_INSTALLATION_UUID_PREFIX: u128 = 0x6669_6c65_6d63_7069_0000_0000_0000_0000;
+const FILE_BASED_TEMPLATE_UUID_PREFIX: u128 = 0x6669_6c65_6d63_7074_0000_0000_0000_0000;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VariableType {
     Text,
@@ -43,6 +46,30 @@ impl TemplatableMCPServerInstallation {
             uuid,
             templatable_mcp_server,
             variable_values,
+        }
+    }
+
+    pub fn new_file_based(
+        mut templatable_mcp_server: TemplatableMCPServer,
+        variable_values: HashMap<String, VariableValue>,
+    ) -> TemplatableMCPServerInstallation {
+        let initial = TemplatableMCPServerInstallation {
+            uuid: Uuid::nil(),
+            templatable_mcp_server: templatable_mcp_server.clone(),
+            variable_values,
+        };
+
+        let Some(hash) = initial.hash() else {
+            return initial;
+        };
+
+        templatable_mcp_server.uuid =
+            Uuid::from_u128(FILE_BASED_TEMPLATE_UUID_PREFIX | u128::from(hash));
+
+        TemplatableMCPServerInstallation {
+            uuid: Uuid::from_u128(FILE_BASED_INSTALLATION_UUID_PREFIX | u128::from(hash)),
+            templatable_mcp_server,
+            variable_values: initial.variable_values,
         }
     }
 
