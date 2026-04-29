@@ -509,6 +509,43 @@ test("accepts Rust generated GraphQL operation names from operationName and op q
     }, store)) as { user?: { user?: { settings?: { isTelemetryEnabled?: boolean } } } };
     assert.equal(userSettingsData.user?.user?.settings?.isTelemetryEnabled, false);
 
+    const updateUserSettingsData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "UpdateUserSettings",
+      variables: {
+        input: {
+          cloudConversationStorageEnabled: false,
+          crashReportingEnabled: false,
+          telemetryEnabled: false,
+        },
+      },
+    }, store)) as { updateUserSettings?: { __typename?: string; responseContext?: { serverVersion?: string } } };
+    assert.equal(updateUserSettingsData.updateUserSettings?.__typename, "UpdateUserSettingsOutput");
+    assert.equal(updateUserSettingsData.updateUserSettings?.responseContext?.serverVersion, "local");
+
+    const requestLimitData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "GetRequestLimitInfo",
+      variables: {},
+    }, store)) as { user?: { user?: { requestLimitInfo?: { isUnlimited?: boolean } } } };
+    assert.equal(requestLimitData.user?.user?.requestLimitInfo?.isUnlimited, true);
+
+    const referralData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "GetReferralInfo",
+      variables: {},
+    }, store)) as { user?: { user?: { referrals?: { referralCode?: string } } } };
+    assert.equal(referralData.user?.user?.referrals?.referralCode, "");
+
+    const conversationMetadataData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "ListAIConversationMetadata",
+      variables: { input: { conversationIds: ["conversation-1"] } },
+    }, store)) as { listAIConversations?: { conversations?: unknown[] } };
+    assert.deepEqual(conversationMetadataData.listAIConversations?.conversations, []);
+
+    const cloudEnvironmentsData = await dataOf(handleLocalGraphqlRequest({
+      operationName: "GetCloudEnvironmentsQuery",
+      variables: {},
+    }, store)) as { getCloudEnvironments?: { cloudEnvironments?: unknown[] } };
+    assert.deepEqual(cloudEnvironmentsData.getCloudEnvironments?.cloudEnvironments, []);
+
     const conversationUsageData = await dataOf(handleLocalGraphqlRequest({
       operationName: "GetConversationUsage",
       variables: {},
