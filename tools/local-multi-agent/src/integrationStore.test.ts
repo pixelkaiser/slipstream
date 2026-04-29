@@ -189,3 +189,40 @@ test("creates updates and persists generic string objects across reopen", () => 
     rmSync(dir, { force: true, recursive: true });
   }
 });
+
+test("upserts unknown generic string objects from update requests", () => {
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-graphql-"));
+  const dbPath = join(dir, "test.sqlite");
+  const uid = "existing-local-client-object";
+  const serializedModel = JSON.stringify({
+    name: "upserted-local-mcp",
+    uuid: "00000000-0000-0000-0000-000000000010",
+    transport_type: {
+      CLIServer: {
+        command: "node",
+        args: ["server.js"],
+        cwd_parameter: null,
+        static_env_vars: [],
+      },
+    },
+  });
+
+  const first = new IntegrationStore(dbPath);
+  try {
+    const updated = first.updateGenericStringObject(uid, serializedModel);
+    assert.equal(updated.uid, uid);
+    assert.equal(updated.format, "JsonMCPServer");
+    assert.equal(updated.serializedModel, serializedModel);
+  } finally {
+    first.close();
+  }
+
+  const second = new IntegrationStore(dbPath);
+  try {
+    assert.equal(second.getGenericStringObject(uid)?.format, "JsonMCPServer");
+    assert.deepEqual(second.listGenericStringObjects().map((object) => object.uid), [uid]);
+  } finally {
+    second.close();
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
