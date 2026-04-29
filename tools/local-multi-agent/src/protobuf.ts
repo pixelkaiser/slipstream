@@ -90,9 +90,22 @@ export type SuggestPlanToolCall = {
   tasks: Array<{ description: string }>;
 };
 
+export type ReadMcpResourceToolCall = {
+  type: "read_mcp_resource";
+  uri: string;
+  serverId?: string;
+};
+
+export type CallMcpToolToolCall = {
+  type: "call_mcp_tool";
+  name: string;
+  args?: Record<string, unknown>;
+  serverId?: string;
+};
+
 export type WarpToolCall =
   | ({ toolCallId: string } & {
-      tool: RunShellCommandToolCall | { type: "read_files"; files: ReadFilesToolCallFile[] } | GrepToolCall | FileGlobToolCall | SearchCodebaseToolCall | ApplyFileDiffsToolCall | SuggestPlanToolCall;
+      tool: RunShellCommandToolCall | { type: "read_files"; files: ReadFilesToolCallFile[] } | GrepToolCall | FileGlobToolCall | SearchCodebaseToolCall | ApplyFileDiffsToolCall | SuggestPlanToolCall | ReadMcpResourceToolCall | CallMcpToolToolCall;
     });
 
 export type WarpToolResult =
@@ -166,6 +179,26 @@ function boolField(fieldNumber: number, value: boolean | undefined): Uint8Array 
   }
 
   return concat([tag(fieldNumber, 0), encodeVarint(value ? 1 : 0)]);
+}
+
+function floatField(fieldNumber: number, value: number | undefined): Uint8Array {
+  if (value == null) {
+    return new Uint8Array();
+  }
+
+  const bytes = new Uint8Array(4);
+  new DataView(bytes.buffer).setFloat32(0, value, true);
+  return concat([tag(fieldNumber, 5), bytes]);
+}
+
+function doubleField(fieldNumber: number, value: number | undefined): Uint8Array {
+  if (value == null) {
+    return new Uint8Array();
+  }
+
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setFloat64(0, value, true);
+  return concat([tag(fieldNumber, 1), bytes]);
 }
 
 function messageField(fieldNumber: number, value: Uint8Array): Uint8Array {
@@ -1310,6 +1343,60 @@ function encodeSuggestPlanToolCall(params: SuggestPlanToolCall & { toolCallId: s
   ]);
 }
 
+function encodeJsonValue(value: unknown): Uint8Array {
+  if (value == null) {
+    return concat([tag(1, 0), encodeVarint(0)]);
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return doubleField(2, value);
+  }
+  if (typeof value === "string") {
+    return stringField(3, value);
+  }
+  if (typeof value === "boolean") {
+    return boolField(4, value);
+  }
+  if (Array.isArray(value)) {
+    return messageField(6, concat(value.map((item) => messageField(1, encodeJsonValue(item)))));
+  }
+  if (typeof value === "object") {
+    return messageField(5, encodeJsonStruct(value as Record<string, unknown>));
+  }
+  return stringField(3, String(value));
+}
+
+function encodeJsonStruct(value: Record<string, unknown>): Uint8Array {
+  return concat(Object.entries(value).map(([key, fieldValue]) => messageField(1, concat([
+    stringField(1, key),
+    messageField(2, encodeJsonValue(fieldValue)),
+  ]))));
+}
+
+function encodeReadMcpResourceToolCall(params: ReadMcpResourceToolCall & { toolCallId: string }): Uint8Array {
+  const readMcpResource = concat([
+    stringField(1, params.uri),
+    stringField(2, params.serverId),
+  ]);
+
+  return concat([
+    stringField(1, params.toolCallId),
+    messageField(11, readMcpResource),
+  ]);
+}
+
+function encodeCallMcpToolToolCall(params: CallMcpToolToolCall & { toolCallId: string }): Uint8Array {
+  const callMcpTool = concat([
+    stringField(1, params.name),
+    messageField(2, encodeJsonStruct(params.args ?? {})),
+    stringField(3, params.serverId),
+  ]);
+
+  return concat([
+    stringField(1, params.toolCallId),
+    messageField(12, callMcpTool),
+  ]);
+}
+
 function encodeToolCall(params: WarpToolCall): Uint8Array {
   switch (params.tool.type) {
     case "run_shell_command":
@@ -1326,6 +1413,10 @@ function encodeToolCall(params: WarpToolCall): Uint8Array {
       return encodeApplyFileDiffsToolCall({ ...params.tool, toolCallId: params.toolCallId });
     case "suggest_plan":
       return encodeSuggestPlanToolCall({ ...params.tool, toolCallId: params.toolCallId });
+    case "read_mcp_resource":
+      return encodeReadMcpResourceToolCall({ ...params.tool, toolCallId: params.toolCallId });
+    case "call_mcp_tool":
+      return encodeCallMcpToolToolCall({ ...params.tool, toolCallId: params.toolCallId });
   }
 }
 
@@ -1401,8 +1492,22 @@ export function encodeAgentOutput(params: {
   });
 }
 
-export function encodeStreamFinishedDone(): Uint8Array {
-  const finished = messageField(2, new Uint8Array());
+export function encodeStreamFinishedDone(params?: {
+  contextWindowUsage?: number;
+  summarized?: boolean;
+  creditsSpent?: number;
+}): Uint8Array {
+  const conversationUsageMetadata = params?.contextWindowUsage == null
+    ? new Uint8Array()
+    : messageField(11, concat([
+      floatField(1, params.contextWindowUsage),
+      boolField(2, params.summarized ?? false),
+      floatField(3, params.creditsSpent ?? 0),
+    ]));
+  const finished = concat([
+    messageField(2, new Uint8Array()),
+    conversationUsageMetadata,
+  ]);
   return messageField(3, finished);
 }
 
