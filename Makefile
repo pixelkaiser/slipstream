@@ -2,7 +2,7 @@ LOCAL_AGENT_DIR := tools/local-multi-agent
 
 .DEFAULT_GOAL := help
 
-.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test warp-check warp-build warp-build-oss
+.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test local-agent-proto warp-check warp-build warp-build-oss
 
 help:
 	@echo "Warp BYOK local development targets:"
@@ -11,6 +11,7 @@ help:
 	@echo "  make local-agent-build    Build the local multi-agent service"
 	@echo "  make local-agent-start    Run the built local multi-agent service"
 	@echo "  make local-agent-test     Build and test the local multi-agent service"
+	@echo "  make local-agent-proto    Regenerate local multi-agent TypeScript protobuf bindings"
 	@echo "  make warp-check           Run Rust formatting and Warp OSS app check"
 	@echo "  make warp-build-oss       Build the Warp OSS macOS app bundle"
 
@@ -28,6 +29,9 @@ local-agent-start: local-agent-build
 
 local-agent-test:
 	cd $(LOCAL_AGENT_DIR) && npm test
+
+local-agent-proto:
+	cd $(LOCAL_AGENT_DIR) && npm run proto:generate
 
 warp-check:
 	cargo fmt --check
