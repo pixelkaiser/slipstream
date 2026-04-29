@@ -129,6 +129,17 @@ pub(crate) fn server_root_url_for_local_no_cloud(explicit_url: Option<&str>) -> 
     explicit_url.or_else(|| no_cloud_mode_enabled().then_some(LOCAL_NO_CLOUD_SERVER_ROOT_URL))
 }
 
+pub(crate) fn server_root_url_override_for_startup(
+    explicit_url: Option<&str>,
+    channel_allows_overrides: bool,
+) -> Option<&str> {
+    if no_cloud_mode_enabled() {
+        return server_root_url_for_local_no_cloud(explicit_url);
+    }
+
+    channel_allows_overrides.then_some(explicit_url).flatten()
+}
+
 fn should_send_authenticated_graphql_context() -> bool {
     !no_cloud_mode_enabled()
 }
@@ -1781,7 +1792,6 @@ mod tests {
         assert_eq!(send_count.load(Ordering::SeqCst), 1);
         assert!(event_receiver.try_recv().is_err());
     }
-
     fn restore_env_var(name: &str, previous: Option<std::ffi::OsString>) {
         match previous {
             Some(value) => std::env::set_var(name, value),
@@ -1859,5 +1869,119 @@ mod tests {
         );
 
         restore_env_var(WARP_NO_CLOUD_ENV, previous);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn no_cloud_mode_allows_startup_graphql_root_override_on_any_channel() {
+        let previous = std::env::var_os(WARP_NO_CLOUD_ENV);
+
+        std::env::remove_var(WARP_NO_CLOUD_ENV);
+        assert_eq!(
+            server_root_url_override_for_startup(Some("http://localhost:9999"), false),
+            None
+        );
+        assert_eq!(
+            server_root_url_override_for_startup(Some("http://localhost:9999"), true),
+            Some("http://localhost:9999")
+        );
+
+        std::env::set_var(WARP_NO_CLOUD_ENV, "1");
+        assert_eq!(
+            server_root_url_override_for_startup(Some("http://localhost:9999"), false),
+            Some("http://localhost:9999")
+        );
+        assert_eq!(
+            server_root_url_override_for_startup(None, false),
+            Some(LOCAL_NO_CLOUD_SERVER_ROOT_URL)
+        );
+
+        restore_env_var(WARP_NO_CLOUD_ENV, previous);
+    }
+
+    #[test]
+    fn local_workspaces_metadata_response_deserializes_into_rust_graphql_type() {
+        use warp_graphql::queries::get_workspaces_metadata_for_user::{
+            GetWorkspacesMetadataForUser, PricingInfoResult, UserResult,
+        };
+
+        let response = r#"{
+            "data": {
+                "user": {
+                    "__typename": "UserOutput",
+                    "user": {
+                        "workspaces": [],
+                        "experiments": [],
+                        "discoverableTeams": []
+                    }
+                },
+                "pricingInfo": {
+                    "__typename": "PricingInfoOutput",
+                    "pricingInfo": {
+                        "plans": [],
+                        "overages": {
+                            "pricePerRequestUsdCents": 0
+                        },
+                        "addonCreditsOptions": []
+                    }
+                }
+            }
+        }"#;
+
+        let parsed: cynic::GraphQlResponse<GetWorkspacesMetadataForUser> =
+            serde_json::from_str(response).expect("local service response should deserialize");
+
+        assert!(parsed.errors.is_none());
+        let data = parsed
+            .data
+            .expect("local service response should include data");
+        assert!(matches!(data.user, UserResult::UserOutput(_)));
+        assert!(matches!(
+            data.pricing_info,
+            PricingInfoResult::PricingInfoOutput(_)
+        ));
+    }
+
+    #[test]
+    fn local_updated_cloud_objects_response_deserializes_into_rust_graphql_type() {
+        use warp_graphql::queries::get_updated_cloud_objects::{
+            GetUpdatedCloudObjects, UpdatedCloudObjectsResult,
+        };
+
+        let response = r#"{
+            "data": {
+                "updatedCloudObjects": {
+                    "__typename": "UpdatedCloudObjectsOutput",
+                    "actionHistories": [],
+                    "deletedObjectUids": {
+                        "folderUids": [],
+                        "genericStringObjectUids": [],
+                        "notebookUids": [],
+                        "workflowUids": []
+                    },
+                    "folders": [],
+                    "genericStringObjects": [],
+                    "mcpGallery": [],
+                    "notebooks": [],
+                    "responseContext": {
+                        "serverVersion": "local"
+                    },
+                    "userProfiles": [],
+                    "workflows": []
+                }
+            }
+        }"#;
+
+        let parsed: cynic::GraphQlResponse<GetUpdatedCloudObjects> =
+            serde_json::from_str(response).expect("local service response should deserialize");
+
+        assert!(parsed.errors.is_none());
+        let data = parsed
+            .data
+            .expect("local service response should include data");
+        assert!(matches!(
+            data.updated_cloud_objects,
+            UpdatedCloudObjectsResult::UpdatedCloudObjectsOutput(_)
+        ));
     }
 }
