@@ -23,6 +23,9 @@ import { log } from "./logger.js";
 import { formatSseDataEvent } from "./sse.js";
 import { handleLocalGraphqlRequest } from "./graphql.js";
 import { IntegrationStore } from "./integrationStore.js";
+import { loadDotEnv } from "./env.js";
+
+loadDotEnv();
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const host = process.env.HOST?.trim() || "127.0.0.1";
