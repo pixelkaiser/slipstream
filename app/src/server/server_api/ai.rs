@@ -1488,11 +1488,14 @@ impl AIClient for ServerApi {
 
         // Best-effort: if the user has a valid token (e.g. anonymous Firebase), include it;
         // otherwise send unauthenticated. Either is acceptable for this resolver.
-        let auth_token = self
-            .get_or_refresh_access_token()
-            .await
-            .ok()
-            .and_then(|token| token.bearer_token());
+        let auth_token = if super::no_cloud_mode_enabled() {
+            None
+        } else {
+            self.get_or_refresh_access_token()
+                .await
+                .ok()
+                .and_then(|token| token.bearer_token())
+        };
 
         let response = operation
             .send_request(

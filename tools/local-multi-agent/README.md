@@ -17,8 +17,9 @@ npm run dev
 Set these environment variables before starting the service:
 
 - `OPENAI_API_KEY`
-- `OPENAI_BASE_URL` unless Warp sends `X-Warp-OpenAI-Base-URL` from the BYOK OpenAI Base URL setting
-- `OPENAI_MODEL` globally overrides model selection and otherwise defaults to `Qwen/Qwen3.6-27B-FP8`.
+- `OPENAI_BASE_URL` unless Warp sends `X-Warp-OpenAI-Base-URL` from the BYOK OpenAI Base URL setting. Set this on the service for no-cloud mode because the local GraphQL model picker uses `GET $OPENAI_BASE_URL/models`.
+- `OPENAI_MODEL` optionally overrides every `/ai/multi-agent` request. Leave it unset to honor the model selected in Warp. If `/models` is unavailable, it is also used as the fallback model ID.
+- `LOCAL_MODEL_LIST` optionally provides a comma-separated or JSON-array fallback model list when `GET $OPENAI_BASE_URL/models` is unavailable. It defaults to `Qwen/Qwen3.6-27B-FP8`.
 - `LOCAL_MODEL_ALIASES` optionally maps Warp model IDs to provider model IDs as JSON. Built-in aliases map `auto`, `auto-efficient`, `auto-coding`, and `auto-reasoning` to `Qwen/Qwen3.6-27B-FP8`.
 - `LOCAL_ENABLE_TOOLS=false` disables local tool-call advertisement. Tools are enabled by default.
 - `LOCAL_MAX_HISTORY_MESSAGES` limits in-memory provider transcript messages per conversation. Defaults to `80`.
@@ -45,7 +46,6 @@ docker run --rm \
   -v warp-local-multi-agent-data:/data \
   -e OPENAI_API_KEY="$OPENAI_API_KEY" \
   -e OPENAI_BASE_URL="${OPENAI_BASE_URL:-http://host.docker.internal:11434/v1}" \
-  -e OPENAI_MODEL="${OPENAI_MODEL:-Qwen/Qwen3.6-27B-FP8}" \
   warp-local-multi-agent
 ```
 
@@ -89,4 +89,4 @@ For local integration GraphQL calls, run Warp or the CLI with:
 WARP_NO_CLOUD=1 WARP_SERVER_ROOT_URL=http://127.0.0.1:8787
 ```
 
-The service handles `POST /graphql/v2` for local integration create/update/list, OAuth status, GitHub auth status, environment usage lookup, cloud-environment image suggestion, startup workspace metadata, and cloud-object refresh calls. Integration config and AI conversation transcripts are stored in SQLite and never proxied to Warp cloud.
+The service handles `POST /graphql/v2` for local integration create/update/list, OAuth status, GitHub auth status, environment usage lookup, cloud-environment image suggestion, startup workspace metadata, model-list, and cloud-object refresh calls. Integration config and AI conversation transcripts are stored in SQLite and never proxied to Warp cloud. Model-list calls read `GET $OPENAI_BASE_URL/models` from your local inference endpoint and fall back to `LOCAL_MODEL_LIST`, `OPENAI_MODEL`, or the built-in default.
