@@ -1182,7 +1182,7 @@ const server = http.createServer((request, response) => {
     if (method === "POST" && url.pathname === "/graphql/v2") {
       const body = Buffer.from(await readBody(request)).toString("utf8");
       const graphqlRequest = JSON.parse(body) as unknown;
-      const result = handleLocalGraphqlRequest(
+      const result = await handleLocalGraphqlRequest(
         graphqlRequest && typeof graphqlRequest === "object" ? graphqlRequest : {},
         integrationStore,
         url.searchParams.get("op"),
