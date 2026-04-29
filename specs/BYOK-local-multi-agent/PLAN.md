@@ -267,7 +267,7 @@ Warp client:
 - [x] `cargo check -p warp --bin warp-oss --features gui`
 - [x] `make warp-check`
 - [x] focused Rust tests for URL routing
-- [ ] `make warp-build-oss`
+- [x] `make warp-build-oss`
 
 End-to-end:
 
@@ -356,3 +356,5 @@ End-to-end:
 - Manually confirmed in Warp that streamed local agent output renders in the UI after the append field-mask fix.
 - Added `npm run proto:generate` / `make local-agent-proto` to clone the pinned `warp-proto-apis` revision from `Cargo.toml`, normalize the Edition 2023 protos for JavaScript generation, and generate checked-in TypeScript descriptors with `protoc-gen-es`.
 - Added local service test coverage that loads the generated descriptors and checks the hand-rolled wire field numbers against the generated request, response, client action, and message schemas.
+- Verified `make warp-build-oss` completes and produces `target/debug/bundle/osx/WarpOss.app`.
+- Added `make warp-local-signing-identity` and local macOS build-script support for a stable self-signed `Warp Local Development` code-signing identity so debug app rebuilds do not have to fall back to ad-hoc signing.
