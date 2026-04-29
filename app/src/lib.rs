@@ -1247,6 +1247,7 @@ pub(crate) fn initialize_app(
         mut persisted_ignored_suggestions,
         mut persisted_mcp_server_installations,
         mut mcp_servers_to_restore,
+        mut activated_file_based_mcp_servers,
     ) = sqlite_data
         .map(|sqlite_data| {
             (
@@ -1268,10 +1269,12 @@ pub(crate) fn initialize_app(
                 sqlite_data.ignored_suggestions,
                 sqlite_data.mcp_server_installations,
                 sqlite_data.mcp_servers_to_restore,
+                sqlite_data.activated_file_based_mcp_servers,
             )
         })
         .unwrap_or_else(|| {
             (
+                Default::default(),
                 Default::default(),
                 Default::default(),
                 Default::default(),
@@ -1315,6 +1318,7 @@ pub(crate) fn initialize_app(
         persisted_ignored_suggestions = Default::default();
         persisted_mcp_server_installations = Default::default();
         mcp_servers_to_restore = Default::default();
+        activated_file_based_mcp_servers = Default::default();
     }
 
     // Initialize a global model to track server-side experiment state.
@@ -1853,7 +1857,9 @@ pub(crate) fn initialize_app(
 
     // FileMCPWatcher must be registered before FileBasedMCPManager, which subscribes to it.
     ctx.add_singleton_model(FileMCPWatcher::new);
-    ctx.add_singleton_model(FileBasedMCPManager::new);
+    ctx.add_singleton_model(|ctx| {
+        FileBasedMCPManager::new_with_activated_servers(activated_file_based_mcp_servers, ctx)
+    });
 
     // TemplatableMCPServerManager must be registered after UpdateManager and MCPServerManager so it can migrate legacy MCPs on start up
     // It should also be registered after FileBasedMCPManager so it can receive file-based server updates.
