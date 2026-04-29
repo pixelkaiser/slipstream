@@ -134,7 +134,7 @@ function rowToGenericStringObjectRecord(row: GenericStringObjectRow): GenericStr
   return {
     uid: row.uid,
     clientId: row.client_id,
-    format: row.format,
+    format: inferGenericStringObjectFormat(row.serialized_model) ?? row.format,
     serializedModel: row.serialized_model,
     revisionTs: row.revision_ts,
     metadataLastUpdatedTs: row.metadata_last_updated_ts,
@@ -152,13 +152,11 @@ function normalizeGenericStringObjectFormat(value: string): string {
   return format;
 }
 
-function inferGenericStringObjectFormat(serializedModel: string): string {
-  const fallback = "JsonMCPServer";
-
+function inferGenericStringObjectFormat(serializedModel: string): string | undefined {
   try {
     const parsed = JSON.parse(serializedModel) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return fallback;
+      return undefined;
     }
 
     const model = parsed as Record<string, unknown>;
@@ -168,14 +166,22 @@ function inferGenericStringObjectFormat(serializedModel: string): string {
     if (Object.hasOwn(model, "template") || Object.hasOwn(model, "json_template")) {
       return "JsonTemplatableMCPServer";
     }
+    if (
+      Object.hasOwn(model, "is_default_profile")
+      || Object.hasOwn(model, "apply_code_diffs")
+      || Object.hasOwn(model, "mcp_allowlist")
+      || Object.hasOwn(model, "mcp_denylist")
+    ) {
+      return "JsonAIExecutionProfile";
+    }
     if (Object.hasOwn(model, "transport_type") || Object.hasOwn(model, "command")) {
       return "JsonMCPServer";
     }
   } catch {
-    return fallback;
+    return undefined;
   }
 
-  return fallback;
+  return undefined;
 }
 
 function applyNullableString(current: string | null, next: string | null | undefined, isUpdate: boolean): string | null {
@@ -455,7 +461,7 @@ export class IntegrationStore {
       const record: GenericStringObjectRecord = {
         uid,
         clientId: null,
-        format: inferGenericStringObjectFormat(serializedModel),
+        format: inferGenericStringObjectFormat(serializedModel) ?? "JsonMCPServer",
         serializedModel,
         revisionTs: now,
         metadataLastUpdatedTs: now,
@@ -493,9 +499,11 @@ export class IntegrationStore {
     }
 
     const now = new Date().toISOString();
+    const format = inferGenericStringObjectFormat(serializedModel) ?? existing.format;
     this.db.prepare(`
       UPDATE generic_string_objects
       SET
+        format = @format,
         serialized_model = @serializedModel,
         revision_ts = @revisionTs,
         metadata_last_updated_ts = @metadataLastUpdatedTs,
@@ -503,6 +511,7 @@ export class IntegrationStore {
       WHERE uid = @uid
     `).run({
       uid,
+      format,
       serializedModel,
       revisionTs: now,
       metadataLastUpdatedTs: now,
