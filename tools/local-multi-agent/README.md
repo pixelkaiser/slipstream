@@ -1,6 +1,6 @@
 # Local Multi-Agent API
 
-This is a local development implementation of Warp's `/ai/multi-agent` protocol. It accepts Warp's protobuf request body, calls an OpenAI-compatible `/chat/completions` endpoint, and streams protobuf response events back over server-sent events. Assistant text is forwarded incrementally: the first provider content chunk creates the Warp assistant message and later chunks append to that same message.
+This is a local development implementation of Warp's `/ai/multi-agent` protocol and the small GraphQL surface used by CLI integrations. It accepts Warp's protobuf request body, calls an OpenAI-compatible `/chat/completions` endpoint, and streams protobuf response events back over server-sent events. Assistant text is forwarded incrementally: the first provider content chunk creates the Warp assistant message and later chunks append to that same message.
 
 It is intentionally a thin single-agent adapter. It can translate OpenAI-compatible function calls for Warp client-executed tools, but durable orchestration and rich passive suggestions remain follow-up work in `specs/BYOK-local-multi-agent/PLAN.md`.
 
@@ -21,6 +21,7 @@ Set these environment variables before starting the service:
 - `LOCAL_ENABLE_TOOLS=false` disables local tool-call advertisement. Tools are enabled by default.
 - `LOCAL_MAX_HISTORY_MESSAGES` limits in-memory provider transcript messages per conversation. Defaults to `80`.
 - `LOCAL_STATE_PATH` optionally persists provider transcripts to a local JSON file across service restarts.
+- `LOCAL_GRAPHQL_DB_PATH` sets the SQLite path for local integration GraphQL config. Defaults to `./local-graphql.sqlite` from this package.
 - `LOG_LEVEL` defaults to `info`; use `debug` to log individual SSE events.
 - `PORT` defaults to `8787`
 
@@ -37,3 +38,11 @@ Point Warp's BYOK `Local Multi-Agent Server URL` field at:
 ```text
 http://127.0.0.1:8787
 ```
+
+For local integration GraphQL calls, run Warp or the CLI with:
+
+```sh
+WARP_NO_CLOUD=1 WARP_SERVER_ROOT_URL=http://127.0.0.1:8787
+```
+
+The service handles `POST /graphql/v2` for local integration create/update/list, OAuth status, GitHub auth status, environment usage lookup, and cloud-environment image suggestion calls. Integration config is stored in SQLite and never proxied to Warp cloud.
