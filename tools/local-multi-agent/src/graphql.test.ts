@@ -163,6 +163,65 @@ test("returns deterministic local helper responses", () => {
   });
 });
 
+test("returns local no-cloud responses for startup cloud metadata operations", () => {
+  withStore((store) => {
+    assert.deepEqual(dataOf(handleLocalGraphqlRequest({
+      operationName: "GetUpdatedCloudObjects",
+      variables: {
+        input: {
+          forceRefresh: false,
+          folders: [],
+          genericStringObjects: [],
+          notebooks: [],
+          workflows: [],
+        },
+      },
+    }, store)).updatedCloudObjects, {
+      __typename: "UpdatedCloudObjectsOutput",
+      actionHistories: [],
+      deletedObjectUids: {
+        folderUids: [],
+        genericStringObjectUids: [],
+        notebookUids: [],
+        workflowUids: [],
+      },
+      folders: [],
+      genericStringObjects: [],
+      mcpGallery: [],
+      notebooks: [],
+      responseContext: {
+        serverVersion: "local",
+      },
+      userProfiles: [],
+      workflows: [],
+    });
+
+    assert.deepEqual(dataOf(handleLocalGraphqlRequest({
+      operationName: "GetWorkspacesMetadataForUser",
+      variables: {},
+    }, store)), {
+      user: {
+        __typename: "UserOutput",
+        user: {
+          workspaces: [],
+          experiments: [],
+          discoverableTeams: [],
+        },
+      },
+      pricingInfo: {
+        __typename: "PricingInfoOutput",
+        pricingInfo: {
+          plans: [],
+          overages: {
+            pricePerRequestUsdCents: 0,
+          },
+          addonCreditsOptions: [],
+        },
+      },
+    });
+  });
+});
+
 test("uses query string operation name and rejects unsupported operations", () => {
   withStore((store) => {
     const ok = handleLocalGraphqlRequest({
