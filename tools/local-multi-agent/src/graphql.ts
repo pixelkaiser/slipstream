@@ -141,9 +141,13 @@ function inferOperationName(request: GraphqlRequest, opFromQueryString?: string 
     "userGithubInfo",
     "userRepoAuthStatus",
     "suggestCloudEnvironmentImage",
+    "getUpdatedCloudObjects",
     "updatedCloudObjects",
+    "getFeatureModelChoices",
     "featureModelChoice",
     "freeAvailableModels",
+    "getWorkspacesMetadataForUser",
+    "workspacesMetadataForUser",
     "pricingInfo",
   ]) {
     if (query.includes(candidate)) {
@@ -182,9 +186,11 @@ function canonicalOperationName(name: string): string {
     case "suggestCloudEnvironmentImage":
       return "suggestCloudEnvironmentImage";
     case "GetUpdatedCloudObjects":
+    case "getUpdatedCloudObjects":
     case "updatedCloudObjects":
       return "updatedCloudObjects";
     case "GetFeatureModelChoices":
+    case "getFeatureModelChoices":
     case "featureModelChoice":
       return "featureModelChoice";
     case "FreeAvailableModels":
@@ -192,6 +198,7 @@ function canonicalOperationName(name: string): string {
     case "freeAvailableModels":
       return "freeAvailableModels";
     case "GetWorkspacesMetadataForUser":
+    case "getWorkspacesMetadataForUser":
     case "workspacesMetadataForUser":
     case "pricingInfo":
       return "workspacesMetadataForUser";
