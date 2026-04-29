@@ -10,6 +10,16 @@ import type {
 export type GraphqlResult = {
   status: number;
   payload: unknown;
+  diagnostics: GraphqlDiagnostics;
+};
+
+export type GraphqlDiagnostics = {
+  operationName?: string;
+  queryOperationName?: string;
+  opFromQueryString?: string;
+  canonicalOperationName?: string;
+  variableKeys: string[];
+  inputKeys: string[];
 };
 
 type GraphqlRequest = {
@@ -128,6 +138,14 @@ function inputOf(variables: Record<string, unknown>): Record<string, unknown> {
   return asObject(variables.input);
 }
 
+function queryOperationName(request: GraphqlRequest): string | undefined {
+  if (typeof request.query !== "string") {
+    return undefined;
+  }
+
+  return /\b(?:query|mutation)\s+([_A-Za-z][_0-9A-Za-z]*)/.exec(request.query)?.[1];
+}
+
 function inferOperationName(request: GraphqlRequest, opFromQueryString?: string | null): string | undefined {
   const explicit = typeof request.operationName === "string" && request.operationName.trim()
     ? request.operationName.trim()
@@ -175,6 +193,23 @@ function inferOperationName(request: GraphqlRequest, opFromQueryString?: string 
   }
 
   return undefined;
+}
+
+export function graphqlDiagnostics(
+  request: GraphqlRequest,
+  opFromQueryString?: string | null,
+): GraphqlDiagnostics {
+  const variables = variablesOf(request);
+  const input = inputOf(variables);
+  const operationName = inferOperationName(request, opFromQueryString);
+  return {
+    operationName,
+    queryOperationName: queryOperationName(request),
+    opFromQueryString: opFromQueryString?.trim() || undefined,
+    canonicalOperationName: operationName ? canonicalOperationName(operationName) : undefined,
+    variableKeys: Object.keys(variables).sort(),
+    inputKeys: Object.keys(input).sort(),
+  };
 }
 
 function canonicalOperationName(name: string): string {
@@ -869,9 +904,10 @@ function getWorkspacesMetadataForUser(): unknown {
   };
 }
 
-function unsupportedOperation(operationName: string | undefined): GraphqlResult {
+function unsupportedOperation(operationName: string | undefined, diagnostics: GraphqlDiagnostics): GraphqlResult {
   return {
     status: 400,
+    diagnostics,
     payload: {
       data: null,
       errors: [
@@ -890,49 +926,51 @@ export async function handleLocalGraphqlRequest(
 ): Promise<GraphqlResult> {
   const operationName = inferOperationName(request, opFromQueryString);
   const variables = variablesOf(request);
+  const diagnostics = graphqlDiagnostics(request, opFromQueryString);
 
   try {
     switch (operationName ? canonicalOperationName(operationName) : undefined) {
       case "createSimpleIntegration":
-        return { status: 200, payload: createSimpleIntegration(store, variables) };
+        return { status: 200, diagnostics, payload: createSimpleIntegration(store, variables) };
       case "simpleIntegrations":
-        return { status: 200, payload: simpleIntegrations(store, variables) };
+        return { status: 200, diagnostics, payload: simpleIntegrations(store, variables) };
       case "getOAuthConnectTxStatus":
-        return { status: 200, payload: getOAuthConnectTxStatus() };
+        return { status: 200, diagnostics, payload: getOAuthConnectTxStatus() };
       case "getIntegrationsUsingEnvironment":
-        return { status: 200, payload: getIntegrationsUsingEnvironment(store, variables) };
+        return { status: 200, diagnostics, payload: getIntegrationsUsingEnvironment(store, variables) };
       case "userGithubInfo":
-        return { status: 200, payload: userGithubInfo() };
+        return { status: 200, diagnostics, payload: userGithubInfo() };
       case "userRepoAuthStatus":
-        return { status: 200, payload: userRepoAuthStatus(variables) };
+        return { status: 200, diagnostics, payload: userRepoAuthStatus(variables) };
       case "suggestCloudEnvironmentImage":
-        return { status: 200, payload: suggestCloudEnvironmentImage() };
+        return { status: 200, diagnostics, payload: suggestCloudEnvironmentImage() };
       case "createGenericStringObject":
-        return { status: 200, payload: createGenericStringObject(store, variables) };
+        return { status: 200, diagnostics, payload: createGenericStringObject(store, variables) };
       case "updateGenericStringObject":
-        return { status: 200, payload: updateGenericStringObject(store, variables) };
+        return { status: 200, diagnostics, payload: updateGenericStringObject(store, variables) };
       case "bulkCreateObjects":
-        return { status: 200, payload: bulkCreateObjects(store, variables) };
+        return { status: 200, diagnostics, payload: bulkCreateObjects(store, variables) };
       case "updatedCloudObjects":
-        return { status: 200, payload: getUpdatedCloudObjects(store) };
+        return { status: 200, diagnostics, payload: getUpdatedCloudObjects(store) };
       case "featureModelChoice":
-        return { status: 200, payload: await getFeatureModelChoices() };
+        return { status: 200, diagnostics, payload: await getFeatureModelChoices() };
       case "freeAvailableModels":
-        return { status: 200, payload: await freeAvailableModels() };
+        return { status: 200, diagnostics, payload: await freeAvailableModels() };
       case "getUser":
-        return { status: 200, payload: await getUser() };
+        return { status: 200, diagnostics, payload: await getUser() };
       case "getUserSettings":
-        return { status: 200, payload: getUserSettings() };
+        return { status: 200, diagnostics, payload: getUserSettings() };
       case "getConversationUsage":
-        return { status: 200, payload: getConversationUsage() };
+        return { status: 200, diagnostics, payload: getConversationUsage() };
       case "workspacesMetadataForUser":
-        return { status: 200, payload: getWorkspacesMetadataForUser() };
+        return { status: 200, diagnostics, payload: getWorkspacesMetadataForUser() };
       default:
-        return unsupportedOperation(operationName);
+        return unsupportedOperation(operationName, diagnostics);
     }
   } catch (error) {
     return {
       status: 400,
+      diagnostics,
       payload: {
         data: null,
         errors: [

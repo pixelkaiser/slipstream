@@ -19,7 +19,7 @@ import {
   type WarpToolCall,
 } from "./protobuf.js";
 import { resolveProviderModel } from "./model.js";
-import { log } from "./logger.js";
+import { log, logFilePath } from "./logger.js";
 import { formatSseDataEvent } from "./sse.js";
 import { handleLocalGraphqlRequest } from "./graphql.js";
 import { IntegrationStore } from "./integrationStore.js";
@@ -61,6 +61,24 @@ function sendJson(response: http.ServerResponse, status: number, payload: unknow
     "content-type": "application/json; charset=utf-8",
   });
   response.end(JSON.stringify(payload));
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function graphqlErrorMessages(payload: unknown): string[] {
+  const errors = objectValue(payload).errors;
+  if (!Array.isArray(errors)) {
+    return [];
+  }
+
+  return errors.map((error) => {
+    const message = objectValue(error).message;
+    return typeof message === "string" ? message : String(error);
+  });
 }
 
 async function readBody(request: http.IncomingMessage): Promise<Uint8Array> {
@@ -1493,10 +1511,18 @@ const server = http.createServer((request, response) => {
         integrationStore,
         url.searchParams.get("op"),
       );
+      const errorMessages = graphqlErrorMessages(result.payload);
+      log(result.status >= 400 || errorMessages.length > 0 ? "warn" : "info", "graphql_response", {
+        ...result.diagnostics,
+        statusCode: result.status,
+        errorMessages,
+      });
       sendJson(response, result.status, result.payload);
       log("info", "http_response", {
         method,
         path: url.pathname,
+        graphqlOperationName: result.diagnostics.operationName,
+        graphqlCanonicalOperationName: result.diagnostics.canonicalOperationName,
         statusCode: response.statusCode,
         durationMs: Date.now() - startedAt,
       });
@@ -1527,6 +1553,7 @@ server.listen(port, host, () => {
   log("info", "server_started", {
     url: `http://${host}:${port}`,
     logLevel: process.env.LOG_LEVEL?.trim() || "info",
+    logFilePath: logFilePath() ?? null,
     hasOpenAiBaseUrlEnv: nonEmpty(process.env.OPENAI_BASE_URL) != null,
     hasOpenAiModelEnv: nonEmpty(process.env.OPENAI_MODEL) != null,
     hasModelAliasesEnv: nonEmpty(process.env.LOCAL_MODEL_ALIASES) != null,
