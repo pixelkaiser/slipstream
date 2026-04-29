@@ -116,6 +116,21 @@ function sseEventBytes(event: string): Buffer {
 }
 
 test("serves local GraphQL integration config over HTTP", { timeout: 10_000 }, async () => {
+  const provider = http.createServer((request, response) => {
+    if (request.url !== "/v1/models") {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      object: "list",
+      data: [{ id: "route-local-model" }],
+    }));
+  });
+  const providerPort = await listenOnLoopback(provider);
+
   const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
   const servicePort = await listenOnLoopback(serviceProbe);
   await closeServer(serviceProbe);
@@ -129,6 +144,7 @@ test("serves local GraphQL integration config over HTTP", { timeout: 10_000 }, a
       ...process.env,
       PORT: String(servicePort),
       LOG_LEVEL: "error",
+      OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
       LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
     },
   });
@@ -222,6 +238,33 @@ test("serves local GraphQL integration config over HTTP", { timeout: 10_000 }, a
     assert.equal(workspacesJson.data?.user?.__typename, "UserOutput");
     assert.deepEqual(workspacesJson.data?.user?.user?.workspaces, []);
     assert.equal(workspacesJson.data?.pricingInfo?.__typename, "PricingInfoOutput");
+
+    const modelsResponse = await fetch(`http://127.0.0.1:${servicePort}/graphql/v2`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        operationName: "GetFeatureModelChoices",
+        variables: {},
+      }),
+    });
+    assert.equal(modelsResponse.status, 200);
+    const modelsJson = await modelsResponse.json() as {
+      data?: {
+        user?: {
+          user?: {
+            workspaces?: Array<{
+              featureModelChoice?: { agentMode?: { choices?: Array<{ id?: string }> } };
+            }>;
+          };
+        };
+      };
+      errors?: unknown[];
+    };
+    assert.equal(modelsJson.errors, undefined);
+    assert.deepEqual(
+      modelsJson.data?.user?.user?.workspaces?.[0]?.featureModelChoice?.agentMode?.choices?.map((choice) => choice.id),
+      ["route-local-model"],
+    );
   } catch (error) {
     const diagnostics = [
       `stdout:\n${stdout.join("")}`,
@@ -230,6 +273,7 @@ test("serves local GraphQL integration config over HTTP", { timeout: 10_000 }, a
     throw new Error(`${error instanceof Error ? error.message : String(error)}\n${diagnostics}`);
   } finally {
     stopChild(child);
+    await closeServer(provider);
     rmSync(dir, { force: true, recursive: true });
   }
 });
