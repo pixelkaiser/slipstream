@@ -47,6 +47,6 @@ warp-build:
 	PATH="$$HOME/.cargo/bin:$$PATH" TERM=xterm-256color FEATURES=gui WARP_BIN_NAME=warp-oss WARP_CHANNEL=oss ./script/macos/run --dont-open
 
 warp-build-optimized:
-	PATH="$$HOME/.cargo/bin:$$PATH" TERM=xterm-256color FEATURES=gui WARP_BIN_NAME=warp-oss WARP_CHANNEL=oss ./script/macos/run --dont-open --profile release-lto
+	PATH="$$HOME/.cargo/bin:$$PATH" TERM=xterm-256color FEATURES=gui WARP_BIN_NAME=warp-oss WARP_CHANNEL=oss CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=unpacked ./script/macos/run --dont-open --profile release-lto
 
 warp-build-oss: warp-build
