@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import Database from "better-sqlite3";
 import { IntegrationStore } from "./integrationStore.js";
 
 function withStore(fn: (store: IntegrationStore, dbPath: string) => void): void {
@@ -262,6 +263,65 @@ test("infers AI execution profile format for MCP allowlist profile updates", () 
     assert.equal(store.getGenericStringObject(uid)?.format, "JsonAIExecutionProfile");
   } finally {
     store.close();
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("repairs persisted generic string object formats on open", () => {
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-graphql-"));
+  const dbPath = join(dir, "test.sqlite");
+  const uid = "bad-format-profile";
+  const serializedModel = JSON.stringify({
+    name: "Default",
+    is_default_profile: true,
+    apply_code_diffs: "AgentDecides",
+    read_files: "AgentDecides",
+    execute_commands: "AlwaysAsk",
+    write_to_pty: "AlwaysAsk",
+    mcp_permissions: "AgentDecides",
+    ask_user_question: "AskExceptInAutoApprove",
+    command_denylist: [],
+    command_allowlist: [],
+    directory_allowlist: [],
+    mcp_allowlist: [],
+    mcp_denylist: [],
+    computer_use: "Never",
+    base_model: "Qwen/Qwen3.6-27B-FP8",
+    coding_model: null,
+    cli_agent_model: "ultra-fast",
+    computer_use_model: null,
+    autosync_plans_to_warp_drive: true,
+    web_search_enabled: true,
+  });
+
+  const first = new IntegrationStore(dbPath);
+  first.close();
+
+  const db = new Database(dbPath);
+  try {
+    db.prepare(`
+      INSERT INTO generic_string_objects (
+        uid,
+        client_id,
+        format,
+        serialized_model,
+        revision_ts,
+        metadata_last_updated_ts,
+        permissions_last_updated_ts,
+        created_at,
+        updated_at
+      )
+      VALUES (?, NULL, 'JsonMCPServer', ?, '1', '1', '1', '1', '1')
+    `).run(uid, serializedModel);
+  } finally {
+    db.close();
+  }
+
+  const second = new IntegrationStore(dbPath);
+  try {
+    assert.equal(second.getGenericStringObject(uid)?.format, "JsonAIExecutionProfile");
+  } finally {
+    second.close();
     rmSync(dir, { force: true, recursive: true });
   }
 });
