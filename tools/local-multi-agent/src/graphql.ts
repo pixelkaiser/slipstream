@@ -36,7 +36,13 @@ const providerDescriptions = new Map<string, string>([
   ["slack", "Connect Slack to local Warp agents."],
 ]);
 
-const knownModelProviders = new Set(["OpenAI", "Anthropic", "Google", "Xai", "Unknown"]);
+const modelProviderGraphqlEnums = new Map<string, string>([
+  ["anthropic", "ANTHROPIC"],
+  ["google", "GOOGLE"],
+  ["openai", "OPENAI"],
+  ["unknown", "UNKNOWN"],
+  ["xai", "XAI"],
+]);
 const knownDisableReasons = new Set(["AdminDisabled", "OutOfRequests", "ProviderOutage", "RequiresUpgrade"]);
 const modelCacheTtlMs = 30_000;
 let modelCache: ModelCache | null = null;
@@ -146,6 +152,10 @@ function inferOperationName(request: GraphqlRequest, opFromQueryString?: string 
     "getFeatureModelChoices",
     "featureModelChoice",
     "freeAvailableModels",
+    "getUserSettings",
+    "conversationUsage",
+    "getConversationUsage",
+    "getUser",
     "getWorkspacesMetadataForUser",
     "workspacesMetadataForUser",
     "pricingInfo",
@@ -197,6 +207,16 @@ function canonicalOperationName(name: string): string {
     case "free_available_models":
     case "freeAvailableModels":
       return "freeAvailableModels";
+    case "GetUser":
+    case "getUser":
+      return "getUser";
+    case "GetUserSettings":
+    case "getUserSettings":
+      return "getUserSettings";
+    case "GetConversationUsage":
+    case "getConversationUsage":
+    case "conversationUsage":
+      return "getConversationUsage";
     case "GetWorkspacesMetadataForUser":
     case "getWorkspacesMetadataForUser":
     case "workspacesMetadataForUser":
@@ -382,18 +402,10 @@ function suggestCloudEnvironmentImage(): unknown {
 
 function normalizeModelProvider(provider: string | undefined): string {
   if (!provider) {
-    return "Unknown";
+    return "UNKNOWN";
   }
 
-  if (provider === "Openai") {
-    return "OpenAI";
-  }
-
-  if (provider === "XAI") {
-    return "Xai";
-  }
-
-  return knownModelProviders.has(provider) ? provider : "Unknown";
+  return modelProviderGraphqlEnums.get(provider.trim().toLowerCase()) ?? "UNKNOWN";
 }
 
 function normalizeDisableReason(reason: string | null | undefined): string | null {
@@ -537,7 +549,7 @@ function localModelInfo(model: LocalModelConfig): unknown {
     provider: normalizeModelProvider(model.provider),
     hostConfigs: [{
       enabled: true,
-      modelRoutingHost: "DirectApi",
+      modelRoutingHost: "DIRECT_API",
     }],
     pricing: {
       discountPercentage: null,
@@ -589,6 +601,62 @@ async function freeAvailableModels(): Promise<unknown> {
         featureModelChoice: await localFeatureModelChoice(),
         responseContext: {
           serverVersion: "local",
+        },
+      },
+    },
+  };
+}
+
+async function getUser(): Promise<unknown> {
+  return {
+    data: {
+      user: {
+        __typename: "UserOutput",
+        apiKeyOwnerType: null,
+        principalType: "USER",
+        user: {
+          anonymousUserInfo: null,
+          experiments: [],
+          isOnWorkDomain: false,
+          isOnboarded: true,
+          profile: {
+            displayName: "Local User",
+            email: "local@warp.dev",
+            needsSsoLink: false,
+            photoUrl: null,
+            uid: "local-user",
+          },
+          llms: await localFeatureModelChoice(),
+        },
+      },
+    },
+  };
+}
+
+function getUserSettings(): unknown {
+  return {
+    data: {
+      user: {
+        __typename: "UserOutput",
+        user: {
+          settings: {
+            isCloudConversationStorageEnabled: false,
+            isCrashReportingEnabled: false,
+            isTelemetryEnabled: false,
+          },
+        },
+      },
+    },
+  };
+}
+
+function getConversationUsage(): unknown {
+  return {
+    data: {
+      user: {
+        __typename: "UserOutput",
+        user: {
+          conversationUsage: [],
         },
       },
     },
@@ -690,6 +758,12 @@ export async function handleLocalGraphqlRequest(
         return { status: 200, payload: await getFeatureModelChoices() };
       case "freeAvailableModels":
         return { status: 200, payload: await freeAvailableModels() };
+      case "getUser":
+        return { status: 200, payload: await getUser() };
+      case "getUserSettings":
+        return { status: 200, payload: getUserSettings() };
+      case "getConversationUsage":
+        return { status: 200, payload: getConversationUsage() };
       case "workspacesMetadataForUser":
         return { status: 200, payload: getWorkspacesMetadataForUser() };
       default:
