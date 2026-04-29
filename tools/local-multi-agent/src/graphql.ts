@@ -101,6 +101,8 @@ function inferOperationName(request: GraphqlRequest, opFromQueryString?: string 
     "userGithubInfo",
     "userRepoAuthStatus",
     "suggestCloudEnvironmentImage",
+    "updatedCloudObjects",
+    "pricingInfo",
   ]) {
     if (query.includes(candidate)) {
       return candidate;
@@ -137,6 +139,13 @@ function canonicalOperationName(name: string): string {
     case "SuggestCloudEnvironmentImage":
     case "suggestCloudEnvironmentImage":
       return "suggestCloudEnvironmentImage";
+    case "GetUpdatedCloudObjects":
+    case "updatedCloudObjects":
+      return "updatedCloudObjects";
+    case "GetWorkspacesMetadataForUser":
+    case "workspacesMetadataForUser":
+    case "pricingInfo":
+      return "workspacesMetadataForUser";
     default:
       return name;
   }
@@ -315,6 +324,57 @@ function suggestCloudEnvironmentImage(): unknown {
   };
 }
 
+function getUpdatedCloudObjects(): unknown {
+  return {
+    data: {
+      updatedCloudObjects: {
+        __typename: "UpdatedCloudObjectsOutput",
+        actionHistories: [],
+        deletedObjectUids: {
+          folderUids: [],
+          genericStringObjectUids: [],
+          notebookUids: [],
+          workflowUids: [],
+        },
+        folders: [],
+        genericStringObjects: [],
+        mcpGallery: [],
+        notebooks: [],
+        responseContext: {
+          serverVersion: "local",
+        },
+        userProfiles: [],
+        workflows: [],
+      },
+    },
+  };
+}
+
+function getWorkspacesMetadataForUser(): unknown {
+  return {
+    data: {
+      user: {
+        __typename: "UserOutput",
+        user: {
+          workspaces: [],
+          experiments: [],
+          discoverableTeams: [],
+        },
+      },
+      pricingInfo: {
+        __typename: "PricingInfoOutput",
+        pricingInfo: {
+          plans: [],
+          overages: {
+            pricePerRequestUsdCents: 0,
+          },
+          addonCreditsOptions: [],
+        },
+      },
+    },
+  };
+}
+
 function unsupportedOperation(operationName: string | undefined): GraphqlResult {
   return {
     status: 400,
@@ -353,6 +413,10 @@ export function handleLocalGraphqlRequest(
         return { status: 200, payload: userRepoAuthStatus(variables) };
       case "suggestCloudEnvironmentImage":
         return { status: 200, payload: suggestCloudEnvironmentImage() };
+      case "updatedCloudObjects":
+        return { status: 200, payload: getUpdatedCloudObjects() };
+      case "workspacesMetadataForUser":
+        return { status: 200, payload: getWorkspacesMetadataForUser() };
       default:
         return unsupportedOperation(operationName);
     }

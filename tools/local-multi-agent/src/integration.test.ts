@@ -184,6 +184,44 @@ test("serves local GraphQL integration config over HTTP", { timeout: 10_000 }, a
     assert.deepEqual(JSON.parse(integration?.integrationConfig?.mcpServersJson ?? ""), {
       local: { command: "node" },
     });
+
+    const cloudObjectsResponse = await fetch(`http://127.0.0.1:${servicePort}/graphql/v2`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        operationName: "GetUpdatedCloudObjects",
+        variables: { input: { forceRefresh: false } },
+      }),
+    });
+    assert.equal(cloudObjectsResponse.status, 200);
+    const cloudObjectsJson = await cloudObjectsResponse.json() as {
+      data?: { updatedCloudObjects?: { __typename?: string; notebooks?: unknown[] } };
+      errors?: unknown[];
+    };
+    assert.equal(cloudObjectsJson.errors, undefined);
+    assert.equal(cloudObjectsJson.data?.updatedCloudObjects?.__typename, "UpdatedCloudObjectsOutput");
+    assert.deepEqual(cloudObjectsJson.data?.updatedCloudObjects?.notebooks, []);
+
+    const workspacesResponse = await fetch(`http://127.0.0.1:${servicePort}/graphql/v2`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        operationName: "GetWorkspacesMetadataForUser",
+        variables: {},
+      }),
+    });
+    assert.equal(workspacesResponse.status, 200);
+    const workspacesJson = await workspacesResponse.json() as {
+      data?: {
+        user?: { __typename?: string; user?: { workspaces?: unknown[] } };
+        pricingInfo?: { __typename?: string };
+      };
+      errors?: unknown[];
+    };
+    assert.equal(workspacesJson.errors, undefined);
+    assert.equal(workspacesJson.data?.user?.__typename, "UserOutput");
+    assert.deepEqual(workspacesJson.data?.user?.user?.workspaces, []);
+    assert.equal(workspacesJson.data?.pricingInfo?.__typename, "PricingInfoOutput");
   } catch (error) {
     const diagnostics = [
       `stdout:\n${stdout.join("")}`,
