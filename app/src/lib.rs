@@ -590,7 +590,9 @@ pub fn run() -> Result<()> {
     // `WARP_*` env-var equivalents) so shipped builds can't be redirected away from their
     // baked-in server URLs. See `Channel::allows_server_url_overrides`.
     if ChannelState::channel().allows_server_url_overrides() {
-        if let Some(url) = args.server_root_url() {
+        if let Some(url) =
+            crate::server::server_api::server_root_url_for_local_no_cloud(args.server_root_url())
+        {
             if let Err(e) = ChannelState::override_server_root_url(url.to_owned()) {
                 eprintln!("Error: Invalid server root URL: {e:#}");
             }
