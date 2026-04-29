@@ -26,6 +26,38 @@ function warpPromptRequest(prompt: string, conversationId?: string): Uint8Array 
   return Buffer.concat([lengthDelimitedField(2, deprecatedUserQuery), metadata(conversationId)]);
 }
 
+function warpPromptRequestWithMcpTool(prompt: string, params: {
+  toolName: string;
+  toolDescription?: string;
+  serverName?: string;
+  serverId?: string;
+  conversationId?: string;
+}): Uint8Array {
+  const tool = Buffer.concat([
+    stringField(1, params.toolName),
+    params.toolDescription ? stringField(2, params.toolDescription) : new Uint8Array(),
+  ]);
+  const server = Buffer.concat([
+    stringField(1, params.serverName ?? "MCP Server"),
+    lengthDelimitedField(4, tool),
+    params.serverId ? stringField(5, params.serverId) : new Uint8Array(),
+  ]);
+  const mcpContext = lengthDelimitedField(6, lengthDelimitedField(3, server));
+  return Buffer.concat([warpPromptRequest(prompt, params.conversationId), mcpContext]);
+}
+
+function warpPromptRequestWithDuplicateMcpTools(prompt: string): Uint8Array {
+  const servers = ["linear-server-a", "linear-server-b"].map((serverId) => {
+    const tool = stringField(1, "list_issues");
+    return lengthDelimitedField(3, Buffer.concat([
+      stringField(1, "Linear"),
+      lengthDelimitedField(4, tool),
+      stringField(5, serverId),
+    ]));
+  });
+  return Buffer.concat([warpPromptRequest(prompt), lengthDelimitedField(6, Buffer.concat(servers))]);
+}
+
 function warpPromptRequestWithSelectedText(prompt: string, selectedText: string, conversationId?: string): Uint8Array {
   const selectedTextContext = lengthDelimitedField(6, stringField(1, selectedText));
   const context = lengthDelimitedField(1, selectedTextContext);
@@ -126,6 +158,16 @@ function maybeHandleProviderModelsRequest(request: http.IncomingMessage, respons
     data: [{ id: "mock-model", context_length: 131072 }],
   }));
   return true;
+}
+
+function providerNonSystemMessages(body: unknown): unknown[] {
+  const messages = (body as { messages?: unknown[] }).messages ?? [];
+  return messages.filter((message) => (message as { role?: unknown }).role !== "system");
+}
+
+function providerSystemMessages(body: unknown): Array<{ role?: unknown; content?: unknown }> {
+  const messages = (body as { messages?: Array<{ role?: unknown; content?: unknown }> }).messages ?? [];
+  return messages.filter((message) => message.role === "system");
 }
 
 test("serves local GraphQL integration config over HTTP", { timeout: 10_000 }, async () => {
@@ -350,7 +392,7 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
 
     assert.equal(providerPath, "/v1/chat/completions");
     assert.equal((providerBody as { model?: unknown }).model, "mock-model");
-    assert.deepEqual((providerBody as { messages?: unknown }).messages, [{ role: "user", content: "hello provider" }]);
+    assert.deepEqual(providerNonSystemMessages(providerBody), [{ role: "user", content: "hello provider" }]);
     assert.equal((providerBody as { stream?: unknown }).stream, true);
     assert.equal((providerBody as { tool_choice?: unknown }).tool_choice, "auto");
     assert.equal(Array.isArray((providerBody as { tools?: unknown }).tools), true);
@@ -443,7 +485,7 @@ test("passes attached selected text context to the provider", { timeout: 10_000 
     assert.equal(response.status, 200);
     await response.text();
 
-    const messages = (providerBody as { messages?: Array<{ content?: string }> }).messages ?? [];
+    const messages = providerNonSystemMessages(providerBody) as Array<{ content?: string }>;
     assert.equal(messages.length, 1);
     assert.match(messages[0]?.content ?? "", /Attached context:/);
     assert.match(messages[0]?.content ?? "", /Selected text:\nFilesystem Size Used Avail/);
@@ -536,7 +578,7 @@ test("keeps provider conversation history across turns and service restarts", { 
     await secondResponse.text();
 
     assert.equal(providerBodies.length, 2);
-    assert.deepEqual((providerBodies[1] as { messages?: unknown }).messages, [
+    assert.deepEqual(providerNonSystemMessages(providerBodies[1]), [
       { role: "user", content: "first prompt" },
       { role: "assistant", content: "first answer" },
       { role: "user", content: "second prompt" },
@@ -655,7 +697,7 @@ test("translates an OpenAI read_files tool call into Warp SSE events", { timeout
     assert.equal(followUpResponse.status, 200);
     const followUpEvents = (await followUpResponse.text()).split("\n\n").filter(Boolean);
     assert.equal(followUpEvents.length, 4);
-    assert.deepEqual((providerBodies[1] as { messages?: unknown }).messages, [
+    assert.deepEqual(providerNonSystemMessages(providerBodies[1]), [
       { role: "user", content: "read src/main.ts" },
       {
         role: "assistant",
@@ -815,6 +857,188 @@ test("translates all supported OpenAI tool calls into Warp SSE events", { timeou
     const events = (await response.text()).split("\n\n").filter(Boolean);
     assert.equal(events.length, 11);
     assert.ok(events.every((event) => /^data: [-_A-Za-z0-9]+=*$/.test(event)));
+  } catch (error) {
+    const diagnostics = [
+      `stdout:\n${stdout.join("")}`,
+      `stderr:\n${stderr.join("")}`,
+    ].join("\n");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${diagnostics}`);
+  } finally {
+    stopChild(child);
+    await closeServer(provider);
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("translates provider-native MCP tool calls into Warp MCP tool events", { timeout: 10_000 }, async () => {
+  const providerBodies: unknown[] = [];
+  const provider = http.createServer(async (request, response) => {
+    if (maybeHandleProviderModelsRequest(request, response)) {
+      return;
+    }
+
+    providerBodies.push(JSON.parse(await readBody(request)));
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+    });
+    response.write(`data: ${JSON.stringify({
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call-linear-list-issues",
+                type: "function",
+                function: {
+                  name: "list_issues",
+                  arguments: JSON.stringify({ created_after: "2026-04-30" }),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    })}\n\n`);
+    response.write("data: [DONE]\n\n");
+    response.end();
+  });
+  const providerPort = await listenOnLoopback(provider);
+
+  const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
+  const servicePort = await listenOnLoopback(serviceProbe);
+  await closeServer(serviceProbe);
+
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-agent-native-mcp-"));
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const child = spawn(process.execPath, ["dist/server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(servicePort),
+      OPENAI_API_KEY: "sk-local-test",
+      OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
+      OPENAI_MODEL: "mock-model",
+      LOG_LEVEL: "error",
+      LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
+    },
+  });
+  child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
+  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+
+  try {
+    await waitForHealth(servicePort, child);
+    const response = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpPromptRequestWithMcpTool("any linear issues from today?", {
+        toolName: "list_issues",
+        toolDescription: "List Linear issues",
+        serverName: "Linear",
+        serverId: "linear-server",
+      })),
+    });
+
+    assert.equal(response.status, 200);
+    const events = (await response.text()).split("\n\n").filter(Boolean);
+
+    assert.equal(providerBodies.length, 1);
+    const systemPrompt = providerSystemMessages(providerBodies[0]).map((message) => message.content).join("\n");
+    assert.match(systemPrompt, /always use the provided call_mcp_tool function/);
+    assert.match(systemPrompt, /list_issues/);
+    assert.equal(events.length, 4);
+    const toolCallBytes = sseEventBytes(events[2]);
+    assert.equal(toolCallBytes.includes("call-linear-list-issues"), true);
+    assert.equal(toolCallBytes.includes("list_issues"), true);
+    assert.equal(toolCallBytes.includes("linear-server"), true);
+    assert.equal(toolCallBytes.includes("created_after"), true);
+  } catch (error) {
+    const diagnostics = [
+      `stdout:\n${stdout.join("")}`,
+      `stderr:\n${stderr.join("")}`,
+    ].join("\n");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${diagnostics}`);
+  } finally {
+    stopChild(child);
+    await closeServer(provider);
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
+test("does not guess provider-native MCP tool calls when names are ambiguous", { timeout: 10_000 }, async () => {
+  const provider = http.createServer(async (request, response) => {
+    if (maybeHandleProviderModelsRequest(request, response)) {
+      return;
+    }
+
+    await readBody(request);
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+    });
+    response.write(`data: ${JSON.stringify({
+      choices: [
+        {
+          delta: {
+            tool_calls: [
+              {
+                index: 0,
+                id: "call-ambiguous-list-issues",
+                type: "function",
+                function: {
+                  name: "list_issues",
+                  arguments: JSON.stringify({ created_after: "2026-04-30" }),
+                },
+              },
+            ],
+          },
+        },
+      ],
+    })}\n\n`);
+    response.write("data: [DONE]\n\n");
+    response.end();
+  });
+  const providerPort = await listenOnLoopback(provider);
+
+  const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
+  const servicePort = await listenOnLoopback(serviceProbe);
+  await closeServer(serviceProbe);
+
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-agent-ambiguous-mcp-"));
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const child = spawn(process.execPath, ["dist/server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(servicePort),
+      OPENAI_API_KEY: "sk-local-test",
+      OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
+      OPENAI_MODEL: "mock-model",
+      LOG_LEVEL: "error",
+      LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
+    },
+  });
+  child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
+  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+
+  try {
+    await waitForHealth(servicePort, child);
+    const response = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpPromptRequestWithDuplicateMcpTools("any linear issues from today?")),
+    });
+
+    assert.equal(response.status, 200);
+    const events = (await response.text()).split("\n\n").filter(Boolean);
+
+    assert.equal(events.length, 3);
+    assert.equal(sseEventBytes(events[2]).includes("Unsupported provider tool call: list_issues"), true);
   } catch (error) {
     const diagnostics = [
       `stdout:\n${stdout.join("")}`,
