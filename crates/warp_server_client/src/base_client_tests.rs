@@ -34,6 +34,7 @@ fn client() -> BaseClient {
         },
         AuthenticatedGraphqlConfig {
             headers: authenticated_headers,
+            ..AuthenticatedGraphqlConfig::default()
         },
         None,
     )
@@ -182,7 +183,10 @@ fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers
         event_sender,
         None,
         GraphqlRoutingConfig::default(),
-        AuthenticatedGraphqlConfig { headers },
+        AuthenticatedGraphqlConfig {
+            headers,
+            ..AuthenticatedGraphqlConfig::default()
+        },
         None,
     );
 
@@ -215,4 +219,37 @@ fn authenticated_graphql_configuration_cannot_override_base_client_owned_headers
         options.headers.get("x-eval-user-id").map(String::as_str),
         Some("1234")
     );
+}
+
+#[test]
+fn authenticated_graphql_context_can_be_disabled() {
+    let (event_sender, _) = async_channel::unbounded();
+    let mut headers = HashMap::new();
+    headers.insert("X-Test-Authenticated".to_string(), "true".to_string());
+    let client = BaseClient::new(
+        Arc::new(http_client::Client::new()),
+        Arc::new(AuthState::new_for_test()),
+        event_sender,
+        Some("cloud_mode".to_string()),
+        GraphqlRoutingConfig::default(),
+        AuthenticatedGraphqlConfig {
+            headers,
+            session_context_enabled: false,
+        },
+        None,
+    );
+    client.set_ambient_agent_task_id(Some("ambient-task".to_string()));
+
+    let options = block_on(client.graphql_request_options(None)).unwrap();
+
+    assert_eq!(options.auth_token, None);
+    assert_eq!(
+        options
+            .headers
+            .get("X-Test-Authenticated")
+            .map(String::as_str),
+        Some("true")
+    );
+    assert!(!options.headers.contains_key(CLOUD_AGENT_ID_HEADER));
+    assert!(!options.headers.contains_key(AGENT_SOURCE_HEADER));
 }

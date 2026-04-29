@@ -99,9 +99,19 @@ pub struct GraphqlRoutingConfig {
 }
 
 /// Provides headers added only to session-authenticated GraphQL operations.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct AuthenticatedGraphqlConfig {
     pub headers: HashMap<String, String>,
+    pub session_context_enabled: bool,
+}
+
+impl Default for AuthenticatedGraphqlConfig {
+    fn default() -> Self {
+        Self {
+            headers: HashMap::new(),
+            session_context_enabled: true,
+        }
+    }
 }
 
 /// Owns shared transport, authentication, and authenticated request decoration.
@@ -336,17 +346,28 @@ impl BaseClient {
         &self,
         timeout: Option<Duration>,
     ) -> Result<RequestOptions> {
-        let auth_token = self
-            .get_or_refresh_access_token()
-            .await
-            .context("Failed to get access token for GraphQL request")?;
-        let mut options = self.graphql_request_options_with_token(auth_token.bearer_token());
+        let auth_token = if self.authenticated_graphql.session_context_enabled {
+            Some(
+                self.get_or_refresh_access_token()
+                    .await
+                    .context("Failed to get access token for GraphQL request")?,
+            )
+        } else {
+            None
+        };
+        let mut options = self.graphql_request_options_with_token(
+            auth_token
+                .as_ref()
+                .and_then(warp_server_auth::credentials::AuthToken::bearer_token),
+        );
         options.timeout = timeout;
         options.headers = self.authenticated_graphql.headers.clone();
-        options.headers.extend(
-            self.ambient_headers(AmbientHeaderPolicy::inherit_all())
-                .await?,
-        );
+        if self.authenticated_graphql.session_context_enabled {
+            options.headers.extend(
+                self.ambient_headers(AmbientHeaderPolicy::inherit_all())
+                    .await?,
+            );
+        }
         Ok(options)
     }
 
