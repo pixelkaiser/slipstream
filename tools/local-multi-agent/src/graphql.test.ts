@@ -432,6 +432,58 @@ test("upserts generic string objects when local mode receives update before crea
   });
 });
 
+test("returns AI execution profile format for MCP allowlist updates", async () => {
+  await withStore(async (store) => {
+    const uid = "client-known-ai-execution-profile";
+    const serializedModel = JSON.stringify({
+      name: "Default",
+      is_default_profile: true,
+      apply_code_diffs: "AgentDecides",
+      read_files: "AgentDecides",
+      execute_commands: "AlwaysAsk",
+      write_to_pty: "AlwaysAsk",
+      mcp_permissions: "AgentDecides",
+      ask_user_question: "AskExceptInAutoApprove",
+      command_denylist: [],
+      command_allowlist: [],
+      directory_allowlist: [],
+      mcp_allowlist: ["00000000-0000-0000-0000-000000000003"],
+      mcp_denylist: [],
+      computer_use: "Never",
+      base_model: "Qwen/Qwen3.6-27B-FP8",
+      coding_model: null,
+      cli_agent_model: "ultra-fast",
+      computer_use_model: null,
+      autosync_plans_to_warp_drive: true,
+      web_search_enabled: true,
+    });
+
+    await dataOf(handleLocalGraphqlRequest({
+      operationName: "UpdateGenericStringObject",
+      variables: {
+        input: {
+          revisionTs: "client-revision",
+          serializedModel,
+          uid,
+        },
+      },
+    }, store));
+
+    const updatedObjects = (await dataOf(handleLocalGraphqlRequest({
+      operationName: "GetUpdatedCloudObjects",
+      variables: { input: { forceRefresh: true } },
+    }, store))).updatedCloudObjects as {
+      genericStringObjects?: Array<{ format?: string; metadata?: { uid?: string }; serializedModel?: string }>;
+    };
+    assert.deepEqual(updatedObjects.genericStringObjects?.map((object) => object.metadata?.uid), [uid]);
+    assert.equal(updatedObjects.genericStringObjects?.[0]?.format, "JsonAIExecutionProfile");
+    assert.deepEqual(
+      JSON.parse(updatedObjects.genericStringObjects?.[0]?.serializedModel ?? "{}").mcp_allowlist,
+      ["00000000-0000-0000-0000-000000000003"],
+    );
+  });
+});
+
 test("accepts Rust generated GraphQL operation names from operationName and op query parameter", async () => {
   await withStore(async (store) => {
     const updatedObjectsData = await dataOf(handleLocalGraphqlRequest({
