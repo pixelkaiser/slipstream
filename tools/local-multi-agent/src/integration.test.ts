@@ -216,6 +216,7 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
   const servicePort = await listenOnLoopback(serviceProbe);
   await closeServer(serviceProbe);
 
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-agent-service-"));
   const stdout: string[] = [];
   const stderr: string[] = [];
   const child = spawn(process.execPath, ["dist/server.js"], {
@@ -227,6 +228,7 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
       OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
       OPENAI_MODEL: "mock-model",
       LOG_LEVEL: "error",
+      LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
     },
   });
   child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
@@ -272,6 +274,7 @@ test("serves a Warp multi-agent request through a mock OpenAI-compatible stream"
   } finally {
     stopChild(child);
     await closeServer(provider);
+    rmSync(dir, { force: true, recursive: true });
   }
 });
 
@@ -292,6 +295,7 @@ test("passes attached selected text context to the provider", { timeout: 10_000 
   const servicePort = await listenOnLoopback(serviceProbe);
   await closeServer(serviceProbe);
 
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-agent-context-"));
   const stdout: string[] = [];
   const stderr: string[] = [];
   const child = spawn(process.execPath, ["dist/server.js"], {
@@ -303,6 +307,7 @@ test("passes attached selected text context to the provider", { timeout: 10_000 
       OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
       OPENAI_MODEL: "mock-model",
       LOG_LEVEL: "error",
+      LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
     },
   });
   child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
@@ -339,10 +344,11 @@ test("passes attached selected text context to the provider", { timeout: 10_000 
   } finally {
     stopChild(child);
     await closeServer(provider);
+    rmSync(dir, { force: true, recursive: true });
   }
 });
 
-test("keeps provider conversation history across turns", { timeout: 10_000 }, async () => {
+test("keeps provider conversation history across turns and service restarts", { timeout: 10_000 }, async () => {
   const providerBodies: unknown[] = [];
   const provider = http.createServer(async (_request, response) => {
     providerBodies.push(JSON.parse(await readBody(_request)));
@@ -356,29 +362,39 @@ test("keeps provider conversation history across turns", { timeout: 10_000 }, as
   });
   const providerPort = await listenOnLoopback(provider);
 
-  const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
-  const servicePort = await listenOnLoopback(serviceProbe);
-  await closeServer(serviceProbe);
-
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-agent-history-"));
+  const dbPath = join(dir, "local.sqlite");
   const stdout: string[] = [];
   const stderr: string[] = [];
-  const child = spawn(process.execPath, ["dist/server.js"], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      PORT: String(servicePort),
-      OPENAI_API_KEY: "sk-local-test",
-      OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
-      OPENAI_MODEL: "mock-model",
-      LOG_LEVEL: "error",
-    },
-  });
-  child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
-  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+  let firstChild: ChildProcessWithoutNullStreams | undefined;
+  let secondChild: ChildProcessWithoutNullStreams | undefined;
+
+  async function startService(): Promise<{ child: ChildProcessWithoutNullStreams; port: number }> {
+    const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
+    const servicePort = await listenOnLoopback(serviceProbe);
+    await closeServer(serviceProbe);
+    const child = spawn(process.execPath, ["dist/server.js"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        PORT: String(servicePort),
+        OPENAI_API_KEY: "sk-local-test",
+        OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
+        OPENAI_MODEL: "mock-model",
+        LOG_LEVEL: "error",
+        LOCAL_GRAPHQL_DB_PATH: dbPath,
+      },
+    });
+    child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
+    child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+    await waitForHealth(servicePort, child);
+    return { child, port: servicePort };
+  }
 
   try {
-    await waitForHealth(servicePort, child);
-    const firstResponse = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+    const firstService = await startService();
+    firstChild = firstService.child;
+    const firstResponse = await fetch(`http://127.0.0.1:${firstService.port}/ai/multi-agent`, {
       method: "POST",
       headers: {
         "content-type": "application/x-protobuf",
@@ -387,8 +403,12 @@ test("keeps provider conversation history across turns", { timeout: 10_000 }, as
     });
     assert.equal(firstResponse.status, 200);
     await firstResponse.text();
+    stopChild(firstChild);
+    firstChild = undefined;
 
-    const secondResponse = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+    const secondService = await startService();
+    secondChild = secondService.child;
+    const secondResponse = await fetch(`http://127.0.0.1:${secondService.port}/ai/multi-agent`, {
       method: "POST",
       headers: {
         "content-type": "application/x-protobuf",
@@ -411,8 +431,14 @@ test("keeps provider conversation history across turns", { timeout: 10_000 }, as
     ].join("\n");
     throw new Error(`${error instanceof Error ? error.message : String(error)}\n${diagnostics}`);
   } finally {
-    stopChild(child);
+    if (firstChild) {
+      stopChild(firstChild);
+    }
+    if (secondChild) {
+      stopChild(secondChild);
+    }
     await closeServer(provider);
+    rmSync(dir, { force: true, recursive: true });
   }
 });
 
@@ -456,6 +482,7 @@ test("translates an OpenAI read_files tool call into Warp SSE events", { timeout
   const servicePort = await listenOnLoopback(serviceProbe);
   await closeServer(serviceProbe);
 
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-agent-tools-"));
   const stdout: string[] = [];
   const stderr: string[] = [];
   const child = spawn(process.execPath, ["dist/server.js"], {
@@ -467,6 +494,7 @@ test("translates an OpenAI read_files tool call into Warp SSE events", { timeout
       OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
       OPENAI_MODEL: "mock-model",
       LOG_LEVEL: "error",
+      LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
     },
   });
   child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
@@ -537,6 +565,7 @@ test("translates an OpenAI read_files tool call into Warp SSE events", { timeout
   } finally {
     stopChild(child);
     await closeServer(provider);
+    rmSync(dir, { force: true, recursive: true });
   }
 });
 
@@ -615,6 +644,7 @@ test("translates all supported OpenAI tool calls into Warp SSE events", { timeou
   const servicePort = await listenOnLoopback(serviceProbe);
   await closeServer(serviceProbe);
 
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-agent-all-tools-"));
   const stdout: string[] = [];
   const stderr: string[] = [];
   const child = spawn(process.execPath, ["dist/server.js"], {
@@ -626,6 +656,7 @@ test("translates all supported OpenAI tool calls into Warp SSE events", { timeou
       OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
       OPENAI_MODEL: "mock-model",
       LOG_LEVEL: "error",
+      LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
     },
   });
   child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
@@ -654,5 +685,6 @@ test("translates all supported OpenAI tool calls into Warp SSE events", { timeou
   } finally {
     stopChild(child);
     await closeServer(provider);
+    rmSync(dir, { force: true, recursive: true });
   }
 });
