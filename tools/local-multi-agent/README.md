@@ -68,6 +68,16 @@ For user prompts, the service also forwards supported Warp input context to the 
 
 The service logs JSON lines for startup, HTTP requests, Warp multi-agent requests, provider requests, errors, and completion summaries. API keys and authorization-like fields are redacted.
 
+## Protobufs
+
+Generated TypeScript descriptors live under `src/generated/warp_multi_agent/v1`. Regenerate them from the `warp_multi_agent_api` revision pinned in the repo root `Cargo.toml` with:
+
+```sh
+npm run proto:generate
+```
+
+Set `WARP_PROTO_APIS_DIR=/path/to/warp-proto-apis` to generate from an existing checkout instead of the script-managed `.proto-cache`.
+
 Point Warp's BYOK `Local Multi-Agent Server URL` field at:
 
 ```text
