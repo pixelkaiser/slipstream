@@ -40,6 +40,12 @@ const maxConversationMessages = Math.max(
   4,
   Number.parseInt(process.env.LOCAL_MAX_HISTORY_MESSAGES ?? "80", 10) || 80,
 );
+const defaultContextWindowTokens = 128 * 1024;
+const builtInModelContextWindows = new Map<string, number>([
+  ["Qwen/Qwen3.6-27B-FP8", 262144],
+]);
+const modelContextCacheTtlMs = 30_000;
+const modelContextCache = new Map<string, { fetchedAtMs: number; contextWindowsByModel: Map<string, number> }>();
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
@@ -104,6 +110,7 @@ type ProviderChatMessage = {
 type ProviderResponse = {
   content: string;
   toolCalls: ProviderToolCall[];
+  contextWindowUsage?: number;
 };
 
 type FinishReason = "invalid_api_key" | "llm_unavailable" | "context_window_exceeded" | "quota_limit" | "internal_error";
@@ -340,6 +347,49 @@ function suggestPlanToolSchema(): object {
   };
 }
 
+function readMcpResourceToolSchema(): object {
+  return {
+    type: "function",
+    function: {
+      name: "read_mcp_resource",
+      description: "Read one MCP resource by URI from the MCP resources listed in the request context.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          uri: { type: "string", description: "The exact MCP resource URI to read." },
+          server_id: { type: "string", description: "Optional MCP server id from the request context." },
+        },
+        required: ["uri"],
+      },
+    },
+  };
+}
+
+function callMcpToolSchema(): object {
+  return {
+    type: "function",
+    function: {
+      name: "call_mcp_tool",
+      description: "Call one MCP tool from the MCP tools listed in the request context.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: { type: "string", description: "The exact MCP tool name to call." },
+          server_id: { type: "string", description: "Optional MCP server id from the request context." },
+          args: {
+            type: "object",
+            description: "JSON object arguments for the MCP tool.",
+            additionalProperties: true,
+          },
+        },
+        required: ["name"],
+      },
+    },
+  };
+}
+
 function localToolSchemas(): object[] {
   return [
     readFilesToolSchema(),
@@ -349,6 +399,8 @@ function localToolSchemas(): object[] {
     runShellCommandToolSchema(),
     applyFileDiffsToolSchema(),
     suggestPlanToolSchema(),
+    readMcpResourceToolSchema(),
+    callMcpToolSchema(),
   ];
 }
 
@@ -420,6 +472,138 @@ function shouldEnableTools(): boolean {
   return process.env.LOCAL_ENABLE_TOOLS?.trim().toLowerCase() !== "false";
 }
 
+function finitePositiveNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function configuredContextWindowTokens(model: string): number | undefined {
+  const raw = nonEmpty(process.env.LOCAL_MODEL_CONTEXT_TOKENS)
+    ?? nonEmpty(process.env.LOCAL_CONTEXT_WINDOW_TOKENS);
+  if (!raw) {
+    return undefined;
+  }
+
+  const asNumber = finitePositiveNumber(raw);
+  if (asNumber != null) {
+    return asNumber;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const values = parsed as Record<string, unknown>;
+    return finitePositiveNumber(values[model]) ?? finitePositiveNumber(values.default);
+  } catch {
+    return undefined;
+  }
+}
+
+function contextWindowFromProviderModel(model: Record<string, unknown>): number | undefined {
+  const directKeys = [
+    "context_length",
+    "contextLength",
+    "max_context_length",
+    "maxContextLength",
+    "max_model_len",
+    "maxModelLen",
+    "max_sequence_length",
+    "maxSequenceLength",
+    "n_ctx",
+    "nCtx",
+  ];
+  for (const key of directKeys) {
+    const value = finitePositiveNumber(model[key]);
+    if (value != null) {
+      return value;
+    }
+  }
+
+  for (const key of ["metadata", "model_info", "modelInfo"]) {
+    const nested = model[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const value = contextWindowFromProviderModel(nested as Record<string, unknown>);
+      if (value != null) {
+        return value;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+async function fetchProviderModelContextWindows(baseUrl: string, apiKey?: string): Promise<Map<string, number>> {
+  const now = Date.now();
+  const cached = modelContextCache.get(baseUrl);
+  if (cached && now - cached.fetchedAtMs < modelContextCacheTtlMs) {
+    return cached.contextWindowsByModel;
+  }
+
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (apiKey) {
+    headers.authorization = `Bearer ${apiKey}`;
+  }
+
+  const contextWindowsByModel = new Map<string, number>();
+  try {
+    const response = await fetch(`${baseUrl}/models`, { headers });
+    if (!response.ok) {
+      throw new Error(`provider models request failed with HTTP ${response.status}`);
+    }
+    const payload = await response.json() as unknown;
+    const data = payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>).data
+      : undefined;
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          continue;
+        }
+        const providerModel = item as Record<string, unknown>;
+        const id = typeof providerModel.id === "string" && providerModel.id.trim()
+          ? providerModel.id.trim()
+          : undefined;
+        const contextWindow = contextWindowFromProviderModel(providerModel);
+        if (id && contextWindow != null) {
+          contextWindowsByModel.set(id, contextWindow);
+        }
+      }
+    }
+  } catch (error) {
+    log("debug", "provider_model_context_fetch_failed", {
+      baseUrl,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  modelContextCache.set(baseUrl, { fetchedAtMs: now, contextWindowsByModel });
+  return contextWindowsByModel;
+}
+
+async function contextWindowTokensForModel(params: {
+  baseUrl: string;
+  apiKey?: string;
+  model: string;
+}): Promise<number | undefined> {
+  const configured = configuredContextWindowTokens(params.model);
+  if (configured != null) {
+    return configured;
+  }
+
+  const providerModels = await fetchProviderModelContextWindows(params.baseUrl, params.apiKey);
+  return providerModels.get(params.model)
+    ?? builtInModelContextWindows.get(params.model)
+    ?? defaultContextWindowTokens;
+}
+
 function parseReadFilesToolCall(toolCall: ProviderToolCall): ReadFilesToolCallFile[] | undefined {
   const args = JSON.parse(toolCall.argumentsText || "{}") as { files?: unknown; paths?: unknown };
   const files = Array.isArray(args.files)
@@ -474,6 +658,23 @@ function stringList(value: unknown): string[] {
 
 function optionalNumber(value: unknown): number | undefined {
   return Number.isInteger(value) ? Number(value) : undefined;
+}
+
+function optionalObject(value: unknown): Record<string, unknown> | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 function parseToolCall(toolCall: ProviderToolCall): WarpToolCall | undefined {
@@ -550,6 +751,43 @@ function parseToolCall(toolCall: ProviderToolCall): WarpToolCall | undefined {
           maxMatches: optionalNumber(args.max_matches),
           maxDepth: optionalNumber(args.max_depth),
           minDepth: optionalNumber(args.min_depth),
+        },
+      };
+    }
+    case "read_mcp_resource": {
+      const uri = args.uri ?? args.resource_uri;
+      if (typeof uri !== "string" || !uri.trim()) {
+        return undefined;
+      }
+      return {
+        toolCallId: toolCall.id,
+        tool: {
+          type: "read_mcp_resource",
+          uri: uri.trim(),
+          serverId: typeof args.server_id === "string" && args.server_id.trim()
+            ? args.server_id.trim()
+            : typeof args.serverId === "string" && args.serverId.trim()
+              ? args.serverId.trim()
+              : undefined,
+        },
+      };
+    }
+    case "call_mcp_tool": {
+      const name = args.name ?? args.tool_name ?? args.tool;
+      if (typeof name !== "string" || !name.trim()) {
+        return undefined;
+      }
+      return {
+        toolCallId: toolCall.id,
+        tool: {
+          type: "call_mcp_tool",
+          name: name.trim(),
+          serverId: typeof args.server_id === "string" && args.server_id.trim()
+            ? args.server_id.trim()
+            : typeof args.serverId === "string" && args.serverId.trim()
+              ? args.serverId.trim()
+              : undefined,
+          args: optionalObject(args.args) ?? optionalObject(args.arguments),
         },
       };
     }
@@ -703,6 +941,42 @@ function providerMessageContentLength(content: ProviderChatMessage["content"]): 
     return content.reduce((sum, part) => sum + (part.type === "text" ? part.text.length : part.image_url.url.length), 0);
   }
   return 0;
+}
+
+function approximateTokenCount(chars: number): number {
+  return Math.ceil(chars / 4);
+}
+
+function providerToolCallContentLength(toolCalls: ProviderToolCall[]): number {
+  return toolCalls.reduce((sum, toolCall) => sum + toolCall.id.length + toolCall.name.length + toolCall.argumentsText.length, 0);
+}
+
+function estimateContextWindowUsage(params: {
+  messages: ProviderChatMessage[];
+  tools?: object[];
+  assistantResponse?: ProviderResponse;
+  contextWindowTokens?: number;
+}): number | undefined {
+  if (!params.contextWindowTokens) {
+    return undefined;
+  }
+
+  const messageChars = params.messages.reduce(
+    (sum, message) => sum + message.role.length + providerMessageContentLength(message.content) + providerToolCallContentLength(
+      (message.tool_calls ?? []).map((toolCall) => ({
+        id: toolCall.id,
+        name: toolCall.function.name,
+        argumentsText: toolCall.function.arguments,
+      })),
+    ),
+    0,
+  );
+  const toolsChars = params.tools?.length ? JSON.stringify(params.tools).length : 0;
+  const assistantChars = params.assistantResponse
+    ? providerMessageContentLength(params.assistantResponse.content) + providerToolCallContentLength(params.assistantResponse.toolCalls)
+    : 0;
+  const estimatedTokens = approximateTokenCount(messageChars + toolsChars + assistantChars);
+  return Math.min(1, estimatedTokens / params.contextWindowTokens);
 }
 
 function streamFinishedForError(error: unknown): Uint8Array {
@@ -891,28 +1165,35 @@ async function streamChatCompletion(params: {
     warpModel: params.model,
     localModelAliases: process.env.LOCAL_MODEL_ALIASES,
   });
+  const contextWindowTokens = await contextWindowTokensForModel({
+    baseUrl,
+    apiKey,
+    model,
+  });
   log("info", "provider_request", {
     baseUrl,
     model,
     warpModel: params.model ?? null,
     messageCount: params.messages.length,
     promptChars: params.messages.reduce((sum, message) => sum + providerMessageContentLength(message.content), 0),
+    contextWindowTokens: contextWindowTokens ?? null,
     baseUrlSource: nonEmpty(params.baseUrl) ? "request_header" : nonEmpty(process.env.OPENAI_BASE_URL) ? "env" : "default",
   });
 
-  const messages = [
+  const messages: ProviderChatMessage[] = [
     process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT
-      ? { role: "system", content: process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT }
+      ? { role: "system" as const, content: process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT }
       : undefined,
     ...params.messages,
-  ].filter((message) => message != null);
+  ].filter((message): message is ProviderChatMessage => message != null);
+  const tools = shouldEnableTools() ? localToolSchemas() : undefined;
 
   const requestBody = {
     model,
     messages,
     temperature: 0.2,
     stream: true,
-    ...(shouldEnableTools() ? { tools: localToolSchemas(), tool_choice: "auto" } : {}),
+    ...(tools ? { tools, tool_choice: "auto" } : {}),
   };
 
   const completionResponse = await fetch(`${baseUrl}/chat/completions`, {
@@ -971,6 +1252,15 @@ async function streamChatCompletion(params: {
         return {
           content,
           toolCalls: [...toolCalls.values()].filter((toolCall) => toolCall.id && toolCall.name),
+          contextWindowUsage: estimateContextWindowUsage({
+            messages,
+            tools,
+            assistantResponse: {
+              content,
+              toolCalls: [...toolCalls.values()].filter((toolCall) => toolCall.id && toolCall.name),
+            },
+            contextWindowTokens,
+          }),
         };
       }
 
@@ -987,6 +1277,15 @@ async function streamChatCompletion(params: {
   return {
     content,
     toolCalls: [...toolCalls.values()].filter((toolCall) => toolCall.id && toolCall.name),
+    contextWindowUsage: estimateContextWindowUsage({
+      messages,
+      tools,
+      assistantResponse: {
+        content,
+        toolCalls: [...toolCalls.values()].filter((toolCall) => toolCall.id && toolCall.name),
+      },
+      contextWindowTokens,
+    }),
   };
 }
 
@@ -1034,6 +1333,7 @@ async function handleMultiAgent(
 
   sendEvent("stream_init", encodeStreamInit(warpRequest.conversationId, warpRequest.requestId));
 
+  let providerResponseForUsage: ProviderResponse | undefined;
   try {
     if (!passiveSuggestions) {
       if (warpRequest.shouldCreateRootTask) {
@@ -1087,6 +1387,7 @@ async function handleMultiAgent(
         throw new LocalAgentError("OpenAI-compatible endpoint returned no assistant content or tool calls.");
       }
 
+      providerResponseForUsage = providerResponse;
       rememberProviderResponse(warpRequest.conversationId, providerMessages.pendingMessages, providerResponse);
 
       if (providerResponse.content && !streamedAgentOutput) {
@@ -1119,7 +1420,9 @@ async function handleMultiAgent(
       }
     }
 
-    sendEvent("stream_finished_done", encodeStreamFinishedDone());
+    sendEvent("stream_finished_done", encodeStreamFinishedDone({
+      contextWindowUsage: providerResponseForUsage?.contextWindowUsage,
+    }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log("error", "multi_agent_error", {
