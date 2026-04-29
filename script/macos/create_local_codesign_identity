@@ -1,0 +1,83 @@
+#!/bin/bash
+#
+# Creates a stable self-signed code-signing identity for local macOS builds.
+# This is intended for developer builds only. It is not a distribution or
+# notarization certificate.
+
+set -euo pipefail
+
+IDENTITY_NAME="${WARP_LOCAL_CODESIGN_IDENTITY_NAME:-Warp Local Development}"
+KEYCHAIN="${WARP_LOCAL_CODESIGN_KEYCHAIN:-$(security login-keychain | sed 's/[[:space:]"]//g')}"
+
+if security find-identity -p codesigning -v | grep -F "\"$IDENTITY_NAME\"" >/dev/null; then
+  echo "Code-signing identity already exists: $IDENTITY_NAME"
+  exit 0
+fi
+
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "openssl is required to create a local code-signing identity." >&2
+  exit 1
+fi
+
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+CERT_PASSWORD="$(uuidgen)"
+OPENSSL_CONFIG="$TMP_DIR/openssl.cnf"
+KEY_PATH="$TMP_DIR/local-codesign.key"
+CERT_PATH="$TMP_DIR/local-codesign.crt"
+P12_PATH="$TMP_DIR/local-codesign.p12"
+
+cat > "$OPENSSL_CONFIG" <<EOF
+[ req ]
+distinguished_name = dn
+x509_extensions = codesign_ext
+prompt = no
+
+[ dn ]
+CN = $IDENTITY_NAME
+
+[ codesign_ext ]
+basicConstraints = critical,CA:false
+keyUsage = critical,digitalSignature
+extendedKeyUsage = critical,codeSigning
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+EOF
+
+openssl req \
+  -newkey rsa:2048 \
+  -nodes \
+  -keyout "$KEY_PATH" \
+  -x509 \
+  -days 3650 \
+  -out "$CERT_PATH" \
+  -config "$OPENSSL_CONFIG" >/dev/null 2>&1
+
+# macOS security(1) imports OpenSSL 3 PKCS#12 output reliably with -legacy.
+openssl pkcs12 \
+  -legacy \
+  -export \
+  -inkey "$KEY_PATH" \
+  -in "$CERT_PATH" \
+  -out "$P12_PATH" \
+  -passout "pass:$CERT_PASSWORD" >/dev/null 2>&1
+
+security import "$P12_PATH" \
+  -k "$KEYCHAIN" \
+  -P "$CERT_PASSWORD" \
+  -T /usr/bin/codesign >/dev/null
+
+security add-trusted-cert \
+  -d \
+  -r trustRoot \
+  -p codeSign \
+  -k "$KEYCHAIN" \
+  "$CERT_PATH"
+
+if ! security find-identity -p codesigning -v | grep -F "\"$IDENTITY_NAME\"" >/dev/null; then
+  echo "Created certificate, but it is not available as a valid code-signing identity." >&2
+  exit 1
+fi
+
+echo "Created local code-signing identity: $IDENTITY_NAME"
