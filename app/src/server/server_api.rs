@@ -94,6 +94,7 @@ pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_s
 
 const EXPERIMENT_ID_HEADER: &str = "X-Warp-Experiment-Id";
 const WARP_NO_CLOUD_ENV: &str = "WARP_NO_CLOUD";
+pub(crate) const LOCAL_NO_CLOUD_SERVER_ROOT_URL: &str = "http://127.0.0.1:8787";
 
 /// We use a special error code header `X-Warp-Error-Code` to allow the server to send
 /// more specific error code information, so that the client can discern between different
@@ -115,13 +116,17 @@ pub(crate) const AGENT_SOURCE_HEADER: &str = "X-Oz-Api-Source";
 #[cfg(feature = "agent_mode_evals")]
 pub const EVAL_USER_ID_HEADER: &str = "X-Eval-User-ID";
 
-fn no_cloud_mode_enabled() -> bool {
+pub(crate) fn no_cloud_mode_enabled() -> bool {
     std::env::var(WARP_NO_CLOUD_ENV).ok().is_some_and(|value| {
         matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
         )
     })
+}
+
+pub(crate) fn server_root_url_for_local_no_cloud(explicit_url: Option<&str>) -> Option<&str> {
+    explicit_url.or_else(|| no_cloud_mode_enabled().then_some(LOCAL_NO_CLOUD_SERVER_ROOT_URL))
 }
 
 fn should_send_authenticated_graphql_context() -> bool {
@@ -1827,6 +1832,31 @@ mod tests {
             assert!(!no_cloud_mode_enabled());
             assert!(should_send_authenticated_graphql_context());
         }
+
+        restore_env_var(WARP_NO_CLOUD_ENV, previous);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn no_cloud_mode_defaults_graphql_root_to_local_service() {
+        let previous = std::env::var_os(WARP_NO_CLOUD_ENV);
+
+        std::env::remove_var(WARP_NO_CLOUD_ENV);
+        assert_eq!(
+            server_root_url_for_local_no_cloud(Some("http://localhost:9999")),
+            Some("http://localhost:9999")
+        );
+        assert_eq!(server_root_url_for_local_no_cloud(None), None);
+
+        std::env::set_var(WARP_NO_CLOUD_ENV, "1");
+        assert_eq!(
+            server_root_url_for_local_no_cloud(Some("http://localhost:9999")),
+            Some("http://localhost:9999")
+        );
+        assert_eq!(
+            server_root_url_for_local_no_cloud(None),
+            Some(LOCAL_NO_CLOUD_SERVER_ROOT_URL)
+        );
 
         restore_env_var(WARP_NO_CLOUD_ENV, previous);
     }
