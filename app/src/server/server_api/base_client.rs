@@ -43,10 +43,6 @@ impl BaseClient for ServerApi {
         &self,
         timeout: Option<Duration>,
     ) -> Result<warp_graphql::client::RequestOptions> {
-        let auth_token = self
-            .get_or_refresh_access_token()
-            .await
-            .context("Failed to get access token for GraphQL request")?;
         let mut headers = std::collections::HashMap::new();
         #[cfg(feature = "agent_mode_evals")]
         if let Some(eval_user_id) = self.eval_user_id {
@@ -55,11 +51,20 @@ impl BaseClient for ServerApi {
                 eval_user_id.to_string(),
             );
         }
-        for (name, value) in self.ambient_agent_headers().await? {
-            headers.insert(name.to_string(), value);
-        }
+        let auth_token = if super::should_send_authenticated_graphql_context() {
+            let auth_token = self
+                .get_or_refresh_access_token()
+                .await
+                .context("Failed to get access token for GraphQL request")?;
+            for (name, value) in self.ambient_agent_headers().await? {
+                headers.insert(name.to_string(), value);
+            }
+            auth_token.bearer_token()
+        } else {
+            None
+        };
         Ok(warp_graphql::client::RequestOptions {
-            auth_token: auth_token.bearer_token(),
+            auth_token,
             timeout,
             headers,
             ..default_request_options()
