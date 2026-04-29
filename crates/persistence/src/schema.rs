@@ -203,6 +203,13 @@ diesel::table! {
 }
 
 diesel::table! {
+    file_based_mcp_server_activations (installation_uuid) {
+        installation_uuid -> Text,
+        last_modified_at -> Timestamp,
+    }
+}
+
+diesel::table! {
     mcp_server_installations (id) {
         id -> Text,
         templatable_mcp_server -> Text,
