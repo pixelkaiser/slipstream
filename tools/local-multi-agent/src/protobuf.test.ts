@@ -16,6 +16,18 @@ import {
   encodeStreamFinishedQuotaLimit,
   encodeStreamInit,
 } from "./protobuf.js";
+import {
+  RequestSchema,
+  Request_InputSchema,
+  Request_Input_UserInputs_UserInputSchema,
+} from "./generated/warp_multi_agent/v1/request_pb.js";
+import {
+  ClientActionSchema,
+  ClientAction_AppendToMessageContentSchema,
+  ResponseEventSchema,
+  ResponseEvent_ClientActionsSchema,
+} from "./generated/warp_multi_agent/v1/response_pb.js";
+import { MessageSchema } from "./generated/warp_multi_agent/v1/task_pb.js";
 
 function hex(value: string): Uint8Array {
   return Uint8Array.from(Buffer.from(value.replace(/\s+/g, ""), "hex"));
@@ -50,6 +62,35 @@ function toolResultRequest(toolCallResult: Uint8Array): Uint8Array {
   const input = lengthDelimitedField(6, userInputs);
   return lengthDelimitedField(2, input);
 }
+
+test("loads generated multi-agent protobuf descriptors for hand-rolled wire compatibility", () => {
+  assert.equal(RequestSchema.field.taskContext.number, 1);
+  assert.equal(RequestSchema.field.input.number, 2);
+  assert.equal(RequestSchema.field.settings.number, 3);
+  assert.equal(RequestSchema.field.metadata.number, 4);
+  assert.equal(RequestSchema.field.mcpContext.number, 6);
+  assert.equal(Request_InputSchema.field.context.number, 1);
+  assert.equal(Request_InputSchema.field.userQuery.number, 2);
+  assert.equal(Request_InputSchema.field.toolCallResult.number, 3);
+  assert.equal(Request_InputSchema.field.userInputs.number, 6);
+  assert.equal(Request_Input_UserInputs_UserInputSchema.field.userQuery.number, 1);
+  assert.equal(Request_Input_UserInputs_UserInputSchema.field.toolCallResult.number, 2);
+
+  assert.equal(ResponseEventSchema.field.init.number, 1);
+  assert.equal(ResponseEventSchema.field.clientActions.number, 2);
+  assert.equal(ResponseEventSchema.field.finished.number, 3);
+  assert.equal(ResponseEvent_ClientActionsSchema.field.actions.number, 1);
+  assert.equal(ClientActionSchema.field.createTask.number, 1);
+  assert.equal(ClientActionSchema.field.addMessagesToTask.number, 3);
+  assert.equal(ClientActionSchema.field.appendToMessageContent.number, 5);
+  assert.equal(ClientAction_AppendToMessageContentSchema.field.message.number, 1);
+  assert.equal(ClientAction_AppendToMessageContentSchema.field.mask.number, 2);
+  assert.equal(ClientAction_AppendToMessageContentSchema.field.taskId.number, 3);
+  assert.equal(MessageSchema.field.agentOutput.number, 3);
+  const agentOutputMessage = MessageSchema.field.agentOutput.message;
+  assert.ok(agentOutputMessage);
+  assert.equal(agentOutputMessage.field.text.number, 1);
+});
 
 test("decodes the fields needed from a Warp request", () => {
   const task = hex("0a04726f6f74");
