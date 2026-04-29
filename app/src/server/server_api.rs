@@ -1825,6 +1825,81 @@ mod tests {
     }
 
     #[test]
+    fn local_updated_cloud_objects_with_generic_string_objects_response_deserializes_into_rust_graphql_type(
+    ) {
+        use warp_graphql::queries::get_updated_cloud_objects::{
+            GetUpdatedCloudObjects, UpdatedCloudObjectsResult,
+        };
+
+        let response = r#"{
+            "data": {
+                "updatedCloudObjects": {
+                    "__typename": "UpdatedCloudObjectsOutput",
+                    "actionHistories": [],
+                    "deletedObjectUids": {
+                        "folderUids": [],
+                        "genericStringObjectUids": [],
+                        "notebookUids": [],
+                        "workflowUids": []
+                    },
+                    "folders": [],
+                    "genericStringObjects": [{
+                        "__typename": "GenericStringObject",
+                        "format": "JsonMCPServer",
+                        "metadata": {
+                            "__typename": "ObjectMetadata",
+                            "creatorUid": "local-user",
+                            "currentEditorUid": null,
+                            "isWelcomeObject": false,
+                            "lastEditorUid": "local-user",
+                            "metadataLastUpdatedTs": "2026-04-29T00:00:00.000Z",
+                            "parent": {
+                                "__typename": "Space",
+                                "type": "User",
+                                "uid": "local-user"
+                            },
+                            "revisionTs": "2026-04-29T00:00:00.000Z",
+                            "trashedTs": null,
+                            "uid": "local-gso-mcp"
+                        },
+                        "permissions": {
+                            "__typename": "ObjectPermissions",
+                            "anyoneLinkSharing": null,
+                            "guests": [],
+                            "lastUpdatedTs": "2026-04-29T00:00:00.000Z",
+                            "space": {
+                                "__typename": "Space",
+                                "type": "User",
+                                "uid": "local-user"
+                            }
+                        },
+                        "serializedModel": "{\"transport_type\":{\"CLIServer\":{\"command\":\"node\",\"args\":[\"server.js\"],\"cwd_parameter\":null,\"static_env_vars\":[]}},\"name\":\"local-mcp\",\"uuid\":\"00000000-0000-0000-0000-000000000001\"}"
+                    }],
+                    "mcpGallery": [],
+                    "notebooks": [],
+                    "responseContext": {
+                        "serverVersion": "local"
+                    },
+                    "userProfiles": [],
+                    "workflows": []
+                }
+            }
+        }"#;
+
+        let parsed: cynic::GraphQlResponse<GetUpdatedCloudObjects> =
+            serde_json::from_str(response).expect("local service response should deserialize");
+
+        assert!(parsed.errors.is_none());
+        let data = parsed
+            .data
+            .expect("local service response should include data");
+        assert!(matches!(
+            data.updated_cloud_objects,
+            UpdatedCloudObjectsResult::UpdatedCloudObjectsOutput(_)
+        ));
+    }
+
+    #[test]
     fn local_feature_model_choices_response_deserializes_into_rust_graphql_type() {
         use warp_graphql::queries::get_feature_model_choices::{
             GetFeatureModelChoices, UserResult,
