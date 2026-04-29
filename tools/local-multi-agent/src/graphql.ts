@@ -1,3 +1,4 @@
+import { defaultModel } from "./model.js";
 import type { IntegrationConfigPatch, IntegrationRecord, IntegrationStore } from "./integrationStore.js";
 
 export type GraphqlResult = {
@@ -11,10 +12,34 @@ type GraphqlRequest = {
   variables?: unknown;
 };
 
+type LocalModelConfig = {
+  baseModelName?: string;
+  creditMultiplier?: number | null;
+  description?: string | null;
+  disableReason?: string | null;
+  displayName?: string;
+  id: string;
+  provider?: string;
+  reasoningLevel?: string | null;
+  requestMultiplier?: number;
+  visionSupported?: boolean;
+};
+
+type ModelCache = {
+  baseUrl: string;
+  fetchedAtMs: number;
+  models: LocalModelConfig[];
+};
+
 const providerDescriptions = new Map<string, string>([
   ["linear", "Connect Linear to local Warp agents."],
   ["slack", "Connect Slack to local Warp agents."],
 ]);
+
+const knownModelProviders = new Set(["OpenAI", "Anthropic", "Google", "Xai", "Unknown"]);
+const knownDisableReasons = new Set(["AdminDisabled", "OutOfRequests", "ProviderOutage", "RequiresUpgrade"]);
+const modelCacheTtlMs = 30_000;
+let modelCache: ModelCache | null = null;
 
 function asObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -55,6 +80,21 @@ function optionalBoolean(value: unknown, fallback: boolean): boolean {
   }
   if (typeof value !== "boolean") {
     throw new Error("expected boolean value");
+  }
+  return value;
+}
+
+function nonEmpty(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function optionalEnvNumber(value: unknown, fallback: number): number {
+  if (value == null) {
+    return fallback;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error("expected numeric model config value");
   }
   return value;
 }
@@ -102,6 +142,8 @@ function inferOperationName(request: GraphqlRequest, opFromQueryString?: string 
     "userRepoAuthStatus",
     "suggestCloudEnvironmentImage",
     "updatedCloudObjects",
+    "featureModelChoice",
+    "freeAvailableModels",
     "pricingInfo",
   ]) {
     if (query.includes(candidate)) {
@@ -142,6 +184,13 @@ function canonicalOperationName(name: string): string {
     case "GetUpdatedCloudObjects":
     case "updatedCloudObjects":
       return "updatedCloudObjects";
+    case "GetFeatureModelChoices":
+    case "featureModelChoice":
+      return "featureModelChoice";
+    case "FreeAvailableModels":
+    case "free_available_models":
+    case "freeAvailableModels":
+      return "freeAvailableModels";
     case "GetWorkspacesMetadataForUser":
     case "workspacesMetadataForUser":
     case "pricingInfo":
@@ -324,6 +373,221 @@ function suggestCloudEnvironmentImage(): unknown {
   };
 }
 
+function normalizeModelProvider(provider: string | undefined): string {
+  if (!provider) {
+    return "Unknown";
+  }
+
+  if (provider === "Openai") {
+    return "OpenAI";
+  }
+
+  if (provider === "XAI") {
+    return "Xai";
+  }
+
+  return knownModelProviders.has(provider) ? provider : "Unknown";
+}
+
+function normalizeDisableReason(reason: string | null | undefined): string | null {
+  if (!reason) {
+    return null;
+  }
+
+  return knownDisableReasons.has(reason) ? reason : null;
+}
+
+function parseLocalModelList(rawModels: string | undefined): LocalModelConfig[] {
+  const raw = nonEmpty(rawModels);
+  if (!raw) {
+    return [{
+      id: nonEmpty(process.env.OPENAI_MODEL) ?? defaultModel,
+      displayName: nonEmpty(process.env.OPENAI_MODEL) ?? defaultModel,
+    }];
+  }
+
+  const parseModel = (value: unknown): LocalModelConfig => {
+    if (typeof value === "string") {
+      const id = requiredString(value, "model id");
+      return { id, displayName: id };
+    }
+
+    const model = asObject(value);
+    const id = requiredString(model.id, "model.id");
+    return {
+      baseModelName: optionalString(model.baseModelName) ?? optionalString(model.base_model_name) ?? undefined,
+      creditMultiplier: model.creditMultiplier === null || model.credit_multiplier === null
+        ? null
+        : optionalEnvNumber(model.creditMultiplier ?? model.credit_multiplier, 1),
+      description: optionalString(model.description) ?? null,
+      disableReason: optionalString(model.disableReason) ?? optionalString(model.disable_reason) ?? null,
+      displayName: optionalString(model.displayName) ?? optionalString(model.display_name) ?? id,
+      id,
+      provider: optionalString(model.provider) ?? undefined,
+      reasoningLevel: optionalString(model.reasoningLevel) ?? optionalString(model.reasoning_level) ?? null,
+      requestMultiplier: optionalEnvNumber(model.requestMultiplier ?? model.request_multiplier, 1),
+      visionSupported: optionalBoolean(model.visionSupported ?? model.vision_supported, true),
+    };
+  };
+
+  const parsed = raw.startsWith("[")
+    ? (JSON.parse(raw) as unknown)
+    : raw.split(",").map((value) => value.trim()).filter(Boolean);
+  if (!Array.isArray(parsed)) {
+    throw new Error("LOCAL_MODEL_LIST must be a JSON array or comma-separated model ID list.");
+  }
+
+  const models = parsed.map(parseModel);
+  if (models.length === 0) {
+    throw new Error("LOCAL_MODEL_LIST must include at least one model.");
+  }
+  return models;
+}
+
+function fallbackLocalModels(): LocalModelConfig[] {
+  return parseLocalModelList(process.env.LOCAL_MODEL_LIST);
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+async function fetchProviderModels(): Promise<LocalModelConfig[]> {
+  const baseUrl = nonEmpty(process.env.OPENAI_BASE_URL);
+  if (!baseUrl) {
+    return fallbackLocalModels();
+  }
+
+  const normalizedBaseUrl = trimTrailingSlash(baseUrl);
+  const now = Date.now();
+  if (
+    modelCache
+    && modelCache.baseUrl === normalizedBaseUrl
+    && now - modelCache.fetchedAtMs < modelCacheTtlMs
+  ) {
+    return modelCache.models;
+  }
+
+  const headers: Record<string, string> = {
+    accept: "application/json",
+  };
+  const apiKey = nonEmpty(process.env.OPENAI_API_KEY);
+  if (apiKey) {
+    headers.authorization = `Bearer ${apiKey}`;
+  }
+
+  try {
+    const response = await fetch(`${normalizedBaseUrl}/models`, { headers });
+    if (!response.ok) {
+      throw new Error(`provider models request failed with HTTP ${response.status}`);
+    }
+
+    const payload = asObject(await response.json());
+    const data = payload.data;
+    if (!Array.isArray(data)) {
+      throw new Error("provider models response missing data array");
+    }
+
+    const models = data.flatMap((item): LocalModelConfig[] => {
+      if (typeof item === "string") {
+        return [{ id: item, displayName: item }];
+      }
+
+      const model = asObject(item);
+      const id = typeof model.id === "string" && model.id.trim() ? model.id.trim() : undefined;
+      return id ? [{ id, displayName: id }] : [];
+    });
+
+    if (models.length === 0) {
+      throw new Error("provider models response had no usable model IDs");
+    }
+
+    modelCache = {
+      baseUrl: normalizedBaseUrl,
+      fetchedAtMs: now,
+      models,
+    };
+    return models;
+  } catch {
+    return fallbackLocalModels();
+  }
+}
+
+function localModelInfo(model: LocalModelConfig): unknown {
+  return {
+    displayName: model.displayName ?? model.id,
+    baseModelName: model.baseModelName ?? model.displayName ?? model.id,
+    id: model.id,
+    reasoningLevel: model.reasoningLevel ?? null,
+    usageMetadata: {
+      requestMultiplier: Math.max(1, model.requestMultiplier ?? 1),
+      creditMultiplier: model.creditMultiplier ?? null,
+    },
+    description: model.description ?? null,
+    disableReason: normalizeDisableReason(model.disableReason),
+    visionSupported: model.visionSupported ?? true,
+    spec: null,
+    provider: normalizeModelProvider(model.provider),
+    hostConfigs: [{
+      enabled: true,
+      modelRoutingHost: "DirectApi",
+    }],
+    pricing: {
+      discountPercentage: null,
+    },
+  };
+}
+
+async function localAvailableLlms(): Promise<unknown> {
+  const models = await fetchProviderModels();
+  const choices = models.map(localModelInfo);
+  return {
+    defaultId: models[0]?.id ?? defaultModel,
+    choices,
+    preferredCodexModelId: null,
+  };
+}
+
+async function localFeatureModelChoice(): Promise<unknown> {
+  const available = await localAvailableLlms();
+  return {
+    agentMode: available,
+    planning: available,
+    coding: available,
+    cliAgent: available,
+    computerUseAgent: available,
+  };
+}
+
+async function getFeatureModelChoices(): Promise<unknown> {
+  return {
+    data: {
+      user: {
+        __typename: "UserOutput",
+        user: {
+          workspaces: [{
+            featureModelChoice: await localFeatureModelChoice(),
+          }],
+        },
+      },
+    },
+  };
+}
+
+async function freeAvailableModels(): Promise<unknown> {
+  return {
+    data: {
+      freeAvailableModels: {
+        __typename: "FreeAvailableModelsOutput",
+        featureModelChoice: await localFeatureModelChoice(),
+        responseContext: {
+          serverVersion: "local",
+        },
+      },
+    },
+  };
+}
+
 function getUpdatedCloudObjects(): unknown {
   return {
     data: {
@@ -389,11 +653,11 @@ function unsupportedOperation(operationName: string | undefined): GraphqlResult 
   };
 }
 
-export function handleLocalGraphqlRequest(
+export async function handleLocalGraphqlRequest(
   request: GraphqlRequest,
   store: IntegrationStore,
   opFromQueryString?: string | null,
-): GraphqlResult {
+): Promise<GraphqlResult> {
   const operationName = inferOperationName(request, opFromQueryString);
   const variables = variablesOf(request);
 
@@ -415,6 +679,10 @@ export function handleLocalGraphqlRequest(
         return { status: 200, payload: suggestCloudEnvironmentImage() };
       case "updatedCloudObjects":
         return { status: 200, payload: getUpdatedCloudObjects() };
+      case "featureModelChoice":
+        return { status: 200, payload: await getFeatureModelChoices() };
+      case "freeAvailableModels":
+        return { status: 200, payload: await freeAvailableModels() };
       case "workspacesMetadataForUser":
         return { status: 200, payload: getWorkspacesMetadataForUser() };
       default:
