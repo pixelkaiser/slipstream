@@ -14,6 +14,8 @@ cp .env.example .env
 npm run dev
 ```
 
+The service loads `.env` from this directory at startup. Shell environment variables take precedence over values in `.env`.
+
 Set these environment variables before starting the service:
 
 - `OPENAI_API_KEY`
