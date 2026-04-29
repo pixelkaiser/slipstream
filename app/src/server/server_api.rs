@@ -117,12 +117,13 @@ pub(crate) const AGENT_SOURCE_HEADER: &str = "X-Oz-Api-Source";
 pub const EVAL_USER_ID_HEADER: &str = "X-Eval-User-ID";
 
 pub(crate) fn no_cloud_mode_enabled() -> bool {
-    std::env::var(WARP_NO_CLOUD_ENV).ok().is_some_and(|value| {
-        matches!(
+    match std::env::var(WARP_NO_CLOUD_ENV) {
+        Ok(value) => matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "1" | "true" | "yes" | "on"
-        )
-    })
+        ),
+        Err(_) => true,
+    }
 }
 
 pub(crate) fn server_root_url_for_local_no_cloud(explicit_url: Option<&str>) -> Option<&str> {
@@ -1829,7 +1830,8 @@ mod tests {
         let previous = std::env::var_os(WARP_NO_CLOUD_ENV);
 
         std::env::remove_var(WARP_NO_CLOUD_ENV);
-        assert!(!no_cloud_mode_enabled());
+        assert!(no_cloud_mode_enabled());
+        assert!(!should_send_authenticated_graphql_context());
 
         for value in ["1", "true", "yes", "on"] {
             std::env::set_var(WARP_NO_CLOUD_ENV, value);
@@ -1856,6 +1858,16 @@ mod tests {
             server_root_url_for_local_no_cloud(Some("http://localhost:9999")),
             Some("http://localhost:9999")
         );
+        assert_eq!(
+            server_root_url_for_local_no_cloud(None),
+            Some(LOCAL_NO_CLOUD_SERVER_ROOT_URL)
+        );
+
+        std::env::set_var(WARP_NO_CLOUD_ENV, "0");
+        assert_eq!(
+            server_root_url_for_local_no_cloud(Some("http://localhost:9999")),
+            Some("http://localhost:9999")
+        );
         assert_eq!(server_root_url_for_local_no_cloud(None), None);
 
         std::env::set_var(WARP_NO_CLOUD_ENV, "1");
@@ -1877,6 +1889,16 @@ mod tests {
         let previous = std::env::var_os(WARP_NO_CLOUD_ENV);
 
         std::env::remove_var(WARP_NO_CLOUD_ENV);
+        assert_eq!(
+            server_root_url_override_for_startup(Some("http://localhost:9999"), false),
+            Some("http://localhost:9999")
+        );
+        assert_eq!(
+            server_root_url_override_for_startup(None, false),
+            Some(LOCAL_NO_CLOUD_SERVER_ROOT_URL)
+        );
+
+        std::env::set_var(WARP_NO_CLOUD_ENV, "0");
         assert_eq!(
             server_root_url_override_for_startup(Some("http://localhost:9999"), false),
             None

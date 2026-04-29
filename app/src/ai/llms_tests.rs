@@ -317,6 +317,9 @@ fn llm_preferences_refreshes_on_init_in_no_cloud_mode() {
     let previous = std::env::var_os("WARP_NO_CLOUD");
 
     std::env::remove_var("WARP_NO_CLOUD");
+    assert!(LLMPreferences::should_refresh_models_on_init());
+
+    std::env::set_var("WARP_NO_CLOUD", "0");
     assert!(!LLMPreferences::should_refresh_models_on_init());
 
     std::env::set_var("WARP_NO_CLOUD", "1");
