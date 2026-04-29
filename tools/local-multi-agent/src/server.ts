@@ -26,6 +26,7 @@ import { handleLocalGraphqlRequest } from "./graphql.js";
 import { IntegrationStore } from "./integrationStore.js";
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
+const host = process.env.HOST?.trim() || "127.0.0.1";
 const defaultBaseUrl = "https://api.openai.com/v1";
 const maxRequestBytes = 25 * 1024 * 1024;
 const openAiBaseUrlHeader = "x-warp-openai-base-url";
@@ -1213,9 +1214,9 @@ const server = http.createServer((request, response) => {
 
 loadConversationState();
 
-server.listen(port, "127.0.0.1", () => {
+server.listen(port, host, () => {
   log("info", "server_started", {
-    url: `http://127.0.0.1:${port}`,
+    url: `http://${host}:${port}`,
     logLevel: process.env.LOG_LEVEL?.trim() || "info",
     hasOpenAiBaseUrlEnv: nonEmpty(process.env.OPENAI_BASE_URL) != null,
     hasOpenAiModelEnv: nonEmpty(process.env.OPENAI_MODEL) != null,
