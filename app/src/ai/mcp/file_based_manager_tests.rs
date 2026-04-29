@@ -2,6 +2,7 @@ use super::{FileBasedMCPManager, FileBasedMCPManagerEvent, MCPProvider};
 use crate::ai::mcp::FileMCPWatcher;
 use crate::ai::mcp::ParsedTemplatableMCPServerResult;
 use crate::auth::AuthStateProvider;
+use crate::global_resource_handles::{GlobalResourceHandles, GlobalResourceHandlesProvider};
 use crate::settings::{AISettings, FocusedTerminalInfo};
 use crate::warp_managed_paths_watcher::{warp_data_dir, WarpManagedPathsWatcher};
 use crate::workspaces::user_workspaces::UserWorkspaces;
@@ -18,6 +19,13 @@ use watcher::HomeDirectoryWatcher;
 
 // Helper to initialize dependencies and return FileBasedMCPManager handle
 fn setup_app(app: &mut App) -> warpui::ModelHandle<FileBasedMCPManager> {
+    setup_app_with_activated_servers(app, Vec::new())
+}
+
+fn setup_app_with_activated_servers(
+    app: &mut App,
+    activated_servers: Vec<Uuid>,
+) -> warpui::ModelHandle<FileBasedMCPManager> {
     app.add_singleton_model(DirectoryWatcher::new);
     app.add_singleton_model(|_| DetectedRepositories::default());
     app.add_singleton_model(RepoMetadataModel::new);
@@ -28,13 +36,26 @@ fn setup_app(app: &mut App) -> warpui::ModelHandle<FileBasedMCPManager> {
     app.add_singleton_model(|_| AuthStateProvider::new_for_test());
     app.add_singleton_model(UserWorkspaces::default_mock);
     app.add_singleton_model(FocusedTerminalInfo::new);
-    app.add_singleton_model(FileBasedMCPManager::new)
+    app.add_singleton_model(|_| {
+        settings::PrivatePreferences::new(Box::<
+            warpui_extras::user_preferences::in_memory::InMemoryPreferences,
+        >::default())
+    });
+    let global_resources = GlobalResourceHandles::mock(app);
+    app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resources));
+    app.add_singleton_model(|ctx| {
+        FileBasedMCPManager::new_with_activated_servers(activated_servers, ctx)
+    })
 }
 
 /// Parses an MCP JSON string directly into server results, bypassing file I/O.
 /// Used in tests to exercise `apply_parsed_servers` without needing files on disk.
 fn parse_mcp_json(json: &str) -> Vec<ParsedTemplatableMCPServerResult> {
     ParsedTemplatableMCPServerResult::from_user_json(json).unwrap_or_default()
+}
+
+fn parse_config_mcp_json(json: &str) -> Vec<ParsedTemplatableMCPServerResult> {
+    ParsedTemplatableMCPServerResult::from_config_file_json(json).unwrap_or_default()
 }
 
 /// Test-only event collector for `FileBasedMCPManagerEvent`s.
@@ -122,6 +143,53 @@ fn test_update_file_based_servers_spawns_new_servers() {
                 manager.file_based_servers.contains_key(&hash),
                 "Server hash should exist in file_based_servers"
             );
+        });
+    });
+}
+
+#[test]
+fn test_config_file_installation_uuid_is_stable() {
+    let json = r#"{"mcpServers": {"test-server": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-example"]}}}"#;
+    let first = parse_config_mcp_json(json);
+    let second = parse_config_mcp_json(json);
+
+    let first_uuid = first[0]
+        .templatable_mcp_server_installation
+        .as_ref()
+        .expect("server should have an installation")
+        .uuid();
+    let second_uuid = second[0]
+        .templatable_mcp_server_installation
+        .as_ref()
+        .expect("server should have an installation")
+        .uuid();
+
+    assert_eq!(first_uuid, second_uuid);
+}
+
+#[test]
+fn test_activated_project_file_based_server_spawns_when_detected() {
+    let repo_path = PathBuf::from("/tmp/test-repo");
+    let parsed = parse_config_mcp_json(
+        r#"{"mcpServers": {"test-server": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-example"]}}}"#,
+    );
+    let installation_uuid = parsed[0]
+        .templatable_mcp_server_installation
+        .as_ref()
+        .expect("server should have an installation")
+        .uuid();
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app_with_activated_servers(&mut app, vec![installation_uuid]);
+        let events = subscribe_events(&mut app, &manager_handle);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.apply_parsed_servers(repo_path.clone(), MCPProvider::Claude, parsed, ctx);
+        });
+
+        events.read(&app, |events, _| {
+            assert_eq!(events.spawned_uuids, vec![installation_uuid]);
+            assert!(events.despawned_uuids.is_empty());
         });
     });
 }
