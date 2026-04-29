@@ -28,6 +28,13 @@ export type IntegrationRecord = {
   updatedAt: string;
 };
 
+export type AiConversationRecord = {
+  conversationId: string;
+  messages: unknown[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 type IntegrationRow = {
   provider_slug: string;
   enabled: 0 | 1;
@@ -40,12 +47,27 @@ type IntegrationRow = {
   updated_at: string;
 };
 
+type AiConversationRow = {
+  conversation_id: string;
+  messages_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
 function normalizeProviderSlug(value: string): string {
   const slug = value.trim().toLowerCase();
   if (!slug) {
     throw new Error("integration_type is required");
   }
   return slug;
+}
+
+function normalizeConversationId(value: string): string {
+  const conversationId = value.trim();
+  if (!conversationId) {
+    throw new Error("conversation_id is required");
+  }
+  return conversationId;
 }
 
 function rowToRecord(row: IntegrationRow): IntegrationRecord {
@@ -57,6 +79,20 @@ function rowToRecord(row: IntegrationRow): IntegrationRecord {
     modelId: row.model_id,
     mcpServersJson: row.mcp_servers_json,
     workerHost: row.worker_host,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToAiConversationRecord(row: AiConversationRow): AiConversationRecord {
+  const messages = JSON.parse(row.messages_json) as unknown;
+  if (!Array.isArray(messages)) {
+    throw new Error(`stored AI conversation ${row.conversation_id} does not contain a message array`);
+  }
+
+  return {
+    conversationId: row.conversation_id,
+    messages,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -114,6 +150,14 @@ export class IntegrationStore {
         model_id TEXT,
         mcp_servers_json TEXT NOT NULL DEFAULT '{}',
         worker_host TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS ai_conversations (
+        conversation_id TEXT PRIMARY KEY NOT NULL,
+        messages_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -209,5 +253,56 @@ export class IntegrationStore {
       .prepare("SELECT provider_slug FROM integrations WHERE environment_uid = ? ORDER BY provider_slug ASC")
       .all(environmentId) as Array<{ provider_slug: string }>;
     return rows.map((row) => row.provider_slug);
+  }
+
+  upsertAiConversation(conversationId: string, messages: readonly unknown[]): AiConversationRecord {
+    const normalized = normalizeConversationId(conversationId);
+    const existing = this.getAiConversation(normalized);
+    const now = new Date().toISOString();
+    const record: AiConversationRecord = {
+      conversationId: normalized,
+      messages: [...messages],
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    };
+
+    this.db.prepare(`
+      INSERT INTO ai_conversations (
+        conversation_id,
+        messages_json,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        @conversationId,
+        @messagesJson,
+        @createdAt,
+        @updatedAt
+      )
+      ON CONFLICT(conversation_id) DO UPDATE SET
+        messages_json = excluded.messages_json,
+        updated_at = excluded.updated_at
+    `).run({
+      conversationId: record.conversationId,
+      messagesJson: JSON.stringify(record.messages),
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    });
+
+    return record;
+  }
+
+  getAiConversation(conversationId: string): AiConversationRecord | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM ai_conversations WHERE conversation_id = ?")
+      .get(normalizeConversationId(conversationId)) as AiConversationRow | undefined;
+    return row ? rowToAiConversationRecord(row) : undefined;
+  }
+
+  listAiConversations(): AiConversationRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM ai_conversations ORDER BY updated_at ASC")
+      .all() as AiConversationRow[];
+    return rows.map(rowToAiConversationRecord);
   }
 }
