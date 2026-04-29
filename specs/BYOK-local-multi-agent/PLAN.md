@@ -153,7 +153,7 @@ warp-build-oss:
 
 - [x] Scaffold `tools/local-multi-agent`.
 - [x] Add TypeScript build/test/dev scripts.
-- [ ] Add protobuf generation from the pinned `warp-proto-apis` revision.
+- [x] Add protobuf generation from the pinned `warp-proto-apis` revision.
 - [x] Decode inbound `warp.multi_agent.v1.Request` for the MVP fields.
 - [x] Encode outbound `warp.multi_agent.v1.ResponseEvent` for the MVP events.
 - [x] Implement SSE writer with base64-url protobuf payloads.
@@ -286,7 +286,7 @@ End-to-end:
 - [x] Step 3: Route only AI agent endpoints to the local multi-agent URL.
 - [x] Step 4: Add root `Makefile`.
 - [x] Step 5: Scaffold TypeScript local service.
-- [ ] Step 6: Generate/load Warp protobuf types.
+- [x] Step 6: Generate/load Warp protobuf types.
 - [x] Step 7: Implement `/health`.
 - [x] Step 8: Implement protobuf SSE helpers.
 - [x] Step 9: Implement simple prompt extraction.
@@ -354,3 +354,5 @@ End-to-end:
 - Added integration coverage that verifies a chunked provider stream emits both the initial assistant output event and a later append event with the `agent_output.text` field mask.
 - Fixed the local append field mask to `agent_output.text`, which is rooted at Warp's `Message` descriptor. The previous `message.agent_output.text` path was silently ignored by the client append operation.
 - Manually confirmed in Warp that streamed local agent output renders in the UI after the append field-mask fix.
+- Added `npm run proto:generate` / `make local-agent-proto` to clone the pinned `warp-proto-apis` revision from `Cargo.toml`, normalize the Edition 2023 protos for JavaScript generation, and generate checked-in TypeScript descriptors with `protoc-gen-es`.
+- Added local service test coverage that loads the generated descriptors and checks the hand-rolled wire field numbers against the generated request, response, client action, and message schemas.
