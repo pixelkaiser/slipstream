@@ -1,0 +1,229 @@
+#!/bin/bash
+#
+# Launch an already-built macOS app bundle through LaunchServices and wait for
+# shell bootstrap success/failure markers in the app log. This mirrors the
+# Finder/double-click launch path without rebuilding or re-signing the app.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
+cd "$REPO_ROOT"
+
+APP_PATH=""
+LOG_PATH="$HOME/Library/Logs/warp-oss.log"
+TIMEOUT_SECONDS=15
+TERMINATE_EXISTING=false
+OPEN_NEW_TAB=true
+TAB_PATH="/tmp"
+
+usage() {
+  cat <<'USAGE'
+Usage: script/macos/repro_launchd_shell_bootstrap [options]
+
+Options:
+  --app-path PATH          Existing .app bundle to launch.
+                           Defaults to the first existing WarpOss bundle in:
+                             target/release-lto/bundle/osx/WarpOss.app
+                             target/release/bundle/osx/WarpOss.app
+                             target/debug/bundle/osx/WarpOss.app
+  --log PATH               App log to inspect. Defaults to ~/Library/Logs/warp-oss.log.
+  --timeout SECONDS        Seconds to wait for a bootstrap marker. Defaults to 15.
+  --terminate-existing     Kill existing processes for this bundle executable before launch.
+  --no-open-new-tab        Do not send the app a new-tab URI after launch.
+  --tab-path PATH          Path for the forced new terminal tab. Defaults to /tmp.
+  -h, --help               Show this help.
+
+Exit codes:
+  0  InitShell/Precmd observed
+  2  Bootstrap failure marker observed
+  3  Timed out waiting for markers
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --app-path)
+      APP_PATH="$2"
+      shift 2
+      ;;
+    --log)
+      LOG_PATH="$2"
+      shift 2
+      ;;
+    --timeout)
+      TIMEOUT_SECONDS="$2"
+      shift 2
+      ;;
+    --terminate-existing)
+      TERMINATE_EXISTING=true
+      shift
+      ;;
+    --no-open-new-tab)
+      OPEN_NEW_TAB=false
+      shift
+      ;;
+    --tab-path)
+      TAB_PATH="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$APP_PATH" ]]; then
+  for candidate in \
+    target/release-lto/bundle/osx/WarpOss.app \
+    target/release/bundle/osx/WarpOss.app \
+    target/debug/bundle/osx/WarpOss.app
+  do
+    if [[ -d "$candidate" ]]; then
+      APP_PATH="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
+  echo "Could not find an existing WarpOss.app bundle. Pass --app-path." >&2
+  exit 1
+fi
+
+EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$APP_PATH/Contents/Info.plist")"
+EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/$EXECUTABLE_NAME"
+URL_SCHEME="$(/usr/libexec/PlistBuddy -c 'Print CFBundleURLTypes:0:CFBundleURLSchemes:0' "$APP_PATH/Contents/Info.plist")"
+
+if [[ ! -x "$EXECUTABLE_PATH" ]]; then
+  echo "Bundle executable is missing or not executable: $EXECUTABLE_PATH" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$LOG_PATH")"
+touch "$LOG_PATH"
+
+if [[ "$TERMINATE_EXISTING" == true ]]; then
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    kill "$pid" 2>/dev/null || true
+  done < <(pgrep -f "$EXECUTABLE_PATH" || true)
+  sleep 1
+fi
+
+START_LINE="$(wc -l < "$LOG_PATH" | tr -d ' ')"
+
+terminal_server_pids() {
+  ps -axo pid=,command= \
+    | awk -v exe="$EXECUTABLE_PATH" 'index($0, exe) > 0 && index($0, "terminal-server") > 0 { print $1 }'
+}
+
+terminal_server_children() {
+  local ts_pid
+  for ts_pid in $(terminal_server_pids); do
+    ps -axo pid=,ppid=,command= \
+      | awk -v ppid="$ts_pid" '$2 == ppid { print }'
+  done
+}
+
+echo "Launching through LaunchServices: $APP_PATH"
+echo "Watching log from line $((START_LINE + 1)): $LOG_PATH"
+/usr/bin/open -n "$APP_PATH"
+
+if [[ "$OPEN_NEW_TAB" == true ]]; then
+  sleep 2
+  TAB_URI="${URL_SCHEME}://action/new_tab?path=${TAB_PATH// /%20}"
+  echo "Requesting a fresh terminal tab: $TAB_URI"
+  /usr/bin/open "$TAB_URI"
+fi
+
+deadline=$((SECONDS + TIMEOUT_SECONDS))
+status=3
+matched=""
+
+while (( SECONDS < deadline )); do
+  current_line_count="$(wc -l < "$LOG_PATH" | tr -d ' ')"
+  if (( current_line_count < START_LINE )); then
+    START_LINE=0
+  fi
+
+  new_log="$(sed -n "$((START_LINE + 1)),\$p" "$LOG_PATH")"
+
+  if matched="$(printf '%s\n' "$new_log" | rg -m1 'Received (InitShell hook|Precmd hook)')"; then
+    status=0
+    break
+  fi
+
+  if matched="$(printf '%s\n' "$new_log" | rg -m1 'Bootstrapping failed|Showing bootstrap slow toast|Session abandoned before bootstrap')"; then
+    status=2
+    break
+  fi
+
+  direct_children="$(terminal_server_children || true)"
+  if matched="$(printf '%s\n' "$direct_children" | rg -m1 'script -q .*zsh_brain')"; then
+    status=2
+    break
+  fi
+
+  if matched="$(printf '%s\n' "$direct_children" | rg -m1 '(-zsh|/bin/zsh|/bin/bash|/bin/fish|pwsh)')"; then
+    status=0
+    break
+  fi
+
+  sleep 1
+done
+
+echo
+echo "Process snapshot:"
+ps -axo pid=,ppid=,command= \
+  | awk -v exe="$EXECUTABLE_PATH" '
+      index($0, "awk -v exe") > 0 { next }
+      index($0, exe) > 0 { print; next }
+    ' \
+  || true
+
+echo
+echo "Terminal server direct children:"
+direct_children="$(terminal_server_children || true)"
+printf '%s\n' "$direct_children"
+
+echo
+echo "Recent bootstrap markers:"
+current_line_count="$(wc -l < "$LOG_PATH" | tr -d ' ')"
+if (( current_line_count < START_LINE )); then
+  START_LINE=0
+fi
+sed -n "$((START_LINE + 1)),\$p" "$LOG_PATH" \
+  | rg 'Starting shell|Successfully spawned|Received InitShell hook|Received Precmd hook|Bootstrapping failed|Showing bootstrap slow toast|Session abandoned before bootstrap|Failed to spawn' \
+  || true
+
+latest_zsh_brain_log="$(printf '%s\n' "$direct_children" \
+  | sed -n 's/.*script -q -F \([^ ]*zsh_brain[^ ]*\.log\).*/\1/p' \
+  | head -1)"
+if [[ -n "$latest_zsh_brain_log" ]]; then
+  echo
+  echo "Terminal-server zsh_brain transcript: $latest_zsh_brain_log"
+  tail -n 20 "$latest_zsh_brain_log" || true
+fi
+
+case "$status" in
+  0)
+    echo
+    echo "PASS: observed shell bootstrap marker: $matched"
+    ;;
+  2)
+    echo
+    echo "FAIL: observed shell bootstrap failure marker: $matched"
+    ;;
+  3)
+    echo
+    echo "TIMEOUT: no shell bootstrap success/failure marker within ${TIMEOUT_SECONDS}s"
+    ;;
+esac
+
+exit "$status"
