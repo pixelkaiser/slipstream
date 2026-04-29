@@ -89,4 +89,4 @@ For local integration GraphQL calls, run Warp or the CLI with:
 WARP_NO_CLOUD=1 WARP_SERVER_ROOT_URL=http://127.0.0.1:8787
 ```
 
-The service handles `POST /graphql/v2` for local integration create/update/list, OAuth status, GitHub auth status, environment usage lookup, and cloud-environment image suggestion calls. Integration config and AI conversation transcripts are stored in SQLite and never proxied to Warp cloud.
+The service handles `POST /graphql/v2` for local integration create/update/list, OAuth status, GitHub auth status, environment usage lookup, cloud-environment image suggestion, startup workspace metadata, and cloud-object refresh calls. Integration config and AI conversation transcripts are stored in SQLite and never proxied to Warp cloud.
