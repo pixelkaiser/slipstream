@@ -1,0 +1,61 @@
+name: Local Multi-Agent Image
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/local-multi-agent-image.yml'
+      - 'tools/local-multi-agent/**'
+  push:
+    branches:
+      - byok
+      - master
+    paths:
+      - '.github/workflows/local-multi-agent-image.yml'
+      - 'tools/local-multi-agent/**'
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/warp-local-multi-agent
+
+jobs:
+  build:
+    name: Build and publish image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/byok' || github.ref == 'refs/heads/master' }}
+
+      - name: Build and publish
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/local-multi-agent
+          file: tools/local-multi-agent/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
