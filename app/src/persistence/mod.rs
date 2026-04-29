@@ -198,6 +198,7 @@ pub struct PersistedData {
     pub ignored_suggestions: Vec<(String, SuggestionType)>,
     pub mcp_server_installations: HashMap<Uuid, TemplatableMCPServerInstallation>,
     pub mcp_servers_to_restore: Vec<Uuid>,
+    pub activated_file_based_mcp_servers: Vec<Uuid>,
 }
 
 #[derive(Clone, Debug)]
@@ -369,6 +370,12 @@ pub enum ModelEvent {
     UpdateMCPInstallationRunning {
         installation_uuid: Uuid,
         running: bool,
+    },
+    UpsertFileBasedMCPServerActivation {
+        installation_uuid: Uuid,
+    },
+    DeleteFileBasedMCPServerActivations {
+        installation_uuids: Vec<Uuid>,
     },
     UpsertWorkspaceLanguageServer {
         workspace_path: PathBuf,

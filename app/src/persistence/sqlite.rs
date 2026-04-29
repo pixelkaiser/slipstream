@@ -711,6 +711,14 @@ fn handle_model_event(event: ModelEvent, connection: &mut SqliteConnection) -> a
             running,
         } => update_mcp_server_running(connection, installation_uuid, running)
             .context("Error updating running field for MCP installation"),
+        ModelEvent::UpsertFileBasedMCPServerActivation { installation_uuid } => {
+            upsert_file_based_mcp_server_activation(connection, installation_uuid)
+                .context("Error upserting file-based MCP server activation")
+        }
+        ModelEvent::DeleteFileBasedMCPServerActivations { installation_uuids } => {
+            delete_file_based_mcp_server_activations(connection, installation_uuids)
+                .context("Error deleting file-based MCP server activations")
+        }
         ModelEvent::UpsertWorkspaceLanguageServer {
             workspace_path,
             lsp_type,
@@ -1714,6 +1722,55 @@ fn update_mcp_server_running(
             last_modified_at.eq(Utc::now().naive_utc()),
         ))
         .execute(conn)?;
+
+    Ok(())
+}
+
+fn get_file_based_mcp_server_activations(
+    conn: &mut SqliteConnection,
+) -> Result<Vec<Uuid>, diesel::result::Error> {
+    use schema::file_based_mcp_server_activations::dsl::*;
+
+    let rows = file_based_mcp_server_activations
+        .select(installation_uuid)
+        .load::<String>(conn)?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|uuid| Uuid::parse_str(&uuid).ok())
+        .collect())
+}
+
+fn upsert_file_based_mcp_server_activation(
+    conn: &mut SqliteConnection,
+    uuid: Uuid,
+) -> Result<(), diesel::result::Error> {
+    use schema::file_based_mcp_server_activations::dsl::*;
+
+    diesel::insert_into(file_based_mcp_server_activations)
+        .values((
+            installation_uuid.eq(uuid.to_string()),
+            last_modified_at.eq(Utc::now().naive_utc()),
+        ))
+        .on_conflict(installation_uuid)
+        .do_update()
+        .set(last_modified_at.eq(Utc::now().naive_utc()))
+        .execute(conn)?;
+
+    Ok(())
+}
+
+fn delete_file_based_mcp_server_activations(
+    conn: &mut SqliteConnection,
+    uuids: Vec<Uuid>,
+) -> Result<(), diesel::result::Error> {
+    use schema::file_based_mcp_server_activations::dsl::*;
+
+    let uuid_strings = uuids.iter().map(|uuid| uuid.to_string()).collect_vec();
+    diesel::delete(
+        file_based_mcp_server_activations.filter(installation_uuid.eq_any(uuid_strings)),
+    )
+    .execute(conn)?;
 
     Ok(())
 }
@@ -3230,6 +3287,7 @@ fn read_sqlite_data(
     let ignored_suggestions = get_all_ignored_suggestions(conn)?;
     let mcp_server_installations = get_all_mcp_server_installations(conn)?;
     let mcp_servers_to_restore = get_mcp_servers_to_restore(conn)?;
+    let activated_file_based_mcp_servers = get_file_based_mcp_server_activations(conn)?;
 
     Ok(PersistedData {
         app_state,
@@ -3250,6 +3308,7 @@ fn read_sqlite_data(
         ignored_suggestions,
         mcp_server_installations,
         mcp_servers_to_restore,
+        activated_file_based_mcp_servers,
     })
 }
 

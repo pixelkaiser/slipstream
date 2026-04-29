@@ -254,7 +254,7 @@ impl ParsedTemplatableMCPServerResult {
 
         Ok(template_jsons
             .iter()
-            .map(|(name, json)| Self::parse_result(name, json))
+            .map(|(name, json)| Self::parse_result(name, json, true))
             .collect())
     }
 
@@ -275,14 +275,18 @@ impl ParsedTemplatableMCPServerResult {
 
         Ok(template_jsons
             .iter()
-            .map(|(name, json)| Self::parse_result(name, json))
+            .map(|(name, json)| Self::parse_result(name, json, false))
             .collect())
     }
 
     /// Parses a single MCP config
     /// Returns a ParsedTemplatableMCPServerResult
     /// If the json is invalid, returns an error
-    pub(crate) fn parse_result(name: &str, json_value: &serde_json::Value) -> Self {
+    pub(crate) fn parse_result(
+        name: &str,
+        json_value: &serde_json::Value,
+        stable_file_based_ids: bool,
+    ) -> Self {
         // We need to clone the json value to avoid modifying the original value
         // json_value needs to be mutable to redact the env/header values
         let mut json_value = json_value.clone();
@@ -363,11 +367,18 @@ impl ParsedTemplatableMCPServerResult {
                     })
                     .collect();
 
-                Some(TemplatableMCPServerInstallation::new(
-                    uuid::Uuid::new_v4(),
-                    templatable_mcp_server.clone(),
-                    variable_values,
-                ))
+                Some(if stable_file_based_ids {
+                    TemplatableMCPServerInstallation::new_file_based(
+                        templatable_mcp_server.clone(),
+                        variable_values,
+                    )
+                } else {
+                    TemplatableMCPServerInstallation::new(
+                        uuid::Uuid::new_v4(),
+                        templatable_mcp_server.clone(),
+                        variable_values,
+                    )
+                })
             }
             false => None,
         };
