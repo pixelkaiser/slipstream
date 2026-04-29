@@ -585,6 +585,11 @@ pub fn run() -> Result<()> {
     // Parse command-line arguments.
     let args = warp_cli::Args::from_env();
 
+    // Finder-launched macOS apps inherit a sparse launchd environment. Materialize the
+    // local defaults before dispatching worker subcommands so the terminal server, shells,
+    // and agent subprocesses inherit the same no-cloud settings as the GUI process.
+    crate::server::server_api::apply_local_no_cloud_env_defaults(args.server_root_url());
+
     // Server URL overrides are normally only honored on internal dev channels. No-cloud mode
     // is local-only by definition, so it can point GraphQL at the local tool service even when
     // the current channel otherwise rejects server URL overrides.
