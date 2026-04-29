@@ -41,6 +41,13 @@ fn should_not_clear_preference_requires_upgrade_with_byok() {
     assert!(!DisableReason::RequiresUpgrade.should_clear_preference(true));
 }
 
+fn restore_env_var(name: &str, previous: Option<std::ffi::OsString>) {
+    match previous {
+        Some(value) => std::env::set_var(name, value),
+        None => std::env::remove_var(name),
+    }
+}
+
 #[test]
 fn llm_info_deserializes_without_base_model_name() {
     let raw = r#"{
@@ -302,4 +309,18 @@ fn removing_endpoint_purges_all_its_models_from_custom_llms() {
     let infos = build_custom_llm_infos(&after);
     assert_eq!(infos.len(), 1);
     assert_eq!(infos[0].id.as_str(), "uuid-k1");
+}
+
+#[test]
+#[serial_test::serial]
+fn llm_preferences_refreshes_on_init_in_no_cloud_mode() {
+    let previous = std::env::var_os("WARP_NO_CLOUD");
+
+    std::env::remove_var("WARP_NO_CLOUD");
+    assert!(!LLMPreferences::should_refresh_models_on_init());
+
+    std::env::set_var("WARP_NO_CLOUD", "1");
+    assert!(LLMPreferences::should_refresh_models_on_init());
+
+    restore_env_var("WARP_NO_CLOUD", previous);
 }
