@@ -299,11 +299,22 @@ impl RequestParams {
                 &request_input.coding_model_id,
             )
         });
-        let local_multi_agent_server_root_url = ApiKeyManager::as_ref(app)
+        #[cfg(not(target_family = "wasm"))]
+        let local_multi_agent_server_root_url =
+            crate::local_multi_agent::LocalMultiAgentManager::global_root_url()
+                .map(|url| url.to_string())
+                .or_else(|| {
+                    api_key_manager
+                        .keys()
+                        .local_multi_agent_server_root_url
+                        .clone()
+                });
+        #[cfg(target_family = "wasm")]
+        let local_multi_agent_server_root_url = api_key_manager
             .keys()
             .local_multi_agent_server_root_url
             .clone();
-        let openai_base_url = ApiKeyManager::as_ref(app).keys().openai_base_url.clone();
+        let openai_base_url = api_key_manager.keys().openai_base_url.clone();
         let allow_use_of_warp_credits = *AISettings::as_ref(app).can_use_warp_credits_for_fallback;
 
         let app_execution_mode = AppExecutionMode::as_ref(app);
