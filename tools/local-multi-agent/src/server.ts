@@ -30,6 +30,7 @@ loadDotEnv();
 
 const port = Number.parseInt(process.env.PORT ?? "8787", 10);
 const host = process.env.HOST?.trim() || "127.0.0.1";
+const serviceVersion = "0.1.0";
 const defaultBaseUrl = "https://api.openai.com/v1";
 const maxRequestBytes = 25 * 1024 * 1024;
 const openAiBaseUrlHeader = "x-warp-openai-base-url";
@@ -1517,7 +1518,11 @@ const server = http.createServer((request, response) => {
     });
 
     if (method === "GET" && url.pathname === "/health") {
-      sendJson(response, 200, { ok: true });
+      sendJson(response, 200, {
+        ok: true,
+        version: serviceVersion,
+        configHash: process.env.LOCAL_CONFIG_HASH ?? null,
+      });
       log("info", "http_response", {
         method,
         path: url.pathname,
