@@ -1,0 +1,33 @@
+#!/bin/bash
+#
+# Prints the macOS code-signing identities relevant to local Warp builds.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
+cd "${REPO_ROOT}"
+
+echo "Available code-signing identities:"
+security find-identity -p codesigning -v
+
+if security find-identity -p codesigning -v | grep -q "Apple Development"; then
+  echo
+  echo "Found Apple Development identity. Local app builds will prefer it."
+elif security find-identity -p codesigning -v | grep -q "Developer ID Application"; then
+  echo
+  echo "Found Developer ID Application identity. Local app builds will use it if no Apple Development identity exists."
+else
+  echo
+  echo "No Apple-issued development signing identity found."
+  echo "In Xcode, sign in to your Apple developer account and create an Apple Development certificate."
+fi
+
+APP_PATH="${WARP_APP_PATH:-target/release-lto/bundle/osx/WarpOss.app}"
+if [ -d "$APP_PATH" ]; then
+  echo
+  echo "Current app signature for $APP_PATH:"
+  codesign -dv --verbose=4 "$APP_PATH" 2>&1 | sed -n '/Authority=/p;/TeamIdentifier=/p;/Identifier=/p;/CDHash=/p'
+else
+  echo
+  echo "No app bundle found at $APP_PATH."
+fi
