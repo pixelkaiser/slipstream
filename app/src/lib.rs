@@ -120,6 +120,8 @@ pub mod input_suggestions;
 pub mod integration_testing;
 pub mod keyboard;
 pub mod launch_configs;
+#[cfg(not(target_family = "wasm"))]
+pub mod local_multi_agent;
 pub mod pane_group;
 pub mod resource_center;
 pub mod root_view;
@@ -1280,6 +1282,23 @@ pub(crate) fn initialize_app(
         let mut manager = ::ai::api_keys::ApiKeyManager::new(ctx);
         #[cfg(not(target_family = "wasm"))]
         manager.subscribe_to_settings_changes(ctx);
+        manager
+    });
+
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(|ctx| {
+        let mut manager = local_multi_agent::LocalMultiAgentManager::new(ctx);
+        let api_keys = ::ai::api_keys::ApiKeyManager::as_ref(ctx).keys().clone();
+        manager.update_provider_config(api_keys.openai, api_keys.openai_base_url, ctx);
+        ctx.subscribe_to_model(
+            &::ai::api_keys::ApiKeyManager::handle(ctx),
+            |manager: &mut local_multi_agent::LocalMultiAgentManager, event, ctx| {
+                if matches!(event, ::ai::api_keys::ApiKeyManagerEvent::KeysUpdated) {
+                    let keys = ::ai::api_keys::ApiKeyManager::as_ref(ctx).keys().clone();
+                    manager.update_provider_config(keys.openai, keys.openai_base_url, ctx);
+                }
+            },
+        );
         manager
     });
 
