@@ -19,6 +19,10 @@ use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::GenericStringObjectFormat::Json;
 use crate::cloud_object::JsonObjectType;
 use crate::cloud_object::ObjectType;
+#[cfg(not(target_family = "wasm"))]
+use crate::local_multi_agent::{
+    LocalMultiAgentManager, LocalMultiAgentManagerEvent, LocalMultiAgentStatus,
+};
 
 use crate::editor::{EditorOptions, InteractionState, SingleLineEditorOptions, TextColors};
 use crate::settings::InputSettings;
@@ -2218,6 +2222,12 @@ pub enum AISettingsPageAction {
     ToggleUseAgentToolbar,
     ToggleVoiceInput,
     ToggleCanUseWarpCreditsWithByok,
+    #[cfg(not(target_family = "wasm"))]
+    RestartLocalMultiAgent,
+    #[cfg(not(target_family = "wasm"))]
+    HealthCheckLocalMultiAgent,
+    #[cfg(not(target_family = "wasm"))]
+    ToggleLocalMultiAgentTools,
     HyperlinkClick(HyperlinkUrl),
     ToggleCodebaseContext,
     ToggleShowInputHintText,
@@ -2615,6 +2625,31 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .can_use_warp_credits_with_byok
                         .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AISettingsPageAction::RestartLocalMultiAgent => {
+                LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.restart_with_config(ctx);
+                });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AISettingsPageAction::HealthCheckLocalMultiAgent => {
+                LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.health_check(ctx);
+                });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AISettingsPageAction::ToggleLocalMultiAgentTools => {
+                LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                    let mut config = manager.config().clone();
+                    config.local_enable_tools = !config.local_enable_tools;
+                    if let Err(error) = manager.set_config(config, ctx) {
+                        manager.record_config_error(error.to_string(), ctx);
+                    }
                 });
                 ctx.notify();
             }
@@ -6309,9 +6344,36 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
 struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
     openai_base_url_editor: ViewHandle<EditorView>,
-    local_multi_agent_server_root_url_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_host_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_port_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_model_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_model_aliases_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_model_list_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_max_history_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_context_tokens_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_graphql_db_path_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_log_level_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_log_path_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_system_prompt_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_tools_toggle: SwitchStateHandle,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_restart_button: ViewHandle<ActionButton>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_health_button: ViewHandle<ActionButton>,
 
     can_use_warp_credits_with_byok: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
@@ -6327,7 +6389,6 @@ impl ApiKeysWidget {
         let ApiKeys {
             openai: openai_key,
             openai_base_url,
-            local_multi_agent_server_root_url,
             anthropic: anthropic_key,
             google: google_key,
             ..
@@ -6432,13 +6493,6 @@ impl ApiKeysWidget {
             false
         );
         create_api_key_editor!(
-            local_multi_agent_server_root_url_editor,
-            local_multi_agent_server_root_url,
-            set_local_multi_agent_server_root_url,
-            "http://127.0.0.1:8787",
-            false
-        );
-        create_api_key_editor!(
             anthropic_api_key_editor,
             anthropic_key,
             set_anthropic_key,
@@ -6453,12 +6507,335 @@ impl ApiKeysWidget {
             true
         );
 
+        #[cfg(not(target_family = "wasm"))]
+        let local_config = LocalMultiAgentManager::as_ref(ctx).config().clone();
+        #[cfg(not(target_family = "wasm"))]
+        macro_rules! create_local_agent_editor {
+            ($editor:ident, $initial:expr, $placeholder:literal, |$config:ident, $buffer_text:ident| $apply:block) => {
+                let initial_value = $initial;
+                let $editor = ctx.add_typed_action_view(move |ctx| {
+                    let appearance = Appearance::handle(ctx).as_ref(ctx);
+                    let options = SingleLineEditorOptions {
+                        is_password: false,
+                        text: TextOptions {
+                            font_size_override: Some(appearance.ui_font_size()),
+                            font_family_override: Some(appearance.monospace_font_family()),
+                            text_colors_override: Some(TextColors {
+                                default_color: appearance.theme().active_ui_text_color(),
+                                disabled_color: appearance.theme().disabled_ui_text_color(),
+                                hint_color: appearance.theme().disabled_ui_text_color(),
+                            }),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    };
+                    let mut editor = EditorView::single_line(options, ctx);
+                    editor.set_placeholder_text($placeholder, ctx);
+                    if !initial_value.is_empty() {
+                        editor.set_buffer_text(&initial_value, ctx);
+                    }
+                    editor
+                });
+                AISettingsPageView::update_editor_interaction_state(
+                    $editor.clone(),
+                    is_any_ai_enabled && is_byo_enabled,
+                    ctx,
+                );
+                ctx.subscribe_to_view(&$editor, |_, $editor, event, ctx| {
+                    if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                        let $buffer_text = $editor.as_ref(ctx).buffer_text(ctx);
+                        LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                            let mut $config = manager.config().clone();
+                            let update_result: Result<(), String> = (|| $apply)();
+                            match update_result.and_then(|_| {
+                                manager
+                                    .set_config($config, ctx)
+                                    .map_err(|error| error.to_string())
+                            }) {
+                                Ok(()) => {}
+                                Err(message) => manager.record_config_error(message, ctx),
+                            }
+                        });
+                    }
+                });
+                let editor_clone = $editor.clone();
+                ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
+                    if let UserWorkspacesEvent::TeamsChanged = event {
+                        let is_any_ai_enabled =
+                            AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
+                        let is_byo_enabled = workspace.as_ref(ctx).is_byo_api_key_enabled();
+                        AISettingsPageView::update_editor_interaction_state(
+                            editor_clone.clone(),
+                            is_any_ai_enabled && is_byo_enabled,
+                            ctx,
+                        );
+                        ctx.notify();
+                    }
+                });
+                let editor_clone = $editor.clone();
+                ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, event, ctx| {
+                    if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = event {
+                        let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
+                        let is_byo_enabled = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled();
+                        AISettingsPageView::update_editor_interaction_state(
+                            editor_clone.clone(),
+                            is_any_ai_enabled && is_byo_enabled,
+                            ctx,
+                        );
+                        ctx.notify();
+                    }
+                })
+            };
+        }
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_host_editor,
+            local_config.host.clone(),
+            "127.0.0.1",
+            |config, buffer_text| {
+                config.host = buffer_text.trim().to_string();
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_port_editor,
+            local_config.port.to_string(),
+            "8787",
+            |config, buffer_text| {
+                config.port = buffer_text
+                    .trim()
+                    .parse::<u16>()
+                    .map_err(|_| "Port must be between 1 and 65535.".to_string())?;
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_model_editor,
+            local_config.openai_model.clone().unwrap_or_default(),
+            "Provider default",
+            |config, buffer_text| {
+                config.openai_model = buffer_text
+                    .trim()
+                    .is_empty()
+                    .not()
+                    .then_some(buffer_text.trim().to_string());
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_model_aliases_editor,
+            local_config.local_model_aliases.clone(),
+            r#"{"auto-efficient":"model-id"}"#,
+            |config, buffer_text| {
+                config.local_model_aliases = buffer_text.trim().to_string();
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_model_list_editor,
+            local_config.local_model_list.clone(),
+            "model-a,model-b",
+            |config, buffer_text| {
+                config.local_model_list = buffer_text.trim().to_string();
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_max_history_editor,
+            local_config.local_max_history_messages.to_string(),
+            "80",
+            |config, buffer_text| {
+                config.local_max_history_messages =
+                    buffer_text.trim().parse::<u16>().map_err(|_| {
+                        "Maximum history messages must be a positive number.".to_string()
+                    })?;
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_context_tokens_editor,
+            local_config
+                .local_model_context_tokens
+                .clone()
+                .unwrap_or_default(),
+            r#"{"model-id":131072}"#,
+            |config, buffer_text| {
+                config.local_model_context_tokens = buffer_text
+                    .trim()
+                    .is_empty()
+                    .not()
+                    .then_some(buffer_text.trim().to_string());
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_graphql_db_path_editor,
+            local_config
+                .local_graphql_db_path
+                .clone()
+                .unwrap_or_default(),
+            "Default Warp data path",
+            |config, buffer_text| {
+                config.local_graphql_db_path = buffer_text
+                    .trim()
+                    .is_empty()
+                    .not()
+                    .then_some(buffer_text.trim().to_string());
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_log_level_editor,
+            local_config.log_level.clone(),
+            "info",
+            |config, buffer_text| {
+                config.log_level = buffer_text.trim().to_string();
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_log_path_editor,
+            local_config
+                .local_service_log_path
+                .clone()
+                .unwrap_or_default(),
+            "Default Warp log path",
+            |config, buffer_text| {
+                config.local_service_log_path = buffer_text
+                    .trim()
+                    .is_empty()
+                    .not()
+                    .then_some(buffer_text.trim().to_string());
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_system_prompt_editor,
+            local_config.local_multi_agent_system_prompt.clone(),
+            "System prompt",
+            |config, buffer_text| {
+                config.local_multi_agent_system_prompt = buffer_text;
+                Ok(())
+            }
+        );
+
+        #[cfg(not(target_family = "wasm"))]
+        let local_agent_restart_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Restart", SecondaryTheme)
+                .with_icon(Icon::RefreshCw04)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::RestartLocalMultiAgent);
+                })
+        });
+        #[cfg(not(target_family = "wasm"))]
+        let local_agent_health_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Test", SecondaryTheme)
+                .with_icon(Icon::Check)
+                .with_size(ButtonSize::Small)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::HealthCheckLocalMultiAgent);
+                })
+        });
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let is_enabled = is_any_ai_enabled && is_byo_enabled;
+            local_agent_restart_button.update(ctx, |button, ctx| {
+                button.set_disabled(!is_enabled, ctx);
+            });
+            local_agent_health_button.update(ctx, |button, ctx| {
+                button.set_disabled(!is_enabled, ctx);
+            });
+
+            let restart_button = local_agent_restart_button.clone();
+            let health_button = local_agent_health_button.clone();
+            ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
+                if let UserWorkspacesEvent::TeamsChanged = event {
+                    let is_any_ai_enabled =
+                        AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
+                    let is_enabled =
+                        is_any_ai_enabled && workspace.as_ref(ctx).is_byo_api_key_enabled();
+                    restart_button.update(ctx, |button, ctx| {
+                        button.set_disabled(!is_enabled, ctx);
+                    });
+                    health_button.update(ctx, |button, ctx| {
+                        button.set_disabled(!is_enabled, ctx);
+                    });
+                    ctx.notify();
+                }
+            });
+
+            let restart_button = local_agent_restart_button.clone();
+            let health_button = local_agent_health_button.clone();
+            ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, event, ctx| {
+                if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = event {
+                    let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
+                    let is_byo_enabled = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled();
+                    let is_enabled = is_any_ai_enabled && is_byo_enabled;
+                    restart_button.update(ctx, |button, ctx| {
+                        button.set_disabled(!is_enabled, ctx);
+                    });
+                    health_button.update(ctx, |button, ctx| {
+                        button.set_disabled(!is_enabled, ctx);
+                    });
+                    ctx.notify();
+                }
+            });
+        }
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_model(&LocalMultiAgentManager::handle(ctx), |_, _, event, ctx| {
+            if matches!(
+                event,
+                LocalMultiAgentManagerEvent::ConfigChanged
+                    | LocalMultiAgentManagerEvent::StatusChanged
+            ) {
+                ctx.notify();
+            }
+        });
+
         Self {
             openai_api_key_editor,
             openai_base_url_editor,
-            local_multi_agent_server_root_url_editor,
             anthropic_api_key_editor,
             google_api_key_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_host_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_port_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_model_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_model_aliases_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_model_list_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_max_history_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_context_tokens_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_graphql_db_path_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_log_level_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_log_path_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_system_prompt_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_tools_toggle: Default::default(),
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_restart_button,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_health_button,
 
             can_use_warp_credits_with_byok: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -6543,13 +6920,6 @@ impl ApiKeysWidget {
         ));
         column.add_child(render_api_key_input(
             appearance,
-            "Local Multi-Agent Server URL",
-            self.local_multi_agent_server_root_url_editor.clone(),
-            is_enabled,
-            app,
-        ));
-        column.add_child(render_api_key_input(
-            appearance,
             "Anthropic API Key",
             self.anthropic_api_key_editor.clone(),
             is_enabled,
@@ -6624,6 +6994,290 @@ impl ApiKeysWidget {
         column.finish()
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn render_local_agent_backend_section(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+        is_byo_enabled: bool,
+    ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
+        let is_enabled = ai_settings.is_any_ai_enabled(app) && is_byo_enabled;
+        let manager = LocalMultiAgentManager::as_ref(app);
+        let config = manager.config();
+
+        fn render_input(
+            appearance: &Appearance,
+            label: &'static str,
+            editor: ViewHandle<EditorView>,
+            is_enabled: bool,
+            app: &AppContext,
+        ) -> Box<dyn Element> {
+            let editor_style = UiComponentStyles {
+                padding: Some(Coords {
+                    top: 10.,
+                    bottom: 10.,
+                    left: 16.,
+                    right: 16.,
+                }),
+                background: Some(appearance.theme().surface_2().into()),
+                ..Default::default()
+            };
+            let label = Text::new_inline(label, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                .with_color(styles::header_font_color(is_enabled, app).into())
+                .finish();
+            let input = appearance
+                .ui_builder()
+                .text_input(editor)
+                .with_style(editor_style)
+                .build()
+                .finish();
+
+            Flex::column()
+                .with_spacing(8.)
+                .with_child(label)
+                .with_child(input)
+                .finish()
+        }
+
+        fn render_group_label(
+            appearance: &Appearance,
+            label: &'static str,
+            is_enabled: bool,
+            app: &AppContext,
+        ) -> Box<dyn Element> {
+            Text::new_inline(label, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .with_color(styles::header_font_color(is_enabled, app).into())
+                .finish()
+        }
+
+        fn render_status_card(
+            status: &LocalMultiAgentStatus,
+            endpoint: String,
+            restart_button: &ViewHandle<ActionButton>,
+            health_button: &ViewHandle<ActionButton>,
+            appearance: &Appearance,
+            is_enabled: bool,
+            app: &AppContext,
+        ) -> Box<dyn Element> {
+            let (title, detail) = match status {
+                LocalMultiAgentStatus::Disabled => (
+                    "Disabled".to_string(),
+                    "The local backend starts automatically in no-cloud/BYOK builds.".to_string(),
+                ),
+                LocalMultiAgentStatus::Starting => {
+                    ("Starting".to_string(), format!("Endpoint: {endpoint}"))
+                }
+                LocalMultiAgentStatus::Running {
+                    root_url,
+                    pid,
+                    config_hash,
+                } => {
+                    let pid_text = pid
+                        .map(|pid| format!("pid {pid}"))
+                        .unwrap_or_else(|| "reused existing process".to_string());
+                    (
+                        "Running".to_string(),
+                        format!(
+                            "Endpoint: {}. Config {}. {}.",
+                            root_url.as_str(),
+                            config_hash,
+                            pid_text
+                        ),
+                    )
+                }
+                LocalMultiAgentStatus::Restarting => {
+                    ("Restarting".to_string(), format!("Endpoint: {endpoint}"))
+                }
+                LocalMultiAgentStatus::Failed { message } => {
+                    ("Last error".to_string(), message.clone())
+                }
+            };
+
+            let text_column = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_spacing(4.)
+                .with_child(
+                    Text::new_inline(title, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                        .with_style(Properties::default().weight(Weight::Semibold))
+                        .with_color(styles::header_font_color(is_enabled, app).into())
+                        .finish(),
+                )
+                .with_child(
+                    Text::new(detail, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                        .with_color(styles::description_font_color(is_enabled, app).into())
+                        .soft_wrap(true)
+                        .finish(),
+                )
+                .finish();
+
+            Container::new(
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(12.)
+                    .with_child(Expanded::new(1., text_column).finish())
+                    .with_child(
+                        Flex::row()
+                            .with_spacing(8.)
+                            .with_child(ChildView::new(health_button).finish())
+                            .with_child(ChildView::new(restart_button).finish())
+                            .finish(),
+                    )
+                    .finish(),
+            )
+            .with_uniform_padding(12.)
+            .with_background(appearance.theme().surface_2())
+            .with_border(Border::all(1.).with_border_fill(appearance.theme().outline()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .finish()
+        }
+
+        let endpoint = manager
+            .root_url()
+            .map(|url| url.to_string())
+            .unwrap_or_else(|| "Invalid endpoint".to_string());
+        let mut column = Flex::column()
+            .with_spacing(16.)
+            .with_child(render_status_card(
+                manager.status(),
+                endpoint,
+                &self.local_agent_restart_button,
+                &self.local_agent_health_button,
+                appearance,
+                is_enabled,
+                app,
+            ))
+            .with_child(render_group_label(appearance, "Runtime", is_enabled, app))
+            .with_child(render_input(
+                appearance,
+                "HOST",
+                self.local_agent_host_editor.clone(),
+                is_enabled,
+                app,
+            ))
+            .with_child(render_input(
+                appearance,
+                "PORT",
+                self.local_agent_port_editor.clone(),
+                is_enabled,
+                app,
+            ))
+            .with_child(render_group_label(appearance, "Models", is_enabled, app))
+            .with_child(render_input(
+                appearance,
+                "OPENAI_MODEL",
+                self.local_agent_model_editor.clone(),
+                is_enabled,
+                app,
+            ))
+            .with_child(render_input(
+                appearance,
+                "LOCAL_MODEL_ALIASES",
+                self.local_agent_model_aliases_editor.clone(),
+                is_enabled,
+                app,
+            ))
+            .with_child(render_input(
+                appearance,
+                "LOCAL_MODEL_LIST",
+                self.local_agent_model_list_editor.clone(),
+                is_enabled,
+                app,
+            ))
+            .with_child(render_input(
+                appearance,
+                "LOCAL_MODEL_CONTEXT_TOKENS",
+                self.local_agent_context_tokens_editor.clone(),
+                is_enabled,
+                app,
+            ))
+            .with_child(render_group_label(appearance, "Tools", is_enabled, app));
+
+        let tools_toggle = if is_enabled {
+            appearance
+                .ui_builder()
+                .switch(self.local_agent_tools_toggle.clone())
+                .check(config.local_enable_tools)
+                .build()
+                .on_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::ToggleLocalMultiAgentTools);
+                })
+                .finish()
+        } else {
+            appearance
+                .ui_builder()
+                .switch(self.local_agent_tools_toggle.clone())
+                .check(config.local_enable_tools)
+                .with_disabled(true)
+                .build()
+                .finish()
+        };
+        column.add_child(build_toggle_element(
+            render_body_item_label::<AISettingsPageAction>(
+                "LOCAL_ENABLE_TOOLS".to_string(),
+                Some(styles::header_font_color(is_enabled, app)),
+                None,
+                LocalOnlyIconState::Hidden,
+                ToggleState::Enabled,
+                appearance,
+            ),
+            tools_toggle,
+            appearance,
+            None,
+        ));
+        column.add_child(render_input(
+            appearance,
+            "LOCAL_MAX_HISTORY_MESSAGES",
+            self.local_agent_max_history_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_group_label(
+            appearance,
+            "Storage/Logs",
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_input(
+            appearance,
+            "LOCAL_GRAPHQL_DB_PATH",
+            self.local_agent_graphql_db_path_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_input(
+            appearance,
+            "LOG_LEVEL",
+            self.local_agent_log_level_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_input(
+            appearance,
+            "LOCAL_SERVICE_LOG_PATH",
+            self.local_agent_log_path_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_group_label(
+            appearance,
+            "Advanced Prompt",
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_input(
+            appearance,
+            "LOCAL_MULTI_AGENT_SYSTEM_PROMPT",
+            self.local_agent_system_prompt_editor.clone(),
+            is_enabled,
+            app,
+        ));
+
+        column.finish()
+    }
+
     fn render_can_use_warp_credits_with_byok_toggle(
         &self,
         view: &AISettingsPageView,
@@ -6658,7 +7312,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai base url compatible local multi agent server anthropic google claude gemini gpt"
+        "api keys bring your own byo openai base url compatible local agent backend multi agent server host port model tools graphql logs prompt anthropic google claude gemini gpt"
     }
 
     fn render(
@@ -6683,6 +7337,31 @@ impl SettingsWidget for ApiKeysWidget {
                 .finish(),
             )
             .with_child(self.render_api_keys_section(appearance, app, is_byo_enabled));
+
+        #[cfg(not(target_family = "wasm"))]
+        column.add_child(
+            Container::new(
+                Flex::column()
+                    .with_child(render_separator(appearance))
+                    .with_child(
+                        build_sub_header(
+                            appearance,
+                            "Local Agent Backend",
+                            Some(styles::header_font_color(is_any_ai_enabled, app)),
+                        )
+                        .with_padding_bottom(HEADER_PADDING)
+                        .finish(),
+                    )
+                    .with_child(self.render_local_agent_backend_section(
+                        appearance,
+                        app,
+                        is_byo_enabled,
+                    ))
+                    .finish(),
+            )
+            .with_margin_top(16.)
+            .finish(),
+        );
 
         if is_byo_enabled {
             column.add_child(

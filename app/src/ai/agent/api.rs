@@ -241,6 +241,17 @@ impl RequestParams {
             user_workspaces.is_byo_api_key_enabled(),
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
         );
+        #[cfg(not(target_family = "wasm"))]
+        let local_multi_agent_server_root_url =
+            crate::local_multi_agent::LocalMultiAgentManager::global_root_url()
+                .map(|url| url.to_string())
+                .or_else(|| {
+                    ApiKeyManager::as_ref(app)
+                        .keys()
+                        .local_multi_agent_server_root_url
+                        .clone()
+                });
+        #[cfg(target_family = "wasm")]
         let local_multi_agent_server_root_url = ApiKeyManager::as_ref(app)
             .keys()
             .local_multi_agent_server_root_url
