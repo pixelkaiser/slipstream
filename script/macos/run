@@ -128,9 +128,16 @@ fi
 
 echo "Codesigning app..."
 LOCAL_SIGNING_NAME="${WARP_LOCAL_CODESIGN_IDENTITY_NAME:-Warp Local Development}"
+
+find_codesigning_identity() {
+  security find-identity -p codesigning -v | awk -v pattern="$1" 'index($0, pattern) > 0 {print $2; exit}'
+}
+
 if [ -n "${WARP_CODESIGN_IDENTITY:-}" ]; then
   SIGNING_CERT="$WARP_CODESIGN_IDENTITY"
-elif SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)" && [ -n "$SIGNING_CERT" ]; then
+elif SIGNING_CERT="$(find_codesigning_identity "Apple Development")" && [ -n "$SIGNING_CERT" ]; then
+  :
+elif SIGNING_CERT="$(find_codesigning_identity "Developer ID Application")" && [ -n "$SIGNING_CERT" ]; then
   :
 else
   SIGNING_CERT="$(security find-identity -p codesigning -v | awk -v name="$LOCAL_SIGNING_NAME" 'index($0, "\"" name "\"") > 0 {print $2; exit}')"
@@ -144,6 +151,14 @@ else
   echo "Using code-signing identity: $SIGNING_CERT"
 fi
 codesign --force --deep --options runtime --sign "$SIGNING_CERT" "$WARP_APP_PATH" --entitlements script/Debug-Entitlements.plist
+
+SIGNED_TEAM_IDENTIFIER="$(codesign -dv --verbose=4 "$WARP_APP_PATH" 2>&1 | awk -F= '/^TeamIdentifier=/ {print $2; exit}')"
+if [ -n "$SIGNED_TEAM_IDENTIFIER" ] && [ "$SIGNED_TEAM_IDENTIFIER" != "not set" ]; then
+  echo "Signed app TeamIdentifier: $SIGNED_TEAM_IDENTIFIER"
+else
+  echo "Warning: signed app has no TeamIdentifier; macOS Keychain access will be tied to each build hash." >&2
+  echo "Install an Apple Development certificate in Keychain, then rebuild." >&2
+fi
 
 if [ "$DONT_OPEN" = false ] ; then
     if  [ "$OPEN_WITH_LAUNCHD" = true ]; then

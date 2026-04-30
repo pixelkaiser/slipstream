@@ -3,7 +3,7 @@ LOCAL_AGENT_NPM_PATH := /opt/homebrew/bin:/usr/local/bin:$(PATH)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test local-agent-proto warp-local-signing-identity warp-check warp-build warp-build-optimized warp-build-oss
+.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test local-agent-proto warp-local-signing-identity warp-signing-status warp-grant-keychain-access warp-check warp-build warp-build-optimized warp-build-oss
 
 help:
 	@echo "Warp BYOK local development targets:"
@@ -14,6 +14,8 @@ help:
 	@echo "  make local-agent-test     Build and test the local multi-agent service"
 	@echo "  make local-agent-proto    Regenerate local multi-agent TypeScript protobuf bindings"
 	@echo "  make warp-local-signing-identity  Create a stable local macOS signing identity"
+	@echo "  make warp-signing-status  Show available macOS code-signing identities"
+	@echo "  make warp-grant-keychain-access  Grant existing WarpOss keychain items to the signed app Team ID"
 	@echo "  make warp-check           Run Rust formatting and Warp OSS app check"
 	@echo "  make warp-build-oss       Build the Warp OSS macOS app bundle"
 	@echo "  make warp-build-optimized Build an optimized Warp OSS macOS app bundle"
@@ -38,6 +40,12 @@ local-agent-proto:
 
 warp-local-signing-identity:
 	./script/macos/create_local_codesign_identity
+
+warp-signing-status:
+	./script/macos/signing_status
+
+warp-grant-keychain-access:
+	./script/macos/grant_keychain_access_to_team
 
 warp-check:
 	cargo fmt --check
