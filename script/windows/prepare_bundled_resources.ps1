@@ -66,6 +66,66 @@ if ($env:GIT_RELEASE_TAG) {
         Set-Content -Path $VersionMetadataPath -Encoding utf8
 }
 
+function Build-AndCopyLocalMultiAgent {
+    $LocalAgentSource = Join-Path (Join-Path $RepoRoot 'tools') 'local-multi-agent'
+    $LocalAgentDestination = Join-Path (Join-Path $DestinationDir 'bundled') 'local-multi-agent'
+
+    if (-Not (Test-Path $LocalAgentSource -PathType Container)) {
+        Write-Error "Local multi-agent service not found at $LocalAgentSource"
+        exit 1
+    }
+    $NpmCommand = Get-Command npm -ErrorAction SilentlyContinue
+    if (-Not $NpmCommand) {
+        Write-Error 'npm is required to build the local multi-agent bundle'
+        exit 1
+    }
+
+    $LocalAgentStage = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
+    New-Item -ItemType Directory -Path $LocalAgentStage -Force | Out-Null
+    Write-Output 'Building local multi-agent service bundle'
+
+    Copy-Item -Path (Join-Path $LocalAgentSource 'package.json') -Destination (Join-Path $LocalAgentStage 'package.json') -Force
+    Copy-Item -Path (Join-Path $LocalAgentSource 'package-lock.json') -Destination (Join-Path $LocalAgentStage 'package-lock.json') -Force
+    Copy-Item -Path (Join-Path $LocalAgentSource 'tsconfig.json') -Destination (Join-Path $LocalAgentStage 'tsconfig.json') -Force
+    Copy-Item -Path (Join-Path $LocalAgentSource 'config-schema.json') -Destination (Join-Path $LocalAgentStage 'config-schema.json') -Force
+    Copy-Item -Path (Join-Path $LocalAgentSource 'src') -Destination (Join-Path $LocalAgentStage 'src') -Recurse -Force
+    Copy-Item -Path (Join-Path $LocalAgentSource 'scripts') -Destination (Join-Path $LocalAgentStage 'scripts') -Recurse -Force
+
+    Push-Location $LocalAgentStage
+    try {
+        & npm ci
+        if (-Not $?) {
+            Write-Error 'Failed to install local multi-agent dependencies'
+            exit 1
+        }
+        & npm run build
+        if (-Not $?) {
+            Write-Error 'Failed to build local multi-agent service'
+            exit 1
+        }
+        & npm prune --omit=dev
+        if (-Not $?) {
+            Write-Error 'Failed to prune local multi-agent dependencies'
+            exit 1
+        }
+    } finally {
+        Pop-Location
+    }
+
+    if (Test-Path $LocalAgentDestination -PathType Container) {
+        Remove-Item -Path $LocalAgentDestination -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $LocalAgentDestination -Force | Out-Null
+    Copy-Item -Path (Join-Path $LocalAgentStage 'dist') -Destination (Join-Path $LocalAgentDestination 'dist') -Recurse -Force
+    Copy-Item -Path (Join-Path $LocalAgentStage 'node_modules') -Destination (Join-Path $LocalAgentDestination 'node_modules') -Recurse -Force
+    Copy-Item -Path (Join-Path $LocalAgentStage 'package.json') -Destination (Join-Path $LocalAgentDestination 'package.json') -Force
+    Copy-Item -Path (Join-Path $LocalAgentStage 'package-lock.json') -Destination (Join-Path $LocalAgentDestination 'package-lock.json') -Force
+    Copy-Item -Path (Join-Path $LocalAgentStage 'config-schema.json') -Destination (Join-Path $LocalAgentDestination 'config-schema.json') -Force
+    Remove-Item -Path $LocalAgentStage -Recurse -Force
+}
+
+Build-AndCopyLocalMultiAgent
+
 # Copy channel-gated skills matching the current release channel.
 $GatedSource = Join-Path (Join-Path $RepoRoot 'resources') 'channel-gated-skills'
 $DestSkills = Join-Path (Join-Path $DestinationDir 'bundled') 'skills'

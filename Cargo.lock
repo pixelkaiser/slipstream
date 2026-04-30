@@ -14416,6 +14416,7 @@ dependencies = [
  "mockito",
  "natural_language_detection",
  "nix 0.26.4",
+ "node_runtime",
  "notify-debouncer-full",
  "num-traits",
  "num_cpus",
