@@ -1,0 +1,85 @@
+#!/bin/bash
+#
+# Grants existing WarpOss generic-password keychain items to the Team ID used
+# by the currently signed app. This is a one-time migration after switching
+# from the self-signed local certificate to an Apple-issued signing identity.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
+cd "${REPO_ROOT}"
+
+APP_PATH="${WARP_APP_PATH:-target/release-lto/bundle/osx/WarpOss.app}"
+SERVICE="${WARP_KEYCHAIN_SERVICE:-dev.warp.WarpOss}"
+KEYCHAIN="${WARP_KEYCHAIN:-$(security login-keychain | sed 's/[[:space:]"]//g')}"
+
+if [ ! -d "$APP_PATH" ]; then
+  echo "No app bundle found at $APP_PATH." >&2
+  echo "Run 'make warp-build-optimized' after installing an Apple Development certificate." >&2
+  exit 1
+fi
+
+TEAM_IDENTIFIER="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 | awk -F= '/^TeamIdentifier=/ {print $2; exit}')"
+if [ -z "${TEAM_IDENTIFIER:-}" ] || [ "$TEAM_IDENTIFIER" = "not set" ]; then
+  echo "The app at $APP_PATH is not signed with an Apple Team ID." >&2
+  echo "Install an Apple Development certificate, rebuild, then run this target again." >&2
+  exit 1
+fi
+
+ACCOUNTS_FILE="$(mktemp)"
+trap 'rm -f "$ACCOUNTS_FILE"' EXIT
+
+security dump-keychain -a "$KEYCHAIN" 2>/dev/null | awk -v service="$SERVICE" '
+  function maybe_print() {
+    if (acct != "" && svce == service) {
+      print acct
+    }
+  }
+
+  /^keychain:/ {
+    acct = ""
+    svce = ""
+  }
+
+  /"acct"<blob>=/ {
+    line = $0
+    sub(/^.*"acct"<blob>="/, "", line)
+    sub(/".*$/, "", line)
+    acct = line
+    maybe_print()
+  }
+
+  /"svce"<blob>=/ {
+    line = $0
+    sub(/^.*"svce"<blob>="/, "", line)
+    sub(/".*$/, "", line)
+    svce = line
+    maybe_print()
+  }
+' | sort -u > "$ACCOUNTS_FILE"
+
+if [ ! -s "$ACCOUNTS_FILE" ]; then
+  echo "No existing generic-password items found for service $SERVICE in $KEYCHAIN."
+  exit 0
+fi
+
+PASSWORD_ARGS=()
+if [ -n "${WARP_KEYCHAIN_PASSWORD:-}" ]; then
+  PASSWORD_ARGS=(-k "$WARP_KEYCHAIN_PASSWORD")
+fi
+
+echo "Granting teamid:$TEAM_IDENTIFIER access to $SERVICE keychain items in $KEYCHAIN."
+echo "macOS may ask for the login keychain password to update each item."
+
+while IFS= read -r account; do
+  [ -n "$account" ] || continue
+  echo "Updating keychain account: $account"
+  security set-generic-password-partition-list \
+    -s "$SERVICE" \
+    -a "$account" \
+    -S "teamid:$TEAM_IDENTIFIER" \
+    "${PASSWORD_ARGS[@]}" \
+    "$KEYCHAIN" >/dev/null
+done < "$ACCOUNTS_FILE"
+
+echo "Done."
