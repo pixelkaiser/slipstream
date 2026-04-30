@@ -269,6 +269,15 @@ fn project_dirs_for_app_id(
 /// * [`containerURLForSecurityApplicationGroupIdentifier`](https://developer.apple.com/documentation/foundation/filemanager/containerurl(forsecurityapplicationgroupidentifier:)?language=objc)
 #[cfg(target_os = "macos")]
 pub fn app_group_container_path() -> Option<PathBuf> {
+    // The shared app-group container is a first-party entitlement. OSS/local builds should not
+    // probe it, since macOS treats that as accessing another app's data.
+    if !matches!(
+        ChannelState::channel(),
+        Channel::Stable | Channel::Preview | Channel::Dev
+    ) {
+        return None;
+    }
+
     use std::sync::LazyLock;
     static CONTAINER_PATH: LazyLock<Option<PathBuf>> = LazyLock::new(|| {
         use objc2_foundation::{NSFileManager, NSString};
