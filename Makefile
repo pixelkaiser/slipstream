@@ -1,18 +1,17 @@
-LOCAL_AGENT_DIR := tools/local-multi-agent
-LOCAL_AGENT_NPM_PATH := /opt/homebrew/bin:/usr/local/bin:$(PATH)
+LOCAL_AGENT_PACKAGE := local_multi_agent_service
+LOCAL_AGENT_BIN := warp-local-multi-agent
 
 .DEFAULT_GOAL := help
 
-.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test local-agent-proto warp-local-signing-identity warp-signing-status warp-grant-keychain-access warp-trash-local-settings warp-check warp-build warp-build-optimized warp-build-oss
+.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test warp-local-signing-identity warp-signing-status warp-grant-keychain-access warp-trash-local-settings warp-check warp-build warp-build-optimized warp-build-oss
 
 help:
 	@echo "Slipstream local development targets:"
-	@echo "  make local-agent-install  Install local multi-agent service dependencies"
-	@echo "  make local-agent-dev      Run the local multi-agent service in watch mode"
+	@echo "  make local-agent-install  Fetch local multi-agent service dependencies"
+	@echo "  make local-agent-dev      Run the local multi-agent service"
 	@echo "  make local-agent-build    Build the local multi-agent service"
 	@echo "  make local-agent-start    Run the built local multi-agent service"
 	@echo "  make local-agent-test     Build and test the local multi-agent service"
-	@echo "  make local-agent-proto    Regenerate local multi-agent TypeScript protobuf bindings"
 	@echo "  make warp-local-signing-identity  Create a stable local macOS signing identity"
 	@echo "  make warp-signing-status  Show available macOS code-signing identities"
 	@echo "  make warp-grant-keychain-access  Grant existing Slipstream keychain items to the signed app Team ID"
@@ -22,22 +21,19 @@ help:
 	@echo "  make warp-build-optimized Build an optimized Slipstream macOS app bundle"
 
 local-agent-install:
-	cd $(LOCAL_AGENT_DIR) && PATH="$(LOCAL_AGENT_NPM_PATH)" npm install
+	cargo fetch
 
 local-agent-dev:
-	cd $(LOCAL_AGENT_DIR) && PATH="$(LOCAL_AGENT_NPM_PATH)" npm run dev
+	cargo run -p $(LOCAL_AGENT_PACKAGE) --bin $(LOCAL_AGENT_BIN)
 
 local-agent-build:
-	cd $(LOCAL_AGENT_DIR) && PATH="$(LOCAL_AGENT_NPM_PATH)" npm run build
+	cargo build -p $(LOCAL_AGENT_PACKAGE) --bin $(LOCAL_AGENT_BIN)
 
 local-agent-start: local-agent-build
-	cd $(LOCAL_AGENT_DIR) && PATH="$(LOCAL_AGENT_NPM_PATH)" npm start
+	./target/debug/$(LOCAL_AGENT_BIN)
 
 local-agent-test:
-	cd $(LOCAL_AGENT_DIR) && PATH="$(LOCAL_AGENT_NPM_PATH)" npm test
-
-local-agent-proto:
-	cd $(LOCAL_AGENT_DIR) && PATH="$(LOCAL_AGENT_NPM_PATH)" npm run proto:generate
+	cargo test -p $(LOCAL_AGENT_PACKAGE)
 
 warp-local-signing-identity:
 	./script/macos/create_local_codesign_identity
