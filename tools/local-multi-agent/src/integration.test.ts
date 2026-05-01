@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import { fromBinary } from "@bufbuild/protobuf";
+import { ResponseEventSchema } from "./generated/warp_multi_agent/v1/response_pb.js";
 
 function lengthDelimitedField(fieldNumber: number, value: Uint8Array): Uint8Array {
   assert.ok(value.length < 128, "test helper only supports one-byte lengths");
@@ -24,6 +26,11 @@ function metadata(conversationId?: string): Uint8Array {
 function warpPromptRequest(prompt: string, conversationId?: string): Uint8Array {
   const deprecatedUserQuery = lengthDelimitedField(2, stringField(1, prompt));
   return Buffer.concat([lengthDelimitedField(2, deprecatedUserQuery), metadata(conversationId)]);
+}
+
+function warpSummarizeRequest(conversationId: string, prompt?: string): Uint8Array {
+  const summarizeConversation = prompt ? stringField(1, prompt) : new Uint8Array();
+  return Buffer.concat([lengthDelimitedField(2, lengthDelimitedField(13, summarizeConversation)), metadata(conversationId)]);
 }
 
 function warpPromptRequestWithMcpTool(prompt: string, params: {
@@ -145,6 +152,10 @@ function stopChild(child: ChildProcessWithoutNullStreams): void {
 
 function sseEventBytes(event: string): Buffer {
   return Buffer.from(event.replace(/^data: /, "").replace(/-/g, "+").replace(/_/g, "/"), "base64");
+}
+
+function sseResponseEvent(event: string) {
+  return fromBinary(ResponseEventSchema, sseEventBytes(event));
 }
 
 function maybeHandleProviderModelsRequest(request: http.IncomingMessage, response: http.ServerResponse): boolean {
@@ -601,6 +612,127 @@ test("keeps provider conversation history across turns and service restarts", { 
   }
 });
 
+test("compacts local conversation state and reports lower context usage for summarize requests", { timeout: 10_000 }, async () => {
+  const providerBodies: unknown[] = [];
+  const provider = http.createServer(async (request, response) => {
+    if (maybeHandleProviderModelsRequest(request, response)) {
+      return;
+    }
+
+    providerBodies.push(JSON.parse(await readBody(request)));
+    response.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+    });
+    const content = providerBodies.length === 1
+      ? "first answer"
+      : providerBodies.length === 2
+        ? "summary of prior exchange"
+        : "after compact answer";
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`);
+    response.write("data: [DONE]\n\n");
+    response.end();
+  });
+  const providerPort = await listenOnLoopback(provider);
+
+  const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
+  const servicePort = await listenOnLoopback(serviceProbe);
+  await closeServer(serviceProbe);
+
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-agent-compact-"));
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const child = spawn(process.execPath, ["dist/server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(servicePort),
+      OPENAI_API_KEY: "sk-local-test",
+      OPENAI_BASE_URL: `http://127.0.0.1:${providerPort}/v1`,
+      OPENAI_MODEL: "mock-model",
+      LOG_LEVEL: "error",
+      LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
+    },
+  });
+  child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
+  child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
+
+  try {
+    await waitForHealth(servicePort, child);
+
+    const firstResponse = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpPromptRequest("first prompt", "conversation-compact")),
+    });
+    assert.equal(firstResponse.status, 200);
+    await firstResponse.text();
+
+    const compactResponse = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpSummarizeRequest("conversation-compact")),
+    });
+    assert.equal(compactResponse.status, 200);
+    const compactEvents = (await compactResponse.text()).split("\n\n").filter(Boolean);
+
+    const summarizationRequestMessages = providerNonSystemMessages(providerBodies[1]) as Array<{ role?: string; content?: string }>;
+    assert.equal(summarizationRequestMessages.length, 3);
+    assert.deepEqual(summarizationRequestMessages.slice(0, 2), [
+      { role: "user", content: "first prompt" },
+      { role: "assistant", content: "first answer" },
+    ]);
+    assert.equal(summarizationRequestMessages[2]?.role, "user");
+    assert.match(summarizationRequestMessages[2]?.content ?? "", /Summarize the conversation so far/);
+
+    const summaryAction = compactEvents
+      .map(sseResponseEvent)
+      .flatMap((event) => event.type.case === "clientActions" ? event.type.value.actions : [])
+      .map((clientAction) => clientAction.action)
+      .find((action) => action.case === "addMessagesToTask" && action.value.messages[0]?.message.case === "summarization");
+    assert.ok(summaryAction);
+
+    const compactFinished = sseResponseEvent(compactEvents[compactEvents.length - 1]);
+    assert.equal(compactFinished.type.case, "finished");
+    assert.equal(compactFinished.type.value.conversationUsageMetadata?.summarized, true);
+    assert.ok((compactFinished.type.value.conversationUsageMetadata?.contextWindowUsage ?? 1) < 0.01);
+
+    const followUpResponse = await fetch(`http://127.0.0.1:${servicePort}/ai/multi-agent`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-protobuf",
+      },
+      body: Buffer.from(warpPromptRequest("after compact", "conversation-compact")),
+    });
+    assert.equal(followUpResponse.status, 200);
+    await followUpResponse.text();
+
+    assert.equal(providerBodies.length, 3);
+    assert.deepEqual(providerNonSystemMessages(providerBodies[2]), [
+      { role: "user", content: "after compact" },
+    ]);
+    const followUpSystemPrompt = providerSystemMessages(providerBodies[2])
+      .map((message) => String(message.content ?? ""))
+      .join("\n");
+    assert.match(followUpSystemPrompt, /The conversation before this point was compacted/);
+    assert.match(followUpSystemPrompt, /summary of prior exchange/);
+    assert.doesNotMatch(followUpSystemPrompt, /first prompt/);
+  } catch (error) {
+    const diagnostics = [
+      `stdout:\n${stdout.join("")}`,
+      `stderr:\n${stderr.join("")}`,
+    ].join("\n");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n${diagnostics}`);
+  } finally {
+    stopChild(child);
+    await closeServer(provider);
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
+
 test("translates an OpenAI read_files tool call into Warp SSE events", { timeout: 10_000 }, async () => {
   const providerBodies: unknown[] = [];
   const provider = http.createServer(async (request, response) => {
@@ -922,6 +1054,7 @@ test("translates provider-native MCP tool calls into Warp MCP tool events", { ti
       OPENAI_MODEL: "mock-model",
       LOG_LEVEL: "error",
       LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
+      LOCAL_MULTI_AGENT_SYSTEM_PROMPT: "local endpoint prompt",
     },
   });
   child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
@@ -946,9 +1079,12 @@ test("translates provider-native MCP tool calls into Warp MCP tool events", { ti
     const events = (await response.text()).split("\n\n").filter(Boolean);
 
     assert.equal(providerBodies.length, 1);
-    const systemPrompt = providerSystemMessages(providerBodies[0]).map((message) => message.content).join("\n");
+    const systemMessages = providerSystemMessages(providerBodies[0]);
+    assert.equal(systemMessages.length, 1);
+    const systemPrompt = String(systemMessages[0]?.content ?? "");
     assert.match(systemPrompt, /always use the provided call_mcp_tool function/);
     assert.match(systemPrompt, /list_issues/);
+    assert.match(systemPrompt, /local endpoint prompt/);
     assert.equal(events.length, 4);
     const toolCallBytes = sseEventBytes(events[2]);
     assert.equal(toolCallBytes.includes("call-linear-list-issues"), true);
