@@ -69,3 +69,25 @@ fn test_click_through_layer_does_not_cover_lower_layers() {
 
     assert!(!scene.is_covered(Point::new(10., 10., ZIndex::new(0))));
 }
+
+#[test]
+fn test_cursor_trail_is_clipped_by_layer_without_hit_recording() {
+    let mut scene = Scene::new(1., rendering::Config::default());
+
+    let clip_bounds = RectF::new(vec2f(5., 5.), vec2f(10., 10.));
+    scene.start_layer(ClipBounds::BoundedBy(clip_bounds));
+    scene.draw_cursor_trail_without_hit_recording(
+        [
+            vec2f(0., 0.),
+            vec2f(20., 0.),
+            vec2f(20., 20.),
+            vec2f(0., 20.),
+        ],
+        RectF::new(vec2f(10., 10.), vec2f(5., 5.)),
+        pathfinder_color::ColorU::white(),
+    );
+
+    assert_eq!(scene.active_layer().clip_bounds, Some(clip_bounds));
+    assert_eq!(scene.active_layer().cursor_trails.len(), 1);
+    assert!(!scene.is_covered(Point::new(10., 10., ZIndex::new(0))));
+}

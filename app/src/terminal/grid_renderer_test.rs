@@ -1,15 +1,98 @@
-use super::{active_or_next_match, CachedBackgroundColor};
+use super::{CachedBackgroundColor, active_or_next_match};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
+use crate::terminal::model::ansi::{CursorShape, CursorStyle};
 use crate::terminal::model::index::Point;
 use crate::terminal::model::selection::SelectionPoint;
-use crate::terminal::{grid_renderer, SizeInfo};
+use crate::terminal::{SizeInfo, grid_renderer};
 use pathfinder_geometry::rect::RectF;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
+use pathfinder_geometry::vector::{Vector2F, vec2f};
+use warpui::elements::DEFAULT_UI_LINE_HEIGHT_RATIO;
 use warpui::fonts::Cache as FontCache;
 use warpui::units::{IntoLines, Lines, Pixels};
 
 fn rect_from_points(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> RectF {
     RectF::from_points(vec2f(min_x, min_y), vec2f(max_x, max_y))
+}
+
+fn cursor_style(shape: CursorShape) -> CursorStyle {
+    CursorStyle {
+        shape,
+        blinking: false,
+    }
+}
+
+fn cursor_trail_geometry(shape: CursorShape, is_wide_char: bool) -> RectF {
+    grid_renderer::cursor_geometry_from_origins(
+        Point::new(2, 3),
+        is_wide_char,
+        cursor_style(shape),
+        vec2f(31., 42.),
+        vec2f(31., 45.),
+        vec2f(10., 20.),
+        12.,
+    )
+    .unwrap()
+    .bounds
+}
+
+#[test]
+fn cursor_trail_geometry_block_and_hollow_use_cursor_block_bounds() {
+    let expected = RectF::new(
+        vec2f(31., 45.),
+        vec2f(10., 12. * DEFAULT_UI_LINE_HEIGHT_RATIO),
+    );
+
+    assert_eq!(cursor_trail_geometry(CursorShape::Block, false), expected);
+    assert_eq!(
+        cursor_trail_geometry(CursorShape::HollowBlock, false),
+        expected
+    );
+}
+
+#[test]
+fn cursor_trail_geometry_beam_and_underline_use_cursor_thickness() {
+    assert_eq!(
+        cursor_trail_geometry(CursorShape::Beam, false),
+        RectF::new(
+            vec2f(31., 45.),
+            vec2f(1.5, 12. * DEFAULT_UI_LINE_HEIGHT_RATIO)
+        )
+    );
+    assert_eq!(
+        cursor_trail_geometry(CursorShape::Underline, false),
+        RectF::new(vec2f(31., 60.5), vec2f(10., 1.5))
+    );
+}
+
+#[test]
+fn cursor_trail_geometry_wide_char_expands_cursor_width() {
+    assert_eq!(
+        cursor_trail_geometry(CursorShape::Block, true),
+        RectF::new(
+            vec2f(31., 45.),
+            vec2f(20., 12. * DEFAULT_UI_LINE_HEIGHT_RATIO)
+        )
+    );
+    assert_eq!(
+        cursor_trail_geometry(CursorShape::Underline, true),
+        RectF::new(vec2f(31., 60.5), vec2f(20., 1.5))
+    );
+}
+
+#[test]
+fn cursor_trail_geometry_hidden_cursor_is_absent() {
+    assert!(
+        grid_renderer::cursor_geometry_from_origins(
+            Point::new(2, 3),
+            false,
+            cursor_style(CursorShape::Hidden),
+            vec2f(31., 42.),
+            vec2f(31., 45.),
+            vec2f(10., 20.),
+            12.,
+        )
+        .is_none()
+    );
 }
 
 // TODO(CORE-2002): Make test non-Mac specific by switching to using bundled Roboto font.

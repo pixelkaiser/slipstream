@@ -1,10 +1,13 @@
 mod cell_glyph_cache;
 mod cell_type;
 
+use crate::terminal::cursor_trail::{
+    CursorTrailConfig, CursorTrailKey, CursorTrailSnapshot, cursor_trail_repaint_interval,
+};
 use crate::terminal::grid_size_util::calculate_grid_baseline_position;
 use crate::terminal::model::ansi::{Color, CursorShape, CursorStyle};
 use crate::terminal::model::cell::{Cell, Flags};
-use crate::terminal::{color, SizeInfo};
+use crate::terminal::{SizeInfo, color};
 
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::index::Point;
@@ -15,6 +18,7 @@ use crate::themes::theme::WarpTheme;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 
 use core::mem;
+use instant::Instant;
 use lazy_static::lazy_static;
 use num_traits::Float as _;
 use std::cmp::Ordering;
@@ -24,13 +28,13 @@ use unicode_width::UnicodeWidthChar;
 use warp_core::features::FeatureFlag;
 use warpui::assets::asset_cache::{AssetCache, AssetSource, AssetState};
 use warpui::color::ColorU;
-use warpui::elements::{Border, CornerRadius, Fill, Radius, DEFAULT_UI_LINE_HEIGHT_RATIO};
+use warpui::elements::{Border, CornerRadius, DEFAULT_UI_LINE_HEIGHT_RATIO, Fill, Radius};
 use warpui::fonts::{FamilyId, FontId, Properties, Style, Weight};
 use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{vec2f, Vector2F};
+use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::image_cache::{AnimatedImageBehavior, CacheOption, FitType, Image, ImageCache};
 use warpui::platform::LineStyle;
-use warpui::text_layout::{Line, StyleAndFont, TextStyle, DEFAULT_TOP_BOTTOM_RATIO};
+use warpui::text_layout::{DEFAULT_TOP_BOTTOM_RATIO, Line, StyleAndFont, TextStyle};
 use warpui::units::{IntoLines as _, Lines, Pixels};
 use warpui::{AppContext, Element, EntityId, PaintContext, Scene, SingletonEntity};
 
@@ -40,8 +44,8 @@ use self::cell_type::{CellType, IsFocused, Secret};
 use super::block_filter::{BLOCK_FILTER_DOTTED_LINE_DASH, BLOCK_FILTER_DOTTED_LINE_WIDTH};
 use super::blockgrid_renderer::GridRenderParams;
 use super::model::char_or_str::CharOrStr;
-use super::model::grid::grid_handler::{ContainsPoint, GridHandler, Link};
 use super::model::grid::RespectDisplayedOutput;
+use super::model::grid::grid_handler::{ContainsPoint, GridHandler, Link};
 use super::model::image_map::{ImagePlacementData, StoredImageMetadata};
 use super::model::terminal_model::RangeInModel;
 use crate::settings::EnforceMinimumContrast;
@@ -2334,6 +2338,85 @@ fn calculate_cursor_origin(
         )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CursorGeometry {
+    pub point: Point,
+    pub bounds: RectF,
+    pub cell_size: Vector2F,
+    pub shape: CursorShape,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cursor_geometry_from_origins(
+    cursor_point: Point,
+    is_cursor_on_wide_char: bool,
+    cursor_style: CursorStyle,
+    line_top_origin: Vector2F,
+    cursor_top_origin: Vector2F,
+    cell_size: Vector2F,
+    font_size: f32,
+) -> Option<CursorGeometry> {
+    if cursor_style.shape == CursorShape::Hidden {
+        return None;
+    }
+
+    let cell_width = if is_cursor_on_wide_char {
+        cell_size.x() * 2.
+    } else {
+        cell_size.x()
+    };
+    let cursor_block_size = vec2f(cell_width, font_size * DEFAULT_UI_LINE_HEIGHT_RATIO);
+    let thickness = CURSOR_THICKNESS_SCALE_FACTOR * cell_size.x().round().max(1.);
+
+    let bounds = match cursor_style.shape {
+        CursorShape::Block | CursorShape::HollowBlock => {
+            RectF::new(cursor_top_origin, cursor_block_size)
+        }
+        CursorShape::Underline => RectF::new(
+            line_top_origin + vec2f(0., cell_size.y() - thickness),
+            vec2f(cell_width, thickness),
+        ),
+        CursorShape::Beam => RectF::new(cursor_top_origin, vec2f(thickness, cursor_block_size.y())),
+        CursorShape::Hidden => return None,
+    };
+
+    Some(CursorGeometry {
+        point: cursor_point,
+        bounds,
+        cell_size,
+        shape: cursor_style.shape,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn cursor_geometry(
+    grid_render_params: &GridRenderParams,
+    cursor_point: Point,
+    is_cursor_on_wide_char: bool,
+    cursor_style: CursorStyle,
+    padding_x: Pixels,
+    grid_origin: Vector2F,
+    ctx: &mut PaintContext,
+) -> Option<CursorGeometry> {
+    if cursor_style.shape == CursorShape::Hidden {
+        return None;
+    }
+
+    let line_top_origin = grid_origin
+        + vec2f(padding_x.as_f32(), 0.)
+        + grid_render_params.cell_size * vec2f(cursor_point.col as f32, cursor_point.row as f32);
+    let cursor_top_origin = calculate_cursor_origin(grid_render_params, line_top_origin, ctx);
+    cursor_geometry_from_origins(
+        cursor_point,
+        is_cursor_on_wide_char,
+        cursor_style,
+        line_top_origin,
+        cursor_top_origin,
+        grid_render_params.cell_size,
+        grid_render_params.font_size,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn render_cursor(
     grid_render_params: &GridRenderParams,
@@ -2347,7 +2430,7 @@ pub fn render_cursor(
     terminal_view_id: EntityId,
     hint_text: Option<&mut Box<dyn Element>>,
     app: &AppContext,
-) {
+) -> Option<CursorGeometry> {
     let line_top_origin = grid_origin
         + vec2f(padding_x.as_f32(), 0.)
         + grid_render_params.cell_size * vec2f(cursor_point.col as f32, cursor_point.row as f32);
@@ -2363,39 +2446,80 @@ pub fn render_cursor(
         grid_render_params.font_size * DEFAULT_UI_LINE_HEIGHT_RATIO,
     );
 
+    let geometry = cursor_geometry(
+        grid_render_params,
+        cursor_point,
+        is_cursor_on_wide_char,
+        cursor_style,
+        padding_x,
+        grid_origin,
+        ctx,
+    );
+
+    let Some(geometry) = geometry else {
+        if let Some(cursor_trail_state) = &grid_render_params.cursor_trail_state {
+            cursor_trail_state.update(
+                CursorTrailConfig::from_enabled(grid_render_params.cursor_trail_enabled),
+                None,
+                Instant::now(),
+            );
+        }
+        return None;
+    };
+
     ctx.position_cache.cache_position_indefinitely(
         format!("terminal_view:cursor_{terminal_view_id}"),
         RectF::new(cursor_top_origin, cursor_block_size),
     );
+
+    if let Some(cursor_trail_state) = &grid_render_params.cursor_trail_state {
+        let update = cursor_trail_state.update(
+            CursorTrailConfig::from_enabled(grid_render_params.cursor_trail_enabled),
+            Some(CursorTrailSnapshot {
+                key: CursorTrailKey {
+                    surface: grid_render_params.cursor_trail_surface,
+                    point: cursor_point,
+                },
+                bounds: geometry.bounds,
+                cell_size: geometry.cell_size,
+                shape: geometry.shape,
+                color,
+            }),
+            Instant::now(),
+        );
+        if let Some(primitive) = update.primitive {
+            ctx.scene.draw_cursor_trail_without_hit_recording(
+                primitive.corners,
+                primitive.cursor_bounds,
+                primitive.color,
+            );
+        }
+        if update.needs_repaint {
+            ctx.repaint_after(cursor_trail_repaint_interval());
+        }
+    }
 
     let thickness =
         CURSOR_THICKNESS_SCALE_FACTOR * grid_render_params.cell_size.x().round().max(1.);
     match cursor_style.shape {
         CursorShape::Block => {
             ctx.scene
-                .draw_rect_with_hit_recording(RectF::new(cursor_top_origin, cursor_block_size))
+                .draw_rect_with_hit_recording(geometry.bounds)
                 .with_background(Fill::Solid(color));
         }
         CursorShape::Underline => {
-            let height = grid_render_params.cell_size.y();
             ctx.scene
-                .draw_rect_with_hit_recording(RectF::new(
-                    line_top_origin + vec2f(0., height - thickness),
-                    vec2f(cell_width, thickness),
-                ))
+                .draw_rect_with_hit_recording(geometry.bounds)
                 .with_background(Fill::Solid(color));
         }
         CursorShape::Beam => {
             ctx.scene
-                .draw_rect_with_hit_recording(RectF::new(
-                    cursor_top_origin,
-                    vec2f(thickness, cursor_block_size.y()),
-                ))
+                .draw_rect_with_hit_recording(geometry.bounds)
                 .with_background(Fill::Solid(color));
         }
         CursorShape::HollowBlock => {
             ctx.scene
-                .draw_rect_with_hit_recording(RectF::new(cursor_top_origin, cursor_block_size))
+                .draw_rect_with_hit_recording(geometry.bounds)
                 .with_border(Border::all(thickness).with_border_color(color));
         }
         CursorShape::Hidden => {}
@@ -2416,6 +2540,8 @@ pub fn render_cursor(
             app,
         );
     }
+
+    Some(geometry)
 }
 
 /// A background that spans multiple rows can be broken up into three individual background rows:

@@ -10,9 +10,9 @@ use ordered_float::OrderedFloat;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
-use rstar::{primitives::Rectangle, RTree};
+use rstar::{RTree, primitives::Rectangle};
 use std::sync::Arc;
-use vec1::{vec1, Vec1};
+use vec1::{Vec1, vec1};
 
 #[derive(Clone)]
 pub struct Scene {
@@ -34,6 +34,7 @@ pub struct Layer {
     pub images: Vec<Image>,
     pub glyphs: Vec<Glyph>,
     pub icons: Vec<Icon>,
+    pub cursor_trails: Vec<CursorTrail>,
     pub click_through: bool,
 }
 
@@ -121,6 +122,13 @@ pub struct Icon {
     pub color: ColorU,
 }
 
+#[derive(Clone, Debug)]
+pub struct CursorTrail {
+    pub corners: [Vector2F; 4],
+    pub cursor_bounds: RectF,
+    pub color: ColorU,
+}
+
 // These were picked empirically to make the shadows look decent by
 // default, but there is nothing special about them.
 const DEFAULT_DROP_SHADOW_OFFSET_X: f32 = 0.;
@@ -189,35 +197,19 @@ pub struct Dash {
 
 impl Border {
     pub fn top_width(&self) -> f32 {
-        if self.top {
-            self.width
-        } else {
-            0.0
-        }
+        if self.top { self.width } else { 0.0 }
     }
 
     pub fn right_width(&self) -> f32 {
-        if self.right {
-            self.width
-        } else {
-            0.0
-        }
+        if self.right { self.width } else { 0.0 }
     }
 
     pub fn bottom_width(&self) -> f32 {
-        if self.bottom {
-            self.width
-        } else {
-            0.0
-        }
+        if self.bottom { self.width } else { 0.0 }
     }
 
     pub fn left_width(&self) -> f32 {
-        if self.left {
-            self.width
-        } else {
-            0.0
-        }
+        if self.left { self.width } else { 0.0 }
     }
 }
 
@@ -669,6 +661,23 @@ impl Scene {
         layer.glyphs.last_mut().unwrap()
     }
 
+    pub fn draw_cursor_trail_without_hit_recording(
+        &mut self,
+        corners: [Vector2F; 4],
+        cursor_bounds: RectF,
+        color: ColorU,
+    ) {
+        let bounds = bounding_rect(corners);
+        Self::validate_rect(&bounds, None);
+        Self::validate_rect(&cursor_bounds, None);
+
+        self.active_layer().cursor_trails.push(CursorTrail {
+            corners,
+            cursor_bounds,
+            color,
+        });
+    }
+
     /// Get an iterator over all layers in order, from bottom to top
     pub fn layers(&self) -> impl Iterator<Item = &Layer> {
         self.layers.iter().chain(self.overlay_layers.iter())
@@ -687,6 +696,25 @@ impl Scene {
     pub fn rendering_config(&self) -> &rendering::Config {
         &self.rendering_config
     }
+}
+
+fn bounding_rect(corners: [Vector2F; 4]) -> RectF {
+    let mut min_x = f32::MAX;
+    let mut min_y = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut max_y = f32::MIN;
+
+    for corner in corners {
+        min_x = min_x.min(corner.x());
+        min_y = min_y.min(corner.y());
+        max_x = max_x.max(corner.x());
+        max_y = max_y.max(corner.y());
+    }
+
+    RectF::new(
+        vec2f(min_x, min_y),
+        vec2f((max_x - min_x).max(0.), (max_y - min_y).max(0.)),
+    )
 }
 
 impl Rect {

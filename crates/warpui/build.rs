@@ -35,6 +35,7 @@ fn bindgen_shader_types() {
         .allowlist_type("Uniforms")
         .allowlist_type("PerRectUniforms")
         .allowlist_type("PerGlyphUniforms")
+        .allowlist_type("PerCursorTrailUniforms")
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         // Disable intrinsic headers that define types containing 16-bit floats (`_Float16`,
         // `__m512h`, etc.) via preprocessor directive. `bindgen` doesn't know how to process

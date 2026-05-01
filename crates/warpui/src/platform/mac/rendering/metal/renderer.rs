@@ -1,5 +1,5 @@
 use crate::rendering::atlas::{AllocatedRegion, TextureId};
-use crate::rendering::{get_best_dash_gap, GlyphCache, GlyphRasterBoundsFn, RasterizeGlyphFn};
+use crate::rendering::{GlyphCache, GlyphRasterBoundsFn, RasterizeGlyphFn, get_best_dash_gap};
 use warpui_core::{
     fonts::{self, SubpixelAlignment},
     rendering::{self, texture_cache::TextureCache},
@@ -19,9 +19,9 @@ use warpui_core::platform::CapturedFrame;
 use pathfinder_color::{ColorF, ColorU};
 use pathfinder_geometry::{
     rect::RectF,
-    vector::{vec2f, Vector2F},
+    vector::{Vector2F, vec2f},
 };
-use warpui_core::fonts::{canvas, RasterizedGlyph};
+use warpui_core::fonts::{RasterizedGlyph, canvas};
 use warpui_core::scene::{CornerRadius, GlyphFade, Icon, Image, Layer, Scene};
 
 use std::collections::HashMap;
@@ -118,6 +118,7 @@ struct Resources {
     draw_rects_pipeline_state: metal::RenderPipelineState,
     draw_images_pipeline_state: metal::RenderPipelineState,
     draw_glyphs_pipeline_state: metal::RenderPipelineState,
+    draw_cursor_trails_pipeline_state: metal::RenderPipelineState,
     quad_vertices: metal::Buffer,
     quad_indices: metal::Buffer,
     glyph_cache: GlyphCache<metal::Texture>,
@@ -177,6 +178,22 @@ impl Renderer {
         );
         let draw_glyphs_pipeline_state = device.new_render_pipeline_state(&glyph_pipeline).unwrap();
 
+        let cursor_trail_vertex_shader = library
+            .get_function("cursor_trail_vertex_shader", None)
+            .unwrap();
+        let cursor_trail_fragment_shader = library
+            .get_function("cursor_trail_fragment_shader", None)
+            .unwrap();
+        let cursor_trail_pipeline = Self::create_pipeline(
+            "Cursor Trails",
+            color_pixel_format,
+            &cursor_trail_vertex_shader,
+            &cursor_trail_fragment_shader,
+        );
+        let draw_cursor_trails_pipeline_state = device
+            .new_render_pipeline_state(&cursor_trail_pipeline)
+            .unwrap();
+
         let quad_vertices = new_metal_buffer(
             device,
             &[
@@ -201,6 +218,7 @@ impl Renderer {
                 draw_rects_pipeline_state,
                 draw_images_pipeline_state,
                 draw_glyphs_pipeline_state,
+                draw_cursor_trails_pipeline_state,
                 quad_vertices,
                 quad_indices,
                 glyph_cache,
@@ -320,6 +338,7 @@ impl<'a> Frame<'a> {
             self.draw_rects(layer);
             self.draw_images(layer);
             self.draw_glyphs(layer);
+            self.draw_cursor_trails(layer);
         }
     }
 
@@ -731,6 +750,61 @@ impl<'a> Frame<'a> {
             );
         }
     }
+
+    fn draw_cursor_trails(&self, layer: &Layer) {
+        if layer.cursor_trails.is_empty() {
+            return;
+        }
+
+        self.command_encoder
+            .set_render_pipeline_state(&self.resources.draw_cursor_trails_pipeline_state);
+        self.command_encoder
+            .set_vertex_buffer(0, Some(self.resources.quad_vertices.as_ref()), 0);
+
+        let scale_factor = self.scene.scale_factor();
+        let per_cursor_trail_uniforms = layer
+            .cursor_trails
+            .iter()
+            .map(|trail| {
+                shader::PerCursorTrailUniforms::new(
+                    trail.corners[0] * scale_factor,
+                    trail.corners[1] * scale_factor,
+                    trail.corners[2] * scale_factor,
+                    trail.corners[3] * scale_factor,
+                    trail.cursor_bounds * scale_factor,
+                    trail.color,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let per_cursor_trail_uniforms_buffer = new_metal_buffer(
+            self.ctx.device,
+            &per_cursor_trail_uniforms,
+            MTLResourceOptions::StorageModeManaged,
+        );
+
+        self.command_encoder.set_vertex_buffer(
+            1,
+            Some(per_cursor_trail_uniforms_buffer.as_ref()),
+            0,
+        );
+
+        let uniforms = shader::Uniforms::new(self.ctx.drawable_size.into());
+        self.command_encoder.set_vertex_bytes(
+            2,
+            mem::size_of::<shader::Uniforms>() as u64,
+            [uniforms].as_ptr() as *const _,
+        );
+
+        self.command_encoder.draw_indexed_primitives_instanced(
+            MTLPrimitiveType::Triangle,
+            6,
+            MTLIndexType::UInt16,
+            self.resources.quad_indices.as_ref(),
+            0,
+            per_cursor_trail_uniforms.len() as u64,
+        );
+    }
 }
 
 impl Drop for Frame<'_> {
@@ -819,6 +893,17 @@ mod shader {
         }
     }
 
+    impl From<pathfinder_geometry::rect::RectF> for Vector4F {
+        fn from(rect: pathfinder_geometry::rect::RectF) -> Self {
+            Self::new(
+                rect.origin_x(),
+                rect.origin_y(),
+                rect.width(),
+                rect.height(),
+            )
+        }
+    }
+
     impl PerRectUniforms {
         #[allow(clippy::too_many_arguments)]
         pub fn new(
@@ -903,6 +988,26 @@ mod shader {
                 fade_end,
                 is_emoji: is_emoji as i32,
                 __bindgen_padding_0: Default::default(),
+            }
+        }
+    }
+
+    impl PerCursorTrailUniforms {
+        pub fn new(
+            top_left: PathfinderVector2F,
+            top_right: PathfinderVector2F,
+            bottom_right: PathfinderVector2F,
+            bottom_left: PathfinderVector2F,
+            cursor_bounds: pathfinder_geometry::rect::RectF,
+            color: pathfinder_color::ColorU,
+        ) -> Self {
+            Self {
+                top_left: Vector2F::from(top_left).0,
+                top_right: Vector2F::from(top_right).0,
+                bottom_right: Vector2F::from(bottom_right).0,
+                bottom_left: Vector2F::from(bottom_left).0,
+                cursor_bounds: Vector4F::from(cursor_bounds).0,
+                color: Vector4F::from(color.to_f32()).0,
             }
         }
     }
