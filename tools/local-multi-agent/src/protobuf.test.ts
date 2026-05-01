@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   encodeAddAgentOutput,
+  encodeAddConversationSummary,
   encodeAddReadFilesToolCall,
   encodeAddToolCall,
   encodeAppendAgentOutput,
@@ -174,6 +175,17 @@ test("extracts supported prompt input variants", () => {
     const request = lengthDelimitedField(2, item.input);
     assert.equal(decodeWarpRequest(request).prompt, item.expected, item.name);
   }
+
+  const summarizeRequest = lengthDelimitedField(2, lengthDelimitedField(13, stringField(1, "keep decisions")));
+  const summarizeDecoded = decodeWarpRequest(summarizeRequest);
+  assert.equal(summarizeDecoded.isSummarizationRequest, true);
+  assert.equal(summarizeDecoded.summarizationPrompt, "keep decisions");
+
+  const emptySummarizeRequest = lengthDelimitedField(2, lengthDelimitedField(13, new Uint8Array()));
+  const emptySummarizeDecoded = decodeWarpRequest(emptySummarizeRequest);
+  assert.equal(emptySummarizeDecoded.isSummarizationRequest, true);
+  assert.equal(emptySummarizeDecoded.prompt, "");
+  assert.equal(emptySummarizeDecoded.summarizationPrompt, undefined);
 });
 
 test("decodes extended context fields and images", () => {
@@ -424,6 +436,7 @@ test("encodes response events as protobuf payloads", () => {
   assert.ok(encodeStreamFinishedContextWindowExceeded().length > 0);
   assert.ok(encodeStreamFinishedQuotaLimit().length > 0);
   assert.ok(encodeAgentOutput({ taskId: "root", requestId: "req", text: "ok" }).length > 0);
+  assert.ok(encodeAddConversationSummary({ messageId: "message", taskId: "root", requestId: "req", text: "summary" }).length > 0);
   assert.ok(encodeCreateTask({ taskId: "root", description: "hello" }).length > 0);
   const toolCall = encodeAddReadFilesToolCall({
     messageId: "message",
