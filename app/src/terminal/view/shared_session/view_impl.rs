@@ -4,7 +4,7 @@ use chrono::{DateTime, Local};
 use itertools::Itertools;
 use session_sharing_protocol::common::{
     ParticipantId, ParticipantList, ParticipantPresenceUpdate, Role, RoleRequestId,
-    RoleRequestResponse, SessionId, WindowSize,
+    RoleRequestResponse, SessionId, SessionSecret, WindowSize,
 };
 use session_sharing_protocol::sharer::{RoleUpdateReason, SessionEndedReason, SessionSourceType};
 use session_sharing_protocol::viewer::RoleUpdatedReason;
@@ -57,8 +57,8 @@ use crate::terminal::shared_session::role_change_modal::{
 };
 use crate::terminal::shared_session::settings::SharedSessionSettings;
 use crate::terminal::shared_session::{
-    join_link, SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
-    SharedSessionStatus, COPY_LINK_TEXT,
+    join_link_with_secret, SharedSessionActionSource, SharedSessionJoinArgs,
+    SharedSessionScrollbackType, SharedSessionSource, SharedSessionStatus, COPY_LINK_TEXT,
 };
 use crate::terminal::view::{
     ContextMenuAction, Event, InlineBannerItem, InlineBannerType, PendingUserQueryKind,
@@ -103,6 +103,14 @@ impl TerminalView {
 
     pub fn shared_session_id(&self) -> Option<&SessionId> {
         Some(self.shared_session.as_ref()?.session_id())
+    }
+
+    pub fn shared_session_join_args(&self) -> Option<SharedSessionJoinArgs> {
+        let shared_session = self.shared_session.as_ref()?;
+        Some(SharedSessionJoinArgs::new(
+            *shared_session.session_id(),
+            shared_session.session_secret().cloned(),
+        ))
     }
 
     fn shared_session_source_type(&self) -> Option<&SessionSourceType> {
@@ -433,6 +441,7 @@ impl TerminalView {
                 Some(ShareableObject::Session {
                     handle: self_handle,
                     session_id: *shared_session.session_id(),
+                    session_secret: shared_session.session_secret().cloned(),
                     started_at: *shared_session.started_at(),
                 }),
                 ctx,
@@ -615,6 +624,7 @@ impl TerminalView {
         firebase_uid: UserUid,
         scrollback_type: SharedSessionScrollbackType,
         session_id: SessionId,
+        session_secret: Option<SessionSecret>,
         source_type: SessionSourceType,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -624,6 +634,7 @@ impl TerminalView {
             sharer_id,
             firebase_uid,
             session_id,
+            session_secret.clone(),
             started_at,
             source_type,
             ctx,
@@ -652,6 +663,7 @@ impl TerminalView {
                 Some(ShareableObject::Session {
                     handle: self_handle,
                     session_id,
+                    session_secret: session_secret.clone(),
                     started_at,
                 }),
                 ctx,
@@ -708,6 +720,7 @@ impl TerminalView {
         input_replica_id: ReplicaId,
         participant_list: Box<ParticipantList>,
         session_id: SessionId,
+        session_secret: Option<SessionSecret>,
         source_type: SessionSourceType,
         ctx: &mut ViewContext<Self>,
     ) {
@@ -718,6 +731,7 @@ impl TerminalView {
             firebase_uid,
             participant_list,
             session_id,
+            session_secret.clone(),
             started_at,
             source_type.clone(),
             ctx,
@@ -768,6 +782,7 @@ impl TerminalView {
                 Some(ShareableObject::Session {
                     handle: self_handle,
                     session_id,
+                    session_secret: session_secret.clone(),
                     started_at,
                 }),
                 ctx,
@@ -860,6 +875,7 @@ impl TerminalView {
                 .map(|session| ShareableObject::Session {
                     handle: ctx.handle(),
                     session_id: *session.session_id(),
+                    session_secret: session.session_secret().cloned(),
                     started_at: *session.started_at(),
                 })
         } else {
@@ -1444,13 +1460,16 @@ impl TerminalView {
         #[cfg(target_family = "wasm")]
         {
             let manager = Manager::as_ref(ctx);
-            let Some(session_id) = manager
-                .session_id(&ctx.view_id())
-                .or_else(|| manager.ended_session_id(&ctx.view_id()))
+            let Some(join_args) = manager
+                .join_args(&ctx.view_id())
+                .or_else(|| manager.ended_join_args(&ctx.view_id()))
             else {
                 return;
             };
-            if let Ok(url) = url::Url::parse(&join_link(&session_id)) {
+            if let Ok(url) = url::Url::parse(&join_link_with_secret(
+                &join_args.session_id,
+                join_args.session_secret.as_ref(),
+            )) {
                 crate::uri::web_intent_parser::open_url_on_desktop(&url);
             }
         }
@@ -1558,15 +1577,18 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         let manager = Manager::as_ref(ctx);
-        let Some(session_id) = manager
-            .session_id(&ctx.view_id())
-            .or_else(|| manager.ended_session_id(&ctx.view_id()))
+        let Some(join_args) = manager
+            .join_args(&ctx.view_id())
+            .or_else(|| manager.ended_join_args(&ctx.view_id()))
         else {
             return;
         };
 
         ctx.clipboard()
-            .write(ClipboardContent::plain_text(join_link(&session_id)));
+            .write(ClipboardContent::plain_text(join_link_with_secret(
+                &join_args.session_id,
+                join_args.session_secret.as_ref(),
+            )));
 
         let window_id = ctx.window_id();
         crate::workspace::ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {

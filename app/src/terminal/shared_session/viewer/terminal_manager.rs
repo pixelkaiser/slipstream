@@ -58,7 +58,7 @@ use crate::terminal::shared_session::shared_handlers::{
     apply_selected_agent_model_update, apply_selected_conversation_update,
     build_selected_conversation_update, ActiveRemoteUpdate, RemoteUpdateGuard,
 };
-use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::shared_session::{SharedSessionJoinArgs, SharedSessionStatus};
 use crate::terminal::terminal_manager::{compute_block_size, terminal_colors_list};
 use crate::terminal::view::ambient_agent::is_cloud_agent_pre_first_exchange;
 use crate::terminal::view::ExecuteCommandEvent;
@@ -339,7 +339,7 @@ impl TerminalManager {
     /// terminal pane.
     #[allow(clippy::new_ret_no_self)]
     pub fn new(
-        session_id: SessionId,
+        join_args: impl Into<SharedSessionJoinArgs>,
         resources: TerminalViewResources,
         initial_size: Vector2F,
         window_id: WindowId,
@@ -359,8 +359,9 @@ impl TerminalManager {
             ctx,
         );
 
+        let join_args = join_args.into();
         terminal_manager.connect_session(
-            session_id,
+            join_args,
             SharedSessionInitialLoadMode::ReplaceFromSessionScrollback,
             ctx,
         );
@@ -413,7 +414,7 @@ impl TerminalManager {
         };
         match self.network_state {
             NetworkState::Idle => {
-                self.connect_session(session_id, load_mode, ctx);
+                self.connect_session(session_id.into(), load_mode, ctx);
                 true
             }
             NetworkState::Connecting => {
@@ -452,7 +453,7 @@ impl TerminalManager {
             }
         }
         self.connect_session(
-            session_id,
+            session_id.into(),
             SharedSessionInitialLoadMode::AppendFollowupScrollback,
             ctx,
         );
@@ -473,7 +474,7 @@ impl TerminalManager {
     /// This method sets up the network model and all associated event handlers.
     fn connect_session(
         &mut self,
-        session_id: SessionId,
+        join_args: SharedSessionJoinArgs,
         initial_load_mode: SharedSessionInitialLoadMode,
         ctx: &mut AppContext,
     ) {
@@ -499,7 +500,7 @@ impl TerminalManager {
 
         let network = ctx.add_model(|ctx| {
             Network::new(
-                session_id,
+                join_args,
                 self.network_resources.channel_event_proxy.clone(),
                 self.view.downgrade(),
                 self.model.clone(),
@@ -859,9 +860,15 @@ impl TerminalManager {
                     }
                 }
 
-                let session_id = network.as_ref(ctx).session_id();
+                let join_args = network.as_ref(ctx).join_args();
+                let session_id = join_args.session_id;
                 Manager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.joined_share(weak_view_handle.clone(), session_id, ctx);
+                    manager.joined_share(
+                        weak_view_handle.clone(),
+                        session_id,
+                        join_args.session_secret.clone(),
+                        ctx,
+                    );
                 });
 
                 view.update(ctx, |terminal_view, ctx| {
@@ -881,6 +888,7 @@ impl TerminalManager {
                         input_replica_id.clone(),
                         participant_list.clone(),
                         session_id,
+                        join_args.session_secret.clone(),
                         source.source_type.clone(),
                         ctx,
                     );

@@ -403,7 +403,7 @@ use crate::terminal::session_settings::{
     SessionSettingsChangedEvent, WorkingDirectoryMode,
 };
 use crate::terminal::settings::{SpacingMode, TerminalSettings};
-use crate::terminal::shared_session::SharedSessionActionSource;
+use crate::terminal::shared_session::{SharedSessionActionSource, SharedSessionJoinArgs};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::ambient_agent::{AuthSecretFtuxView, AuthSecretFtuxViewEvent};
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
@@ -3956,8 +3956,8 @@ impl Workspace {
                 );
                 self.check_and_trigger_onboarding(ctx);
             }
-            NewWorkspaceSource::SharedSessionAsViewer { session_id } => {
-                self.add_tab_for_joining_shared_session(session_id, ctx);
+            NewWorkspaceSource::SharedSessionAsViewer { join_args } => {
+                self.add_tab_for_joining_shared_session(join_args, ctx);
             }
             NewWorkspaceSource::FromCloudConversationId { conversation_id } => {
                 self.open_cloud_conversation_from_server_token(conversation_id, ctx);
@@ -4262,12 +4262,12 @@ impl Workspace {
 
     pub fn add_tab_for_joining_shared_session(
         &mut self,
-        session_id: SharedSessionId,
+        join_args: SharedSessionJoinArgs,
         ctx: &mut ViewContext<Self>,
     ) {
         let new_pane_group = ctx.add_typed_action_view(|ctx| {
             PaneGroup::new_for_shared_session_viewer(
-                session_id,
+                join_args,
                 self.tips_completed.clone(),
                 self.user_default_shell_unsupported_banner_model_handle
                     .clone(),
@@ -4498,9 +4498,13 @@ impl Workspace {
                 ManagerEvent::StartedShare {
                     window_id,
                     session_id,
+                    session_secret,
                 } => {
                     if *window_id == ctx.window_id() {
-                        me.copy_shared_session_link(session_id, ctx);
+                        me.copy_shared_session_link(
+                            &SharedSessionJoinArgs::new(*session_id, session_secret.clone()),
+                            ctx,
+                        );
                     }
                 }
                 #[cfg(target_family = "wasm")]
@@ -4535,11 +4539,14 @@ impl Workspace {
 
     fn copy_shared_session_link(
         &mut self,
-        session_id: &SharedSessionId,
+        join_args: &SharedSessionJoinArgs,
         ctx: &mut ViewContext<Self>,
     ) {
         ctx.clipboard().write(ClipboardContent::plain_text(
-            terminal::shared_session::join_link(session_id),
+            terminal::shared_session::join_link_with_secret(
+                &join_args.session_id,
+                join_args.session_secret.as_ref(),
+            ),
         ));
 
         self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -24904,7 +24911,7 @@ impl TypedActionView for Workspace {
                         });
                     }
                 } else {
-                    self.add_tab_for_joining_shared_session(*session_id, ctx);
+                    self.add_tab_for_joining_shared_session((*session_id).into(), ctx);
                 }
             }
             OpenConversationTranscriptViewer {
