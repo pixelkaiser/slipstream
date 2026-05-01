@@ -5615,10 +5615,13 @@ impl SettingsWidget for AIFactWidget {
             column.add_child(self.render_rule_suggestions_toggle(view, ai_settings, app));
         }
 
-        column
-            .with_child(button)
-            .with_child(self.render_warp_drive_context_toggle(view, ai_settings, app))
-            .finish()
+        column.add_child(button);
+
+        if !SettingsSection::WarpDrive.is_hidden_in_settings() {
+            column.add_child(self.render_warp_drive_context_toggle(view, ai_settings, app));
+        }
+
+        column.finish()
     }
 }
 
