@@ -71,79 +71,47 @@ if ($env:GIT_RELEASE_TAG) {
 }
 
 function Build-AndCopyLocalMultiAgent {
-    $LocalAgentSource = Join-Path (Join-Path $RepoRoot 'tools') 'local-multi-agent'
+    $LocalAgentSource = Join-Path (Join-Path $RepoRoot 'crates') 'local_multi_agent_service'
     $LocalAgentDestination = Join-Path (Join-Path $DestinationDir 'bundled') 'local-multi-agent'
+    $LocalAgentBinary = 'warp-local-multi-agent.exe'
 
     if (-Not (Test-Path $LocalAgentSource -PathType Container)) {
         Write-Error "Local multi-agent service not found at $LocalAgentSource"
         exit 1
     }
-    $NpmCommand = Get-Command npm -ErrorAction SilentlyContinue
-    if (-Not $NpmCommand) {
-        Write-Error 'npm is required to build the local multi-agent bundle'
+    Write-Output 'Building local multi-agent Rust service'
+    $CargoArgs = @('build', '--manifest-path', (Join-Path $RepoRoot 'Cargo.toml'), '-p', 'local_multi_agent_service', '--bin', 'warp-local-multi-agent')
+    if ($CargoProfile) {
+        $CargoArgs += @('--profile', $CargoProfile)
+    }
+    & cargo @CargoArgs
+    if (-Not $?) {
+        Write-Error 'Failed to build local multi-agent service'
         exit 1
     }
 
-    $LocalAgentStage = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
-    New-Item -ItemType Directory -Path $LocalAgentStage -Force | Out-Null
-    Write-Output 'Building local multi-agent service bundle'
-
-    Copy-Item -Path (Join-Path $LocalAgentSource 'package.json') -Destination (Join-Path $LocalAgentStage 'package.json') -Force
-    Copy-Item -Path (Join-Path $LocalAgentSource 'package-lock.json') -Destination (Join-Path $LocalAgentStage 'package-lock.json') -Force
-    Copy-Item -Path (Join-Path $LocalAgentSource 'tsconfig.json') -Destination (Join-Path $LocalAgentStage 'tsconfig.json') -Force
-    Copy-Item -Path (Join-Path $LocalAgentSource 'config-schema.json') -Destination (Join-Path $LocalAgentStage 'config-schema.json') -Force
-    Copy-Item -Path (Join-Path $LocalAgentSource 'src') -Destination (Join-Path $LocalAgentStage 'src') -Recurse -Force
-    Copy-Item -Path (Join-Path $LocalAgentSource 'scripts') -Destination (Join-Path $LocalAgentStage 'scripts') -Recurse -Force
-
-    Push-Location $LocalAgentStage
-    $PreviousNpmTarget = $env:npm_config_target
-    $PreviousNpmRuntime = $env:npm_config_runtime
-    $PreviousNpmDistUrl = $env:npm_config_disturl
-    try {
-        if ($env:LOCAL_AGENT_NODE_TARGET_VERSION) {
-            $env:npm_config_target = $env:LOCAL_AGENT_NODE_TARGET_VERSION
-        } else {
-            $env:npm_config_target = '22.12.0'
-        }
-        $env:npm_config_runtime = 'node'
-        $env:npm_config_disturl = 'https://nodejs.org/dist'
-        & npm ci
-        if (-Not $?) {
-            Write-Error 'Failed to install local multi-agent dependencies'
-            exit 1
-        }
-        & npm rebuild better-sqlite3 --build-from-source
-        if (-Not $?) {
-            Write-Error 'Failed to rebuild local multi-agent native dependencies'
-            exit 1
-        }
-        & npm run build
-        if (-Not $?) {
-            Write-Error 'Failed to build local multi-agent service'
-            exit 1
-        }
-        & npm prune --omit=dev
-        if (-Not $?) {
-            Write-Error 'Failed to prune local multi-agent dependencies'
-            exit 1
-        }
-    } finally {
-        Pop-Location
-        $env:npm_config_target = $PreviousNpmTarget
-        $env:npm_config_runtime = $PreviousNpmRuntime
-        $env:npm_config_disturl = $PreviousNpmDistUrl
+    if ($env:CARGO_TARGET_DIR) {
+        $CargoTargetDir = $env:CARGO_TARGET_DIR
+    } else {
+        $CargoTargetDir = Join-Path $RepoRoot 'target'
+    }
+    if ($CargoProfile) {
+        $CargoProfileDir = $CargoProfile
+    } else {
+        $CargoProfileDir = 'debug'
+    }
+    $BuiltBinary = Join-Path (Join-Path $CargoTargetDir $CargoProfileDir) $LocalAgentBinary
+    if (-Not (Test-Path $BuiltBinary -PathType Leaf)) {
+        Write-Error "Local multi-agent binary not found at $BuiltBinary"
+        exit 1
     }
 
     if (Test-Path $LocalAgentDestination -PathType Container) {
         Remove-Item -Path $LocalAgentDestination -Recurse -Force
     }
     New-Item -ItemType Directory -Path $LocalAgentDestination -Force | Out-Null
-    Copy-Item -Path (Join-Path $LocalAgentStage 'dist') -Destination (Join-Path $LocalAgentDestination 'dist') -Recurse -Force
-    Copy-Item -Path (Join-Path $LocalAgentStage 'node_modules') -Destination (Join-Path $LocalAgentDestination 'node_modules') -Recurse -Force
-    Copy-Item -Path (Join-Path $LocalAgentStage 'package.json') -Destination (Join-Path $LocalAgentDestination 'package.json') -Force
-    Copy-Item -Path (Join-Path $LocalAgentStage 'package-lock.json') -Destination (Join-Path $LocalAgentDestination 'package-lock.json') -Force
-    Copy-Item -Path (Join-Path $LocalAgentStage 'config-schema.json') -Destination (Join-Path $LocalAgentDestination 'config-schema.json') -Force
-    Remove-Item -Path $LocalAgentStage -Recurse -Force
+    Copy-Item -Path $BuiltBinary -Destination (Join-Path $LocalAgentDestination $LocalAgentBinary) -Force
+    Copy-Item -Path (Join-Path $LocalAgentSource 'config-schema.json') -Destination (Join-Path $LocalAgentDestination 'config-schema.json') -Force
 }
 
 Build-AndCopyLocalMultiAgent
