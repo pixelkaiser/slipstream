@@ -83,7 +83,7 @@ fn current_exe_path() -> Option<PathBuf> {
 /// isolated (`Warp`, `WarpPreview`, `WarpDev`, etc.) so installing multiple
 /// channels doesn't cause one to overwrite another's startup entry.
 fn login_item_value_name() -> String {
-    ChannelState::app_id().application_name().to_owned()
+    ChannelState::app_display_name().to_owned()
 }
 
 /// Writes the startup registry value pointing at `exe` under `value_name`.

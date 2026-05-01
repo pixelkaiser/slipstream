@@ -2,10 +2,33 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 #include "environment.iss"
 
-#define MyAppPublisher "Denver Technologies, Inc."
-#define MyAppURL "https://www.warp.dev/"
+#ifndef ReleaseChannel
+  #define ReleaseChannel "dev"
+#endif
 #ifndef MyAppName
   #define MyAppName "WarpDev"
+#endif
+#if ReleaseChannel == "oss"
+  #define MyAppPublisher "Slipstream contributors"
+  #define MyAppURL "https://github.com/pixelkaiser/slipstream"
+  #define AppInstallerId "slipstream"
+  #define AppMutexName "Local\Slipstream_SingleInstance"
+  #define AppUserModelId "com.slipstream.app"
+  #define UrlScheme "slipstream"
+  #define AppDataOrgDir "slipstream"
+  #define RegistryPublisherKey "Slipstream"
+  #define WizardSmallImage "slipstream-logo.bmp"
+  #define WizardImage "slipstream-banner.bmp"
+#else
+  #define MyAppPublisher "Denver Technologies, Inc."
+  #define MyAppURL "https://www.warp.dev/"
+  #define AppInstallerId "warp-terminal-" + ReleaseChannel
+  #define AppUserModelId "dev.warp." + MyAppName
+  #define UrlScheme MyAppName
+  #define AppDataOrgDir "warp"
+  #define RegistryPublisherKey "Warp.dev"
+  #define WizardSmallImage "warp-logo.bmp"
+  #define WizardImage "warp-banner.bmp"
 #endif
 #ifndef MyAppVersion
   #define MyAppVersion "0.1.0"
@@ -13,14 +36,12 @@
 #ifndef MyAppExeName
   #define MyAppExeName "dev.exe"
 #endif
-#ifndef ReleaseChannel
-  #define ReleaseChannel "dev"
-#endif
 #ifndef TargetProfileDir
   #define TargetProfileDir "target\release-lto-debug_assertions"
 #endif
 #define AssetsDir "..\..\app\assets\windows"
 
+#if ReleaseChannel != "oss"
 // The mutex name must match what the Rust app creates in single_instance_manager.rs:
 #define ChannelPascalCase \
   (ReleaseChannel == "stable") ? "Stable" : \
@@ -31,12 +52,13 @@
   ((ReleaseChannel == "oss") ? "Oss" : \
   "Unknown")))))
 #define AppMutexName "Local\Warp" + ChannelPascalCase + "_SingleInstance"
+#endif
 
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application. Do not use the same AppId value in installers for other applications.
 ; (To generate a new GUID, click Tools | Generate GUID inside the IDE.)
-AppId=warp-terminal-{#ReleaseChannel}
+AppId={#AppInstallerId}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
@@ -57,8 +79,8 @@ OutputBaseFilename={#OutputName}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
-WizardSmallImageFile="installer-images\warp-logo.bmp"
-WizardImageFile="installer-images\warp-banner.bmp"
+WizardSmallImageFile="installer-images\{#WizardSmallImage}"
+WizardImageFile="installer-images\{#WizardImage}"
 SetupIconFile="..\..\app\channels\{#ReleaseChannel}\icon\no-padding\icon.ico"
 UninstallDisplayIcon="{app}\icon.ico"
 ; Force close previous Warp if it hasn't shut down yet.
@@ -108,38 +130,38 @@ Source: "{#AssetsDir}\{#Arch}\dxil.dll"; DestDir: "{app}"
 Source: "{#TargetProfileDir}\resources\*"; DestDir: "{app}\resources"; Flags: ignoreversion recursesubdirs
 
 [Registry]
-Root: HKCU; Subkey: "SOFTWARE\Warp.dev\{#MyAppName}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "SOFTWARE\{#RegistryPublisherKey}\{#MyAppName}"; Flags: uninsdeletekey
 ; cleanup "Open Warp Here" registry entries
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}"; Flags: deletekey
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}"; Flags: deletekey
 ; Add "Open Warp in new tab" to directory context menu
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Tab"; ValueType: string; ValueName: ""; ValueData: "Open {#MyAppName} in new tab"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Tab"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\icon.ico"
-Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Tab\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#MyAppName}://action/new_tab?path=%1"""
+Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Tab\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#UrlScheme}://action/new_tab?path=%1"""
 ; Add "Open Warp in new tab" to directory background context menu
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Tab"; ValueType: string; ValueName: ""; ValueData: "Open {#MyAppName} in new tab"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Tab"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\icon.ico"
-Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Tab\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#MyAppName}://action/new_tab?path=%V"""
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Tab\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#UrlScheme}://action/new_tab?path=%V"""
 ; Add "Open Warp in new window" to directory context menu
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Window"; ValueType: string; ValueName: ""; ValueData: "Open {#MyAppName} in new window"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Window"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\icon.ico"
-Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Window\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#MyAppName}://action/new_window?path=%1"""
+Root: HKA; Subkey: "Software\Classes\Directory\shell\{#MyAppName}Window\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#UrlScheme}://action/new_window?path=%1"""
 ; Add "Open Warp in new window" to directory background context menu
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Window"; ValueType: string; ValueName: ""; ValueData: "Open {#MyAppName} in new window"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Window"; ValueType: string; ValueName: "Icon"; ValueData: "{app}\icon.ico"
-Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Window\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#MyAppName}://action/new_window?path=%V"""
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\{#MyAppName}Window\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""{#UrlScheme}://action/new_window?path=%V"""
 
 [Tasks]
-Name: addToPath; Description: "Add Warp to PATH"
+Name: addToPath; Description: "Add {#MyAppName} to PATH"
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{userappdata}\warp\{#MyAppName}"
-Type: filesandordirs; Name: "{localappdata}\warp\{#MyAppName}"
+Type: filesandordirs; Name: "{userappdata}\{#AppDataOrgDir}\{#MyAppName}"
+Type: filesandordirs; Name: "{localappdata}\{#AppDataOrgDir}\{#MyAppName}"
 Type: filesandordirs; Name: "{app}\bin"
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; AppUserModelID: "dev.warp.{#MyAppName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; AppUserModelID: "dev.warp.{#MyAppName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; AppUserModelID: "{#AppUserModelId}"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\icon.ico"; AppUserModelID: "{#AppUserModelId}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: postinstall runhidden nowait
@@ -232,7 +254,7 @@ begin
 #if ReleaseChannel == "stable"
     CmdScriptName := 'oz.cmd'
 #elif ReleaseChannel == "oss"
-    CmdScriptName := 'warp-oss.cmd';
+    CmdScriptName := 'slipstream.cmd';
 #else
     CmdScriptName := 'oz-{#ReleaseChannel}.cmd';
 #endif

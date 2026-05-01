@@ -79,8 +79,6 @@ if ($CARGO_PROFILE -eq 'dev') {
 } else {
     $CARGO_TARGET_OUTPUT_DIR = "$CARGO_TARGET_DIR" + '\' + $PLATFORM_TARGET + '\' + "$CARGO_PROFILE"
 }
-$BUNDLE_ID = "dev.warp.$app_name"
-
 # Update parameters based on the target release channel.
 #
 # APP_NAME here must match the value used in Rust as the
@@ -111,19 +109,25 @@ if ("$CHANNEL" -eq 'local') {
     $FEATURES = "$FEATURES,nld_improvements"
 } elseif ("$CHANNEL" -eq 'oss') {
     $WARP_BIN = 'warp-oss'
-    $BINARY_NAME = 'warp-oss.exe'
-    $APP_NAME = 'WarpOss'
+    $BINARY_NAME = 'slipstream.exe'
+    $APP_NAME = 'Slipstream'
     # The OSS channel does not ship Sentry, so drop the crash_reporting feature
     # (which would otherwise pull in the Sentry SDK as a dependency).
     $FEATURES = 'release_bundle,gui,nld_improvements'
 }
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
-$BUNDLE_ID = "dev.warp.$APP_NAME"
+if ("$CHANNEL" -eq 'oss') {
+    $BUNDLE_ID = 'com.slipstream.app'
+} else {
+    $BUNDLE_ID = "dev.warp.$APP_NAME"
+}
 $INSTALLER_OUTPUT_DIR = "$WINDOWS_INSTALLER_DIR\Output"
 $INSTALLER_NAME = "$($APP_NAME)$($FILE_ENDING)"
 $INSTALLER_PATH = "$($INSTALLER_OUTPUT_DIR)\$($INSTALLER_NAME).exe"
 $PDB_PATH = "$CARGO_TARGET_OUTPUT_DIR\$WARP_BIN.pdb"
+$DISPLAY_VERSION = if ($env:GIT_RELEASE_TAG) { $env:GIT_RELEASE_TAG } else { 'v0.1.0' }
+$PACKAGE_VERSION = $DISPLAY_VERSION -replace '^v','' -replace '([a-z]+)_','${1}.'
 
 # The CARGO_FULL_PROFILE environment variable is read by the `cargo` build
 # script (`app/build.rs`) to determine where to place `conpty.dll`.
@@ -193,7 +197,7 @@ $ISCC_ARGS = @(
     "/DMyAppExeName=$BINARY_NAME",
     "/DTargetProfileDir=$CARGO_TARGET_OUTPUT_DIR",
     "/DMyAppName=$APP_NAME",
-    "/DMyAppVersion=$env:GIT_RELEASE_TAG",
+    "/DMyAppVersion=$PACKAGE_VERSION",
     "/DArch=$ARCH",
     "/DOutputName=$INSTALLER_NAME"
 )

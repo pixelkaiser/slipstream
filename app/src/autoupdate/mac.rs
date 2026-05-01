@@ -315,7 +315,7 @@ async fn verify_code_signature(component: &str, path: &Path) -> Result<()> {
         .arg("-v")
         .arg(format!(
             "-R=certificate leaf[subject.OU] = \"{}\"",
-            warp_core::macos::APPLE_TEAM_ID
+            warp_core::macos::apple_team_id()
         ))
         .arg(path)
         .output()
@@ -737,7 +737,7 @@ fn app_name_prefix(channel: Channel) -> &'static str {
         Channel::Local => "warp",
         Channel::Integration => "integration",
         Channel::Dev => "WarpDev",
-        Channel::Oss => "warp-oss",
+        Channel::Oss => "Slipstream",
     }
 }
 
