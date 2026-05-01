@@ -112,6 +112,15 @@ define_settings_group!(TerminalSettings, settings: [
         toml_path: "terminal.maximum_grid_size",
         description: "The maximum number of rows in the terminal grid.",
     },
+    cursor_trail_enabled: CursorTrailEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "terminal.effects.cursor_trail",
+        description: "Whether to show an animated trail behind the terminal cursor.",
+    },
     alt_screen_padding: AltScreenPadding {
         type: AltScreenPaddingMode,
         default: AltScreenPaddingMode::default(),

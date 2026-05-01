@@ -27,11 +27,13 @@ use crate::appearance::Appearance;
 use crate::pane_group::SplitPaneState;
 use crate::settings::EnforceMinimumContrast;
 use crate::terminal::blockgrid_renderer::GridRenderParams;
+use crate::terminal::cursor_trail::{CursorTrailStateHandle, CursorTrailSurface};
 use crate::terminal::find::TerminalFindModel;
 use crate::terminal::grid_renderer::CellGlyphCache;
 use crate::terminal::meta_shortcuts::handle_keystroke_despite_composing;
+use crate::terminal::model::SecretHandle;
 use crate::terminal::model::escape_sequences::{
-    maybe_kitty_keyboard_escape_sequence, KeystrokeWithDetails, ToEscapeSequence,
+    KeystrokeWithDetails, ToEscapeSequence, maybe_kitty_keyboard_escape_sequence,
 };
 use crate::terminal::model::grid::grid_handler::{Link, TermMode};
 use crate::terminal::model::grid::{Dimensions, RespectDisplayedOutput};
@@ -39,10 +41,9 @@ use crate::terminal::model::index::Point;
 use crate::terminal::model::mouse::{MouseAction, MouseButton, MouseState};
 use crate::terminal::model::selection::{SelectAction, SelectionPoint};
 use crate::terminal::model::terminal_model::WithinModel;
-use crate::terminal::model::SecretHandle;
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::shared_session::presence_manager::{
-    text_selection_color, PresenceManager, MUTED_PARTICIPANT_COLOR,
+    MUTED_PARTICIPANT_COLOR, PresenceManager, text_selection_color,
 };
 use crate::terminal::view::{
     ActiveSessionState, TerminalAction, TerminalEditor, TerminalViewRenderContext,
@@ -102,6 +103,8 @@ impl AltScreenElement {
         scroll_top: Lines,
         cursor_hint_text: Option<Box<dyn Element>>,
         cli_subagent_view: Option<Box<dyn Element>>,
+        cursor_trail_state: CursorTrailStateHandle,
+        cursor_trail_enabled: bool,
     ) -> Self {
         let highlighted_url = terminal_view_render_context
             .highlighted_url
@@ -148,6 +151,9 @@ impl AltScreenElement {
                         .as_f32(),
                 ),
                 use_ligature_rendering: false,
+                cursor_trail_state: Some(cursor_trail_state),
+                cursor_trail_surface: CursorTrailSurface::AltScreen,
+                cursor_trail_enabled,
                 hide_cursor_cell: false,
             },
             presence_manager: None,
@@ -783,6 +789,8 @@ impl Element for AltScreenElement {
                 self.cursor_hint_text.as_mut(),
                 app,
             );
+        } else if let Some(cursor_trail_state) = &self.grid_render_params.cursor_trail_state {
+            cursor_trail_state.reset();
         }
 
         record_trace_event!("alt_screen_element:paint:cursor_rendered");
