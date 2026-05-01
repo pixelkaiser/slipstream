@@ -35,24 +35,24 @@ export function resolveProviderModel(params: {
   warpModel?: string;
   localModelAliases?: string;
 }): string {
-  const explicitModel = nonEmpty(params.openAiModel);
-  if (explicitModel) {
-    return explicitModel;
-  }
-
   const requestedModel = nonEmpty(params.warpModel);
-  if (!requestedModel) {
-    return defaultModel;
-  }
-
   const modelAliases = {
     ...defaultModelAliases,
     ...configuredModelAliases(params.localModelAliases),
   };
 
-  if (modelAliases[requestedModel]) {
+  if (requestedModel && modelAliases[requestedModel]) {
     return modelAliases[requestedModel];
   }
 
-  return requestedModel.startsWith("auto") ? defaultModel : requestedModel;
+  if (requestedModel && !requestedModel.startsWith("auto")) {
+    return requestedModel;
+  }
+
+  const explicitModel = nonEmpty(params.openAiModel);
+  if (explicitModel) {
+    return explicitModel;
+  }
+
+  return defaultModel;
 }
