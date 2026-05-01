@@ -55,7 +55,31 @@ impl Channel {
             Channel::Preview => "oz-preview",
             Channel::Local => "oz-local",
             Channel::Integration => "oz-integration",
-            Channel::Oss => "warp-oss",
+            Channel::Oss => "slipstream",
+        }
+    }
+
+    /// Returns the platform-facing application name for this channel.
+    pub fn app_display_name(&self) -> &'static str {
+        match self {
+            Channel::Stable => "Warp",
+            Channel::Preview => "WarpPreview",
+            Channel::Dev => "WarpDev",
+            Channel::Local => "WarpLocal",
+            Channel::Integration => "WarpIntegration",
+            Channel::Oss => "Slipstream",
+        }
+    }
+
+    /// Returns the product brand name for UI copy.
+    pub fn product_name(&self) -> &'static str {
+        match self {
+            Channel::Oss => "Slipstream",
+            Channel::Stable
+            | Channel::Preview
+            | Channel::Dev
+            | Channel::Local
+            | Channel::Integration => "Warp",
         }
     }
 }

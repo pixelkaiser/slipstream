@@ -675,11 +675,14 @@ fn package_name(channel: Channel) -> &'static str {
         Channel::Dev => "warp-terminal-dev",
         Channel::Integration => "warp-terminal-integration",
         Channel::Local => "warp-terminal-local",
-        Channel::Oss => "warp-oss",
+        Channel::Oss => "slipstream",
     }
 }
 
 fn repo_name(channel: Channel) -> String {
+    if channel == Channel::Oss {
+        return "slipstream".to_owned();
+    }
     let package_name = package_name(channel);
     let channel_suffix = package_name
         .strip_prefix("warp-terminal")

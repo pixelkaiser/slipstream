@@ -1,14 +1,16 @@
-use super::toggle_card::{render_toggle_card, ToggleCardSpec};
 use super::OnboardingSlide;
+use super::toggle_card::{ToggleCardSpec, render_toggle_card};
+use crate::OnboardingIntention;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
-use crate::OnboardingIntention;
 
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::prelude::Align;
 use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
+    ViewContext,
     elements::{
         ClippedScrollStateHandle, Container, CrossAxisAlignment, Flex, FormattedTextElement,
         MainAxisSize, MouseStateHandle, ParentElement,
@@ -17,8 +19,6 @@ use warpui::{
     keymap::Keystroke,
     text_layout::TextAlignment,
     ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
 };
 
 /// Which setting card is currently expanded.
@@ -299,7 +299,14 @@ impl ThirdPartySlide {
         );
 
         let is_terminal = matches!(intention, OnboardingIntention::Terminal);
-        let (step_index, step_count) = if is_terminal { (2, 4) } else { (3, 5) };
+        let (step_index, step_count) =
+            if warp_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+                if is_terminal { (1, 3) } else { (2, 4) }
+            } else if is_terminal {
+                (2, 4)
+            } else {
+                (3, 5)
+            };
         bottom_nav::onboarding_bottom_nav(
             appearance,
             step_index,

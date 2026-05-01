@@ -1,0 +1,23 @@
+[Desktop Entry]
+# The version of the desktop entry spec this conforms to.
+Version=1.0
+
+Type=Application
+
+Name=Slipstream
+GenericName=TerminalEmulator
+
+Exec=slipstream %U
+StartupWMClass=com.slipstream.app
+
+Keywords=shell;prompt;command;commandline;cmd;local;ai;
+
+Icon=com.slipstream.app
+
+Categories=System;TerminalEmulator;
+
+# Don't run this application within a terminal.
+Terminal=false
+
+# Register ourselves as the handler for slipstream:// URLs.
+MimeType=x-scheme-handler/slipstream;
