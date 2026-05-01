@@ -1,112 +1,80 @@
-<a href="https://www.warp.dev">
-    <img width="1024" alt="Warp Agentic Development Environment product preview" src="https://github.com/user-attachments/assets/9976b2da-2edd-4604-a36c-8fd53719c6d4" />
-</a>
-&nbsp;
-<p align="center">
-  <a href="https://www.warp.dev"><img height="20" alt="Built with Warp" src="./images/Built-With-Warp-Export@2x.png" /></a>
-  &nbsp;
-  <a href="https://oz.warp.dev"><img height="20" alt="Powered by Oz" src="./images/Powered-By-Oz-Export@2x.png" /></a>
-</p>
+# Slipstream
 
-<p align="center">
-  <a href="https://www.warp.dev">Website</a>
-  ·
-  <a href="https://www.warp.dev/code">Code</a>
-  ·
-  <a href="https://www.warp.dev/agents">Agents</a>
-  ·
-  <a href="https://www.warp.dev/terminal">Terminal</a>
-  ·
-  <a href="https://www.warp.dev/drive">Drive</a>
-  ·
-  <a href="https://docs.warp.dev">Docs</a>
-  ·
-  <a href="https://www.warp.dev/blog/how-warp-works">How Warp Works</a>
-</p>
+Slipstream is a privacy- and performance-focused fork of [Warp](https://github.com/warpdotdev/warp). It keeps the Warp terminal and agent experience, but adapts it for local and self-hosted inference with no calls to Warp-hosted cloud services by default.
 
-> [!NOTE]
-> OpenAI is the founding sponsor of the new, open-source Warp repository, and the new agentic management workflows are powered by GPT models.
+The goal is simple: use a modern terminal with agentic workflows while keeping your prompts, files, terminal context, conversations, integrations, and model traffic under your control.
 
-<h1></h1>
+Slipstream is based on the upstream Warp open-source project:
 
-## About
-
-[Warp](https://www.warp.dev) is an agentic development environment, born out of the terminal. Use Warp's built-in coding agent, or bring your own CLI agent (Claude Code, Codex, Gemini CLI, and others).
+- Upstream project: [warpdotdev/warp](https://github.com/warpdotdev/warp)
+- Upstream README: [warpdotdev/warp README](https://github.com/warpdotdev/warp#readme)
 
 ## Installation
 
-You can [download Warp](https://www.warp.dev/download) and [read our docs](https://docs.warp.dev/) for platform-specific instructions.
+macOS users can download the latest `.dmg` from the [Slipstream GitHub Releases page](https://github.com/pixelkaiser/slipstream/releases).
 
-## Warp Contributions Overview Dashboard
+You do not need to build the project from source to use Slipstream on macOS.
 
-Explore [build.warp.dev](https://build.warp.dev) to:
-- Watch thousands of Oz agents triage issues, write specs, implement changes, and review PRs
-- View top contributors and in-flight features
-- Track your own issues with GitHub sign-in
-- Click into active agent sessions in a web-compiled Warp terminal
+## Local Inference
+
+Slipstream is designed to work out of the box with any OpenAI-compatible API, including LM Studio, vLLM, LocalAI, Ollama-compatible OpenAI endpoints, and private or self-hosted gateways.
+
+To get started:
+
+1. Install Slipstream from the macOS `.dmg`.
+2. Start your local or self-hosted OpenAI-compatible provider.
+3. In Slipstream, enter the provider base URL, model, and API key if your provider requires one.
+
+For true zero-cloud use, point Slipstream at a model provider running on your own machine, local network, or self-hosted infrastructure. If you point it at an external hosted API, your model traffic goes to that provider instead.
+
+## What Changed From Warp
+
+Slipstream tracks Warp, but changes the default operating model:
+
+- **No-cloud defaults:** Slipstream starts in local mode and avoids Warp-hosted services by default.
+- **Local inference:** The Warp agent experience connects to OpenAI-compatible local or self-hosted model APIs.
+- **Local state:** Conversations, integrations, tool connector configuration, and diagnostics are stored locally.
+- **Local tools and MCP:** Agent tool calls and MCP tool connectors are handled through the local backend.
+- **Privacy-oriented app config:** Telemetry, crash reporting, hosted autoupdate configuration, and promotional cloud UI are disabled or removed for the Slipstream OSS app.
+- **Slipstream packaging:** The app is rebranded and packaged separately from upstream Warp, with macOS release artifacts published through GitHub Releases.
+- **Self-hosted sharing:** Session sharing can be routed through self-hosted infrastructure instead of Warp cloud services.
+
+## Bugs And Issues
+
+General Warp bugs, terminal behavior issues, UI issues, and upstream feature requests should be filed against [warpdotdev/warp issues](https://github.com/warpdotdev/warp/issues).
+
+This fork only tracks Slipstream-specific local inference and no-cloud issues, such as:
+
+- local backend startup problems
+- provider configuration or model discovery problems
+- local agent streaming issues
+- local tool-call or MCP behavior
+- no-cloud routing regressions
+
+## Maintainers Wanted
+
+We are looking for a primary Linux maintainer. If you care about a strong Linux build and packaging story for Slipstream, this is the most useful place to help.
+
+## Developer Notes
+
+End users should start with the macOS release download. Build-from-source instructions, local backend commands, environment variables, and contributor troubleshooting live in [LOCAL_DEVELOPMENT.md](LOCAL_DEVELOPMENT.md).
 
 ## Licensing
 
-Warp's UI framework (the `warpui_core` and `warpui` crates) are licensed under the [MIT license](LICENSE-MIT).
+Warp's UI framework, the `warpui_core` and `warpui` crates, are licensed under the [MIT license](LICENSE-MIT).
 
 The rest of the code in this repository is licensed under the [AGPL v3](LICENSE-AGPL).
 
-## Open Source & Contributing
-
-Warp's client codebase is open source and lives in this repository. We welcome community contributions and have designed a lightweight workflow to help new contributors get started. For the full contribution flow, read our [CONTRIBUTING.md](CONTRIBUTING.md) guide.
-
-> [!TIP]
-> **Chat with contributors and the Warp team** in the [`#oss-contributors`](https://warpcommunity.slack.com/archives/C0B0LM8N4DB) Slack channel — a good place for ad-hoc questions, design discussion, and pairing with maintainers. New here? [Join the Warp Slack community](https://go.warp.dev/join-preview) first, then jump into `#oss-contributors`.
-
-Maintaining a popular open-source project? [Apply for Oz credits](https://tally.so/r/LZWxqG) to bring [agentic workflows](https://github.com/warpdotdev/oz-for-oss) like issue triage, PR review, and community management to your repo.
-
-### Issue to PR
-
-Before filing, [search existing issues](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+sort%3Areactions-%2B1-desc) for your bug or feature request. If nothing exists, [file an issue](https://github.com/warpdotdev/warp/issues/new/choose) using our templates. Security vulnerabilities should be reported privately as described in [CONTRIBUTING.md](CONTRIBUTING.md#reporting-security-issues).
-
-Once filed, a Warp maintainer reviews the issue and may apply a readiness label: [`ready-to-spec`](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+label%3Aready-to-spec) signals the design is open for contributors to spec out, and [`ready-to-implement`](https://github.com/warpdotdev/warp/issues?q=is%3Aissue+is%3Aopen+label%3Aready-to-implement) signals the design is settled and code PRs are welcome. Anyone can pick up a labeled issue — mention **@oss-maintainers** on an issue if you'd like it considered for a readiness label.
-
-### Building the Repo Locally
-
-To build and run Warp from source:
-
-```bash
-./script/bootstrap   # platform-specific setup
-./script/run         # build and run Warp
-./script/presubmit   # fmt, clippy, and tests
-```
-
-See [WARP.md](WARP.md) for the full engineering guide, including coding style, testing, and platform-specific notes.
-
-### Local Tool Service
-
-The [local multi-agent service](tools/local-multi-agent/README.md) provides a local `/ai/multi-agent` endpoint and local GraphQL integration config storage for no-cloud development. It can run from source or as a Docker image published by CI.
-
-## Joining the Team
-
-Interested in joining the team? See our [open roles](https://www.warp.dev/careers).
-
-## Support and Questions
-
-1. See our [docs](https://docs.warp.dev/) for a comprehensive guide to Warp's features.
-2. Join our [Slack Community](https://go.warp.dev/join-preview) to connect with other users and get help from the Warp team — contributors hang out in [`#oss-contributors`](https://warpcommunity.slack.com/archives/C0B0LM8N4DB).
-3. Try our [Preview build](https://www.warp.dev/download-preview) to test the latest experimental features.
-4. Mention **@oss-maintainers** on any issue to escalate to the team — for example, if you encounter problems with the automated agents.
-
-## Code of Conduct
-
-We ask everyone to be respectful and empathetic. Warp follows the [Code of Conduct](CODE_OF_CONDUCT.md). To report violations, email warp-coc at warp.dev.
-
 ## Open Source Dependencies
 
-We'd like to call out a few of the [open source dependencies](https://docs.warp.dev/help/licenses) that have helped Warp to get off the ground:
+Slipstream inherits Warp's open-source foundation. Notable dependencies include:
 
-* [Tokio](https://github.com/tokio-rs/tokio)
-* [NuShell](https://github.com/nushell/nushell)
-* [Fig Completion Specs](https://github.com/withfig/autocomplete)
-* [Warp Server Framework](https://github.com/seanmonstar/warp)
-* [Alacritty](https://github.com/alacritty/alacritty)
-* [Hyper HTTP library](https://github.com/hyperium/hyper)
-* [FontKit](https://github.com/servo/font-kit)
-* [Core-foundation](https://github.com/servo/core-foundation-rs)
-* [Smol](https://github.com/smol-rs/smol)
+- [Tokio](https://github.com/tokio-rs/tokio)
+- [NuShell](https://github.com/nushell/nushell)
+- [Fig Completion Specs](https://github.com/withfig/autocomplete)
+- [Warp Server Framework](https://github.com/seanmonstar/warp)
+- [Alacritty](https://github.com/alacritty/alacritty)
+- [Hyper HTTP library](https://github.com/hyperium/hyper)
+- [FontKit](https://github.com/servo/font-kit)
+- [Core-foundation](https://github.com/servo/core-foundation-rs)
+- [Smol](https://github.com/smol-rs/smol)
