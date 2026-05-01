@@ -4,14 +4,18 @@ on:
   pull_request:
     paths:
       - '.github/workflows/local-multi-agent-image.yml'
-      - 'tools/local-multi-agent/**'
+      - 'crates/local_multi_agent_service/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
   push:
     branches:
       - byok
       - master
     paths:
       - '.github/workflows/local-multi-agent-image.yml'
-      - 'tools/local-multi-agent/**'
+      - 'crates/local_multi_agent_service/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
   workflow_dispatch:
 
 env:
@@ -52,8 +56,8 @@ jobs:
       - name: Build and publish
         uses: docker/build-push-action@v6
         with:
-          context: tools/local-multi-agent
-          file: tools/local-multi-agent/Dockerfile
+          context: .
+          file: crates/local_multi_agent_service/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
