@@ -22,6 +22,7 @@ use crate::cloud_object::ObjectType;
 #[cfg(not(target_family = "wasm"))]
 use crate::local_multi_agent::{
     LocalMultiAgentManager, LocalMultiAgentManagerEvent, LocalMultiAgentStatus,
+    LocalMultiAgentTestStatus, LOCAL_MODEL_ALIAS_IDS,
 };
 
 use crate::editor::{EditorOptions, InteractionState, SingleLineEditorOptions, TextColors};
@@ -2228,6 +2229,13 @@ pub enum AISettingsPageAction {
     HealthCheckLocalMultiAgent,
     #[cfg(not(target_family = "wasm"))]
     ToggleLocalMultiAgentTools,
+    #[cfg(not(target_family = "wasm"))]
+    SetLocalMultiAgentDefaultModel(String),
+    #[cfg(not(target_family = "wasm"))]
+    SetLocalMultiAgentAlias {
+        alias: String,
+        model: String,
+    },
     HyperlinkClick(HyperlinkUrl),
     ToggleCodebaseContext,
     ToggleShowInputHintText,
@@ -2635,7 +2643,7 @@ impl TypedActionView for AISettingsPageView {
             #[cfg(not(target_family = "wasm"))]
             AISettingsPageAction::HealthCheckLocalMultiAgent => {
                 LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.health_check(ctx);
+                    manager.test_backend(ctx);
                 });
                 ctx.notify();
             }
@@ -2646,6 +2654,32 @@ impl TypedActionView for AISettingsPageView {
                     config.local_enable_tools = !config.local_enable_tools;
                     if let Err(error) = manager.set_config(config, ctx) {
                         manager.record_config_error(error.to_string(), ctx);
+                    }
+                });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AISettingsPageAction::SetLocalMultiAgentDefaultModel(model) => {
+                LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                    let mut config = manager.config().clone();
+                    config.openai_model = Some(model.clone());
+                    if let Err(error) = manager.set_config(config, ctx) {
+                        manager.record_config_error(error.to_string(), ctx);
+                    }
+                });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AISettingsPageAction::SetLocalMultiAgentAlias { alias, model } => {
+                LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                    let mut config = manager.config().clone();
+                    match config.set_model_alias(alias, model) {
+                        Ok(()) => {
+                            if let Err(error) = manager.set_config(config, ctx) {
+                                manager.record_config_error(error.to_string(), ctx);
+                            }
+                        }
+                        Err(error) => manager.record_config_error(error.to_string(), ctx),
                     }
                 });
                 ctx.notify();
@@ -6340,6 +6374,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
 
 struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
     openai_base_url_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
@@ -6348,7 +6383,10 @@ struct ApiKeysWidget {
     #[cfg(not(target_family = "wasm"))]
     local_agent_port_editor: ViewHandle<EditorView>,
     #[cfg(not(target_family = "wasm"))]
-    local_agent_model_editor: ViewHandle<EditorView>,
+    local_agent_default_model_dropdown: ViewHandle<FilterableDropdown<AISettingsPageAction>>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_alias_dropdowns:
+        HashMap<&'static str, ViewHandle<FilterableDropdown<AISettingsPageAction>>>,
     #[cfg(not(target_family = "wasm"))]
     local_agent_model_aliases_editor: ViewHandle<EditorView>,
     #[cfg(not(target_family = "wasm"))]
@@ -6385,7 +6423,6 @@ impl ApiKeysWidget {
 
         let ApiKeys {
             openai: openai_key,
-            openai_base_url,
             anthropic: anthropic_key,
             google: google_key,
             ..
@@ -6481,13 +6518,6 @@ impl ApiKeysWidget {
             set_openai_key,
             "sk-...",
             true
-        );
-        create_api_key_editor!(
-            openai_base_url_editor,
-            openai_base_url,
-            set_openai_base_url,
-            "http://localhost:11434/v1",
-            false
         );
         create_api_key_editor!(
             anthropic_api_key_editor,
@@ -6586,6 +6616,20 @@ impl ApiKeysWidget {
         }
         #[cfg(not(target_family = "wasm"))]
         create_local_agent_editor!(
+            openai_base_url_editor,
+            local_config.openai_base_url.clone().unwrap_or_default(),
+            "https://api.openai.com/v1",
+            |config, buffer_text| {
+                config.openai_base_url = buffer_text
+                    .trim()
+                    .is_empty()
+                    .not()
+                    .then_some(buffer_text.trim().trim_end_matches('/').to_string());
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
             local_agent_host_editor,
             local_config.host.clone(),
             "127.0.0.1",
@@ -6604,20 +6648,6 @@ impl ApiKeysWidget {
                     .trim()
                     .parse::<u16>()
                     .map_err(|_| "Port must be between 1 and 65535.".to_string())?;
-                Ok(())
-            }
-        );
-        #[cfg(not(target_family = "wasm"))]
-        create_local_agent_editor!(
-            local_agent_model_editor,
-            local_config.openai_model.clone().unwrap_or_default(),
-            "Provider default",
-            |config, buffer_text| {
-                config.openai_model = buffer_text
-                    .trim()
-                    .is_empty()
-                    .not()
-                    .then_some(buffer_text.trim().to_string());
                 Ok(())
             }
         );
@@ -6727,6 +6757,34 @@ impl ApiKeysWidget {
         );
 
         #[cfg(not(target_family = "wasm"))]
+        let local_agent_default_model_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            dropdown
+        });
+        #[cfg(not(target_family = "wasm"))]
+        let local_agent_alias_dropdowns: HashMap<
+            &'static str,
+            ViewHandle<FilterableDropdown<AISettingsPageAction>>,
+        > = LOCAL_MODEL_ALIAS_IDS
+            .into_iter()
+            .map(|alias| {
+                let dropdown = ctx.add_typed_action_view(|ctx| {
+                    let mut dropdown = FilterableDropdown::new(ctx);
+                    dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+                    dropdown
+                });
+                (alias, dropdown)
+            })
+            .collect();
+        #[cfg(not(target_family = "wasm"))]
+        Self::refresh_local_agent_model_dropdowns(
+            &local_agent_default_model_dropdown,
+            &local_agent_alias_dropdowns,
+            ctx,
+        );
+
+        #[cfg(not(target_family = "wasm"))]
         let local_agent_restart_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Restart", SecondaryTheme)
                 .with_icon(Icon::RefreshCw04)
@@ -6746,62 +6804,75 @@ impl ApiKeysWidget {
         });
         #[cfg(not(target_family = "wasm"))]
         {
-            let is_enabled = is_any_ai_enabled && is_byo_enabled;
-            local_agent_restart_button.update(ctx, |button, ctx| {
-                button.set_disabled(!is_enabled, ctx);
-            });
-            local_agent_health_button.update(ctx, |button, ctx| {
-                button.set_disabled(!is_enabled, ctx);
-            });
+            Self::update_local_agent_buttons(
+                &local_agent_restart_button,
+                &local_agent_health_button,
+                ctx,
+            );
 
             let restart_button = local_agent_restart_button.clone();
             let health_button = local_agent_health_button.clone();
+            let default_model_dropdown = local_agent_default_model_dropdown.clone();
+            let alias_dropdowns = local_agent_alias_dropdowns.clone();
             ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
                 if let UserWorkspacesEvent::TeamsChanged = event {
-                    let is_any_ai_enabled =
-                        AISettings::handle(ctx).as_ref(ctx).is_any_ai_enabled(ctx);
-                    let is_enabled =
-                        is_any_ai_enabled && workspace.as_ref(ctx).is_byo_api_key_enabled();
-                    restart_button.update(ctx, |button, ctx| {
-                        button.set_disabled(!is_enabled, ctx);
-                    });
-                    health_button.update(ctx, |button, ctx| {
-                        button.set_disabled(!is_enabled, ctx);
-                    });
+                    let _ = workspace;
+                    Self::update_local_agent_buttons(&restart_button, &health_button, ctx);
+                    Self::refresh_local_agent_model_dropdowns(
+                        &default_model_dropdown,
+                        &alias_dropdowns,
+                        ctx,
+                    );
                     ctx.notify();
                 }
             });
 
             let restart_button = local_agent_restart_button.clone();
             let health_button = local_agent_health_button.clone();
+            let default_model_dropdown = local_agent_default_model_dropdown.clone();
+            let alias_dropdowns = local_agent_alias_dropdowns.clone();
             ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, event, ctx| {
                 if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = event {
-                    let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-                    let is_byo_enabled = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled();
-                    let is_enabled = is_any_ai_enabled && is_byo_enabled;
-                    restart_button.update(ctx, |button, ctx| {
-                        button.set_disabled(!is_enabled, ctx);
-                    });
-                    health_button.update(ctx, |button, ctx| {
-                        button.set_disabled(!is_enabled, ctx);
-                    });
+                    Self::update_local_agent_buttons(&restart_button, &health_button, ctx);
+                    Self::refresh_local_agent_model_dropdowns(
+                        &default_model_dropdown,
+                        &alias_dropdowns,
+                        ctx,
+                    );
                     ctx.notify();
                 }
             });
         }
         #[cfg(not(target_family = "wasm"))]
-        ctx.subscribe_to_model(&LocalMultiAgentManager::handle(ctx), |_, _, event, ctx| {
-            if matches!(
-                event,
-                LocalMultiAgentManagerEvent::ConfigChanged
-                    | LocalMultiAgentManagerEvent::StatusChanged
-            ) {
-                ctx.notify();
-            }
-        });
+        {
+            let restart_button = local_agent_restart_button.clone();
+            let health_button = local_agent_health_button.clone();
+            let default_model_dropdown = local_agent_default_model_dropdown.clone();
+            let alias_dropdowns = local_agent_alias_dropdowns.clone();
+            ctx.subscribe_to_model(
+                &LocalMultiAgentManager::handle(ctx),
+                move |_, _, event, ctx| {
+                    if matches!(
+                        event,
+                        LocalMultiAgentManagerEvent::ConfigChanged
+                            | LocalMultiAgentManagerEvent::StatusChanged
+                            | LocalMultiAgentManagerEvent::TestStatusChanged
+                    ) {
+                        Self::update_local_agent_buttons(&restart_button, &health_button, ctx);
+                        Self::refresh_local_agent_model_dropdowns(
+                            &default_model_dropdown,
+                            &alias_dropdowns,
+                            ctx,
+                        );
+                        ctx.notify();
+                    }
+                },
+            );
+        }
 
         Self {
             openai_api_key_editor,
+            #[cfg(not(target_family = "wasm"))]
             openai_base_url_editor,
             anthropic_api_key_editor,
             google_api_key_editor,
@@ -6810,7 +6881,9 @@ impl ApiKeysWidget {
             #[cfg(not(target_family = "wasm"))]
             local_agent_port_editor,
             #[cfg(not(target_family = "wasm"))]
-            local_agent_model_editor,
+            local_agent_default_model_dropdown,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_alias_dropdowns,
             #[cfg(not(target_family = "wasm"))]
             local_agent_model_aliases_editor,
             #[cfg(not(target_family = "wasm"))]
@@ -6836,6 +6909,133 @@ impl ApiKeysWidget {
 
             can_use_warp_credits_with_byok: Default::default(),
             upgrade_highlight_index: Default::default(),
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn local_agent_settings_enabled(app: &AppContext) -> bool {
+        AISettings::as_ref(app).is_any_ai_enabled(app)
+            && UserWorkspaces::as_ref(app).is_byo_api_key_enabled()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn update_local_agent_buttons(
+        restart_button: &ViewHandle<ActionButton>,
+        health_button: &ViewHandle<ActionButton>,
+        app: &mut AppContext,
+    ) {
+        let is_enabled = Self::local_agent_settings_enabled(app);
+        let test_status = LocalMultiAgentManager::as_ref(app).test_status().clone();
+        restart_button.update(app, |button, ctx| {
+            button.set_disabled(!is_enabled, ctx);
+        });
+        health_button.update(app, |button, ctx| match test_status {
+            LocalMultiAgentTestStatus::NotRun => {
+                button.set_label("Test", ctx);
+                button.set_icon(Some(Icon::Check), ctx);
+                button.set_disabled(!is_enabled, ctx);
+            }
+            LocalMultiAgentTestStatus::Testing => {
+                button.set_label("Testing...", ctx);
+                button.set_icon(Some(Icon::RefreshCw04), ctx);
+                button.set_disabled(true, ctx);
+            }
+            LocalMultiAgentTestStatus::Passed { .. } => {
+                button.set_label("Passed", ctx);
+                button.set_icon(Some(Icon::Check), ctx);
+                button.set_disabled(!is_enabled, ctx);
+            }
+            LocalMultiAgentTestStatus::Failed { .. } => {
+                button.set_label("Failed", ctx);
+                button.set_icon(Some(Icon::AlertTriangle), ctx);
+                button.set_disabled(!is_enabled, ctx);
+            }
+        });
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn refresh_local_agent_model_dropdowns(
+        default_model_dropdown: &ViewHandle<FilterableDropdown<AISettingsPageAction>>,
+        alias_dropdowns: &HashMap<
+            &'static str,
+            ViewHandle<FilterableDropdown<AISettingsPageAction>>,
+        >,
+        ctx: &mut AppContext,
+    ) {
+        let is_enabled = Self::local_agent_settings_enabled(ctx);
+        let manager = LocalMultiAgentManager::as_ref(ctx);
+        let config = manager.config().clone();
+        let discovered_models = manager.discovered_models().to_vec();
+        let choices = config.model_choices(&discovered_models);
+
+        default_model_dropdown.update(ctx, |dropdown, ctx| {
+            if is_enabled && !choices.is_empty() {
+                dropdown.set_enabled(ctx);
+            } else {
+                dropdown.set_disabled(ctx);
+            }
+            let items = choices
+                .iter()
+                .map(|model| {
+                    DropdownItem::new(
+                        model.clone(),
+                        AISettingsPageAction::SetLocalMultiAgentDefaultModel(model.clone()),
+                    )
+                })
+                .collect();
+            dropdown.set_items(items, ctx);
+            if let Some(selected) = config
+                .openai_model
+                .as_ref()
+                .filter(|model| choices.iter().any(|choice| choice == *model))
+                .or_else(|| choices.first())
+            {
+                dropdown.set_selected_by_action(
+                    AISettingsPageAction::SetLocalMultiAgentDefaultModel(selected.clone()),
+                    ctx,
+                );
+            }
+        });
+
+        let aliases = config.model_aliases().unwrap_or_default();
+        for alias in LOCAL_MODEL_ALIAS_IDS {
+            let Some(dropdown_handle) = alias_dropdowns.get(alias) else {
+                continue;
+            };
+            let selected = aliases
+                .get(alias)
+                .filter(|model| choices.iter().any(|choice| choice == *model))
+                .or_else(|| choices.first())
+                .cloned();
+            dropdown_handle.update(ctx, |dropdown, ctx| {
+                if is_enabled && !choices.is_empty() {
+                    dropdown.set_enabled(ctx);
+                } else {
+                    dropdown.set_disabled(ctx);
+                }
+                let items = choices
+                    .iter()
+                    .map(|model| {
+                        DropdownItem::new(
+                            model.clone(),
+                            AISettingsPageAction::SetLocalMultiAgentAlias {
+                                alias: alias.to_string(),
+                                model: model.clone(),
+                            },
+                        )
+                    })
+                    .collect();
+                dropdown.set_items(items, ctx);
+                if let Some(selected) = selected.clone() {
+                    dropdown.set_selected_by_action(
+                        AISettingsPageAction::SetLocalMultiAgentAlias {
+                            alias: alias.to_string(),
+                            model: selected,
+                        },
+                        ctx,
+                    );
+                }
+            });
         }
     }
 
@@ -6905,13 +7105,6 @@ impl ApiKeysWidget {
             appearance,
             "OpenAI API Key",
             self.openai_api_key_editor.clone(),
-            is_enabled,
-            app,
-        ));
-        column.add_child(render_api_key_input(
-            appearance,
-            "OpenAI Base URL",
-            self.openai_base_url_editor.clone(),
             is_enabled,
             app,
         ));
@@ -7037,6 +7230,24 @@ impl ApiKeysWidget {
                 .finish()
         }
 
+        fn render_dropdown_input(
+            appearance: &Appearance,
+            label: &'static str,
+            dropdown: &ViewHandle<FilterableDropdown<AISettingsPageAction>>,
+            is_enabled: bool,
+            app: &AppContext,
+        ) -> Box<dyn Element> {
+            let label = Text::new_inline(label, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                .with_color(styles::header_font_color(is_enabled, app).into())
+                .finish();
+
+            Flex::column()
+                .with_spacing(8.)
+                .with_child(label)
+                .with_child(ChildView::new(dropdown).finish())
+                .finish()
+        }
+
         fn render_group_label(
             appearance: &Appearance,
             label: &'static str,
@@ -7051,6 +7262,7 @@ impl ApiKeysWidget {
 
         fn render_status_card(
             status: &LocalMultiAgentStatus,
+            test_status: &LocalMultiAgentTestStatus,
             endpoint: String,
             restart_button: &ViewHandle<ActionButton>,
             health_button: &ViewHandle<ActionButton>,
@@ -7092,6 +7304,19 @@ impl ApiKeysWidget {
                 }
             };
 
+            let test_detail = match test_status {
+                LocalMultiAgentTestStatus::NotRun => None,
+                LocalMultiAgentTestStatus::Testing => {
+                    Some("Testing provider health and model discovery...".to_string())
+                }
+                LocalMultiAgentTestStatus::Passed { model_count } => {
+                    Some(format!("Last test passed. Found {model_count} models."))
+                }
+                LocalMultiAgentTestStatus::Failed { message } => {
+                    Some(format!("Test failed: {message}"))
+                }
+            };
+
             let text_column = Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Start)
                 .with_spacing(4.)
@@ -7106,8 +7331,18 @@ impl ApiKeysWidget {
                         .with_color(styles::description_font_color(is_enabled, app).into())
                         .soft_wrap(true)
                         .finish(),
+                );
+            let text_column = if let Some(test_detail) = test_detail {
+                text_column.with_child(
+                    Text::new(test_detail, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                        .with_color(styles::description_font_color(is_enabled, app).into())
+                        .soft_wrap(true)
+                        .finish(),
                 )
-                .finish();
+            } else {
+                text_column
+            }
+            .finish();
 
             Container::new(
                 Flex::row()
@@ -7139,6 +7374,7 @@ impl ApiKeysWidget {
             .with_spacing(16.)
             .with_child(render_status_card(
                 manager.status(),
+                manager.test_status(),
                 endpoint,
                 &self.local_agent_restart_button,
                 &self.local_agent_health_button,
@@ -7146,51 +7382,71 @@ impl ApiKeysWidget {
                 is_enabled,
                 app,
             ))
-            .with_child(render_group_label(appearance, "Runtime", is_enabled, app))
+            .with_child(render_group_label(appearance, "Provider", is_enabled, app))
             .with_child(render_input(
+                appearance,
+                "OpenAI Base URL",
+                self.openai_base_url_editor.clone(),
+                is_enabled,
+                app,
+            ))
+            .with_child(render_group_label(appearance, "Models", is_enabled, app))
+            .with_child(render_dropdown_input(
+                appearance,
+                "Default model",
+                &self.local_agent_default_model_dropdown,
+                is_enabled,
+                app,
+            ));
+
+        for alias in LOCAL_MODEL_ALIAS_IDS {
+            if let Some(dropdown) = self.local_agent_alias_dropdowns.get(alias) {
+                column.add_child(render_dropdown_input(
+                    appearance, alias, dropdown, is_enabled, app,
+                ));
+            }
+        }
+
+        if ChannelState::enable_debug_features() {
+            column.add_child(render_group_label(appearance, "Runtime", is_enabled, app));
+            column.add_child(render_input(
                 appearance,
                 "HOST",
                 self.local_agent_host_editor.clone(),
                 is_enabled,
                 app,
-            ))
-            .with_child(render_input(
+            ));
+            column.add_child(render_input(
                 appearance,
                 "PORT",
                 self.local_agent_port_editor.clone(),
                 is_enabled,
                 app,
-            ))
-            .with_child(render_group_label(appearance, "Models", is_enabled, app))
-            .with_child(render_input(
-                appearance,
-                "OPENAI_MODEL",
-                self.local_agent_model_editor.clone(),
-                is_enabled,
-                app,
-            ))
-            .with_child(render_input(
+            ));
+            column.add_child(render_input(
                 appearance,
                 "LOCAL_MODEL_ALIASES",
                 self.local_agent_model_aliases_editor.clone(),
                 is_enabled,
                 app,
-            ))
-            .with_child(render_input(
+            ));
+            column.add_child(render_input(
                 appearance,
                 "LOCAL_MODEL_LIST",
                 self.local_agent_model_list_editor.clone(),
                 is_enabled,
                 app,
-            ))
-            .with_child(render_input(
-                appearance,
-                "LOCAL_MODEL_CONTEXT_TOKENS",
-                self.local_agent_context_tokens_editor.clone(),
-                is_enabled,
-                app,
-            ))
-            .with_child(render_group_label(appearance, "Tools", is_enabled, app));
+            ));
+        }
+
+        column.add_child(render_input(
+            appearance,
+            "LOCAL_MODEL_CONTEXT_TOKENS",
+            self.local_agent_context_tokens_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_group_label(appearance, "Tools", is_enabled, app));
 
         let tools_toggle = if is_enabled {
             appearance

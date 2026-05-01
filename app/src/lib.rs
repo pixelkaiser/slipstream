@@ -1289,13 +1289,13 @@ fn initialize_app(
     ctx.add_singleton_model(|ctx| {
         let mut manager = local_multi_agent::LocalMultiAgentManager::new(ctx);
         let api_keys = ::ai::api_keys::ApiKeyManager::as_ref(ctx).keys().clone();
-        manager.update_provider_config(api_keys.openai, api_keys.openai_base_url, ctx);
+        manager.update_provider_config(api_keys.openai, ctx);
         ctx.subscribe_to_model(
             &::ai::api_keys::ApiKeyManager::handle(ctx),
             |manager: &mut local_multi_agent::LocalMultiAgentManager, event, ctx| {
                 if matches!(event, ::ai::api_keys::ApiKeyManagerEvent::KeysUpdated) {
                     let keys = ::ai::api_keys::ApiKeyManager::as_ref(ctx).keys().clone();
-                    manager.update_provider_config(keys.openai, keys.openai_base_url, ctx);
+                    manager.update_provider_config(keys.openai, ctx);
                 }
             },
         );
@@ -2002,6 +2002,11 @@ fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppCallbacks {
             // Shutdown all LSP servers gracefully before app termination
             lsp::LspManagerModel::handle(ctx).update(ctx, |manager, ctx| {
                 manager.terminate(ctx);
+            });
+
+            #[cfg(not(target_family = "wasm"))]
+            local_multi_agent::LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                manager.shutdown(ctx);
             });
 
             // We want to tear down the terminal server before relaunching for
