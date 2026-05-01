@@ -4,14 +4,16 @@ use std::ops::{Neg, RangeInclusive};
 use pathfinder_color::ColorU;
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{vec2f, Vector2F};
+use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::{AppContext, Element, EntityId, PaintContext};
 
+use super::model::SecretHandle;
 use super::model::ansi::{CursorShape, CursorStyle};
 use super::model::grid::RespectDisplayedOutput;
 use super::model::image_map::StoredImageMetadata;
 use super::model::SecretHandle;
 use crate::settings::EnforceMinimumContrast;
+use crate::terminal::cursor_trail::{CursorTrailStateHandle, CursorTrailSurface};
 use crate::terminal::grid_renderer::{render_cursor, render_grid, CellGlyphCache};
 use crate::terminal::model::blockgrid::{BlockGrid, CursorDisplayPoint};
 use crate::terminal::model::grid::grid_handler::Link;
@@ -31,6 +33,9 @@ pub struct GridRenderParams {
     pub size_info: SizeInfo,
     pub cell_size: Vector2F,
     pub use_ligature_rendering: bool,
+    pub cursor_trail_state: Option<CursorTrailStateHandle>,
+    pub cursor_trail_surface: CursorTrailSurface,
+    pub cursor_trail_enabled: bool,
     /// When true, suppresses cursor rendering for CLI agents when rich input is open. For agents that draw their own cursor (SHOW_CURSOR off),
     /// the cursor cell is skipped. For agents that let Warp draw the cursor
     /// (SHOW_CURSOR on), the `draw_cursor` call and cursor contrast colouring
@@ -162,7 +167,14 @@ impl BlockGrid {
         cursor_hint_text: Option<&mut Box<dyn Element>>,
         color: ColorU,
         app: &AppContext,
-    ) {
+    ) -> bool {
+        if grid_render_params.hide_cursor_cell {
+            if let Some(cursor_trail_state) = &grid_render_params.cursor_trail_state {
+                cursor_trail_state.reset();
+            }
+            return false;
+        }
+
         let cursor_style = self.cursor_style();
         let (cursor_display_point, is_cursor_on_wide_char, cursor_style, cursor_hint_text) =
             match self.cursor_display_point() {
@@ -181,7 +193,12 @@ impl BlockGrid {
                     },
                     None,
                 ),
-                None => return,
+                None => {
+                    if let Some(cursor_trail_state) = &grid_render_params.cursor_trail_state {
+                        cursor_trail_state.reset();
+                    }
+                    return false;
+                }
             };
 
         render_cursor(
@@ -197,6 +214,7 @@ impl BlockGrid {
             cursor_hint_text,
             app,
         )
+        .is_some()
     }
 }
 

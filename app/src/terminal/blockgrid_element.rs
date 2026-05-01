@@ -10,6 +10,7 @@ use super::blockgrid_renderer::GridRenderParams;
 use crate::appearance::Appearance;
 use crate::settings::EnforceMinimumContrast;
 use crate::terminal::blockgrid_renderer::BlockGridParams;
+use crate::terminal::cursor_trail::CursorTrailSurface;
 use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::grid::Dimensions;
 use crate::terminal::model::ObfuscateSecrets;
@@ -54,6 +55,9 @@ impl BlockGridElement {
                     size_info,
                     cell_size,
                     use_ligature_rendering: false,
+                    cursor_trail_state: None,
+                    cursor_trail_surface: CursorTrailSurface::BlockList,
+                    cursor_trail_enabled: false,
                     hide_cursor_cell: false,
                 },
                 colors: color::List::from(&color::Colors::from(theme.clone())),

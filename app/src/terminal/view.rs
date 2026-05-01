@@ -62,8 +62,9 @@ use std::hash::Hash;
 use std::ops::{Deref as _, Range};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::SyncSender;
+use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -192,7 +193,22 @@ use super::model::secrets::RichContentSecretTooltipInfo;
 use super::model::selection::ExpandedSelectionRange;
 use super::model::session::SessionBootstrappedEvent;
 use super::settings::AltScreenPaddingMode;
-use super::ssh::util::{parse_interactive_ssh_command, InteractiveSshCommand, SshWarpifyCommand};
+use super::ssh::SSH_WARPIFY_TIMEOUT_DURATION;
+use super::ssh::error::{SSH_ERROR_BLOCK_VISIBLE_KEY, SshErrorBlock, SshErrorBlockEvent};
+use super::ssh::install_tmux::{
+    SshInstallTmuxBlock, SshInstallTmuxBlockEvent, SshKeyEvent, TmuxInstallMethod,
+    install_root_tmux_script, install_tmux_script,
+};
+use super::ssh::root_access::RootAccess;
+use super::ssh::ssh_detection::evaluate_warpify_ssh_host;
+use super::ssh::util::{
+    InteractiveSshCommand, SshWarpifyCommand, convert_script_to_one_line,
+    parse_interactive_ssh_command,
+};
+use super::ssh::warpify::{
+    SshWarpifyBlock, SshWarpifyBlockEvent, begin_warpify_ssh_session_command,
+    warpify_ssh_session_command,
+};
 use super::warpify::success_block::{WarpifySuccessBlock, WarpifySuccessBlockEvent};
 use super::warpify::trigger_state::{SshBlockState, WarpifyState};
 use super::warpify::WarpificationSource;
@@ -401,6 +417,7 @@ use crate::terminal::event::{
 use crate::terminal::find::{BlockGridMatch, BlockListMatch, TerminalFindModel};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::grid_size_util::grid_cell_dimensions;
+use crate::terminal::cursor_trail::CursorTrailStateHandle;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
 #[cfg(not(target_family = "wasm"))]
@@ -2915,6 +2932,12 @@ pub struct TerminalView {
     /// State handle for the shimmering text animation in the remote server loading footer.
     /// Persisted across renders so the animation doesn't restart.
     remote_server_shimmer_handle: ShimmeringTextStateHandle,
+
+    /// Cursor trail state for the block list surface.
+    block_list_cursor_trail_handle: CursorTrailStateHandle,
+
+    /// Cursor trail state for the alternate screen surface.
+    alt_screen_cursor_trail_handle: CursorTrailStateHandle,
 }
 
 /// Parameters stashed when a code review pane open is requested with
@@ -3557,6 +3580,11 @@ impl TerminalView {
                     if me.model.lock().is_alt_screen_active() {
                         me.refresh_size(ctx);
                     }
+                }
+                TerminalSettingsChangedEvent::CursorTrailEnabled { .. } => {
+                    me.block_list_cursor_trail_handle.reset();
+                    me.alt_screen_cursor_trail_handle.reset();
+                    ctx.notify();
                 }
                 _ => {}
             },
@@ -4299,6 +4327,8 @@ impl TerminalView {
             focus_handle: None,
             sessions,
             remote_server_shimmer_handle: ShimmeringTextStateHandle::new(),
+            block_list_cursor_trail_handle: CursorTrailStateHandle::new(),
+            alt_screen_cursor_trail_handle: CursorTrailStateHandle::new(),
             active_block_metadata: None,
             canonical_session_pwd_cache: RefCell::new(None),
             block_text_selection_start_position: None,
@@ -10233,9 +10263,11 @@ impl TerminalView {
         }
         self.remove_vim_mode_banner(ctx);
         VimBannerSettings::handle(ctx).update(ctx, |banner_settings, model_ctx| {
-            report_if_error!(banner_settings
-                .vim_keybindings_banner_state
-                .set_value(BannerState::Dismissed, model_ctx));
+            report_if_error!(
+                banner_settings
+                    .vim_keybindings_banner_state
+                    .set_value(BannerState::Dismissed, model_ctx)
+            );
         });
     }
 
@@ -10531,9 +10563,11 @@ impl TerminalView {
             }
             AwsBedrockLoginBannerAction::DontShowAgain => {
                 AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-                    report_if_error!(ai_settings
-                        .aws_bedrock_login_banner_dismissed
-                        .set_value(true, ctx));
+                    report_if_error!(
+                        ai_settings
+                            .aws_bedrock_login_banner_dismissed
+                            .set_value(true, ctx)
+                    );
                 });
             }
             AwsBedrockLoginBannerAction::Dismiss => {
@@ -14446,11 +14480,7 @@ impl TerminalView {
             .editor()
             .as_ref(ctx)
             .selected_text(ctx);
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
+        if text.is_empty() { None } else { Some(text) }
     }
 }
 
@@ -14699,9 +14729,11 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .nld_in_terminal_enabled_internal
-                .set_value(enable, ctx));
+            report_if_error!(
+                settings
+                    .nld_in_terminal_enabled_internal
+                    .set_value(enable, ctx)
+            );
         });
     }
 
@@ -16423,11 +16455,13 @@ impl TerminalView {
                             Some(model.link_at_range(url, RespectObfuscatedSecrets::Yes));
                         url_content
                             .map(|url_content| {
-                                vec![MenuItemFields::new("Copy URL")
-                                    .with_on_select_action(TerminalAction::ContextMenu(
-                                        ContextMenuAction::CopyUrl { url_content },
-                                    ))
-                                    .into_item()]
+                                vec![
+                                    MenuItemFields::new("Copy URL")
+                                        .with_on_select_action(TerminalAction::ContextMenu(
+                                            ContextMenuAction::CopyUrl { url_content },
+                                        ))
+                                        .into_item(),
+                                ]
                             })
                             .unwrap_or_default()
                     }
@@ -16740,24 +16774,30 @@ impl TerminalView {
                         ))
                         .into_item(),
                 ]);
-                items.append(&mut vec![MenuItemFields::new("Toggle block filter")
-                    .with_on_select_action(TerminalAction::ToggleBlockFilterOnSelectedOrLastBlock(
-                        ToggleBlockFilterSource::ContextMenu,
-                    ))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        TOGGLE_BLOCK_FILTER_KEYBINDING,
-                        ctx,
-                    ))
-                    .into_item()]);
-                items.append(&mut vec![MenuItemFields::new("Toggle bookmark")
-                    .with_on_select_action(TerminalAction::ContextMenu(
-                        ContextMenuAction::ToggleBookmark,
-                    ))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        "terminal:bookmark_selected_block",
-                        ctx,
-                    ))
-                    .into_item()]);
+                items.append(&mut vec![
+                    MenuItemFields::new("Toggle block filter")
+                        .with_on_select_action(
+                            TerminalAction::ToggleBlockFilterOnSelectedOrLastBlock(
+                                ToggleBlockFilterSource::ContextMenu,
+                            ),
+                        )
+                        .with_key_shortcut_label(keybinding_name_to_display_string(
+                            TOGGLE_BLOCK_FILTER_KEYBINDING,
+                            ctx,
+                        ))
+                        .into_item(),
+                ]);
+                items.append(&mut vec![
+                    MenuItemFields::new("Toggle bookmark")
+                        .with_on_select_action(TerminalAction::ContextMenu(
+                            ContextMenuAction::ToggleBookmark,
+                        ))
+                        .with_key_shortcut_label(keybinding_name_to_display_string(
+                            "terminal:bookmark_selected_block",
+                            ctx,
+                        ))
+                        .into_item(),
+                ]);
 
                 items.append(&mut vec![
                     MenuItem::Separator,
@@ -16771,15 +16811,17 @@ impl TerminalView {
                         ))
                         .into_item(),
                 ]);
-                items.append(&mut vec![MenuItemFields::new(scroll_to_bottom_str)
-                    .with_on_select_action(TerminalAction::ContextMenu(
-                        ContextMenuAction::ScrollToBottomOfBlock,
-                    ))
-                    .with_key_shortcut_label(keybinding_name_to_display_string(
-                        "terminal:scroll_to_bottom_of_selected_block",
-                        ctx,
-                    ))
-                    .into_item()]);
+                items.append(&mut vec![
+                    MenuItemFields::new(scroll_to_bottom_str)
+                        .with_on_select_action(TerminalAction::ContextMenu(
+                            ContextMenuAction::ScrollToBottomOfBlock,
+                        ))
+                        .with_key_shortcut_label(keybinding_name_to_display_string(
+                            "terminal:scroll_to_bottom_of_selected_block",
+                            ctx,
+                        ))
+                        .into_item(),
+                ]);
 
                 // Add debugging link for command blocks run by the agent
                 if is_single_selection {
@@ -17014,12 +17056,14 @@ impl TerminalView {
         is_rprompt_shown: bool,
         position: PromptPosition,
     ) -> Vec<MenuItem<TerminalAction>> {
-        let mut items = vec![MenuItemFields::new("Copy prompt")
-            .with_on_select_action(TerminalAction::ContextMenu(ContextMenuAction::CopyPrompt {
-                position,
-                part: PromptPart::EntirePrompt,
-            }))
-            .into_item()];
+        let mut items = vec![
+            MenuItemFields::new("Copy prompt")
+                .with_on_select_action(TerminalAction::ContextMenu(ContextMenuAction::CopyPrompt {
+                    position,
+                    part: PromptPart::EntirePrompt,
+                }))
+                .into_item(),
+        ];
 
         if is_rprompt_shown {
             items.push(
@@ -22028,9 +22072,11 @@ impl TerminalView {
             set_custom_keybinding(MOVE_LINE_END_BINDING_NAME, &CTRL_E_KEYSTROKE, ctx);
         }
         EmacsBindingsSettings::handle(ctx).update(ctx, |settings_model, settings_ctx| {
-            report_if_error!(settings_model
-                .emacs_bindings_banner_state
-                .set_value(BannerState::Dismissed, settings_ctx));
+            report_if_error!(
+                settings_model
+                    .emacs_bindings_banner_state
+                    .set_value(BannerState::Dismissed, settings_ctx)
+            );
         });
         self.is_emacs_bindings_banner_open = false;
         ctx.notify();
@@ -23664,6 +23710,7 @@ impl TerminalView {
             .is_agent_in_control()
             .then(|| self.cli_subagent_views.get(model.active_block_id()))
             .flatten();
+        self.block_list_cursor_trail_handle.reset();
         let mut alt_screen_element = AltScreenElement::new(
             self.model.clone(),
             render_context,
@@ -23678,6 +23725,8 @@ impl TerminalView {
             // TODO(zachbai): Remove this.
             None,
             active_cli_subagent_view.map(|view| ChildView::new(view).finish()),
+            self.alt_screen_cursor_trail_handle.clone(),
+            *TerminalSettings::as_ref(app).cursor_trail_enabled,
         );
         if should_use_ligature_rendering(app) {
             alt_screen_element = alt_screen_element.with_ligature_rendering();
@@ -23843,6 +23892,7 @@ impl TerminalView {
 
         let enforce_minimum_contrast = *FontSettings::as_ref(app).enforce_minimum_contrast;
 
+        self.alt_screen_cursor_trail_handle.reset();
         let mut element = BlockListElement::new(
             self.model.clone(),
             self.find_model.clone(),
@@ -23946,6 +23996,8 @@ impl TerminalView {
             self.input_size_at_last_frame(app).unwrap_or_default(),
             self.inline_menu_positioner.clone(),
             None,
+            self.block_list_cursor_trail_handle.clone(),
+            *TerminalSettings::as_ref(app).cursor_trail_enabled,
         );
 
         if should_use_ligature_rendering(app) {

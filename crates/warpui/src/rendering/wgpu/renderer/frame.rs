@@ -2,7 +2,7 @@ use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use wgpu::{CommandEncoder, RenderPass, SurfaceTexture};
 
-use crate::rendering::wgpu::renderer::{glyph, image, rect, WGPUContext};
+use crate::rendering::wgpu::renderer::{glyph, image, rect, trail, WGPUContext};
 use crate::rendering::wgpu::Resources;
 use crate::scene::Layer;
 use crate::Scene;
@@ -12,6 +12,7 @@ struct PerFrameState {
     rect: rect::PerFrameState,
     glyph: glyph::PerFrameState,
     image: image::PerFrameState,
+    trail: trail::PerFrameState,
 }
 
 /// Struct responsible for rendering a frame by issuing draw calls.
@@ -22,6 +23,7 @@ pub(super) struct Frame<'a> {
     rect_pipeline: &'a rect::Pipeline,
     glyph_pipeline: &'a mut glyph::Pipeline,
     image_pipeline: &'a mut image::Pipeline,
+    trail_pipeline: &'a trail::Pipeline,
 }
 
 impl<'a> Frame<'a> {
@@ -31,6 +33,7 @@ impl<'a> Frame<'a> {
         rect_pipeline: &'a rect::Pipeline,
         glyph_pipeline: &'a mut glyph::Pipeline,
         image_pipeline: &'a mut image::Pipeline,
+        trail_pipeline: &'a trail::Pipeline,
     ) -> Self {
         glyph_pipeline.update_config(&scene.rendering_config().glyphs);
 
@@ -44,11 +47,14 @@ impl<'a> Frame<'a> {
                 glyph_pipeline.initialize_for_layer(layer, scene, &mut per_frame_state.glyph, ctx);
             let image_layer_state =
                 image_pipeline.initialize_for_layer(layer, scene, &mut per_frame_state.image, ctx);
+            let trail_layer_state =
+                trail_pipeline.initialize_for_layer(layer, scene, &mut per_frame_state.trail);
             layer_state.push(LayerState {
                 layer,
                 rect_layer_state,
                 glyph_layer_state,
                 image_layer_state,
+                trail_layer_state,
             });
         }
 
@@ -67,6 +73,11 @@ impl<'a> Frame<'a> {
             &ctx.resources.device,
             &ctx.resources.device_lost,
         );
+        trail::Pipeline::finalize_per_frame_state(
+            &mut per_frame_state.trail,
+            &ctx.resources.device,
+            &ctx.resources.device_lost,
+        );
 
         Self {
             scene,
@@ -75,6 +86,7 @@ impl<'a> Frame<'a> {
             rect_pipeline,
             glyph_pipeline,
             image_pipeline,
+            trail_pipeline,
         }
     }
 
@@ -154,6 +166,14 @@ impl<'a> Frame<'a> {
                     &self.per_frame_state.glyph,
                 );
             }
+
+            if let Some(trail_layer_state) = &layer_state.trail_layer_state {
+                self.trail_pipeline.draw(
+                    &mut render_pass,
+                    trail_layer_state,
+                    &self.per_frame_state.trail,
+                );
+            }
         }
     }
 
@@ -190,4 +210,5 @@ struct LayerState<'a> {
     rect_layer_state: Option<rect::LayerState>,
     glyph_layer_state: Option<glyph::LayerState>,
     image_layer_state: Option<image::LayerState>,
+    trail_layer_state: Option<trail::LayerState>,
 }
