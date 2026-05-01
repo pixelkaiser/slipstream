@@ -116,6 +116,7 @@ jobs:
           target_os: macos
           is_self_hosted: false
           install_release_deps: true
+          cache_key: release-macos-arm64
 
       - name: Ensure Rust target is installed
         run: rustup target add aarch64-apple-darwin
@@ -204,6 +205,7 @@ jobs:
           target_os: macos
           is_self_hosted: false
           install_release_deps: true
+          cache_key: release-macos-arm64
 
       - name: Setup Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
