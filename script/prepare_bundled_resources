@@ -68,7 +68,11 @@ if [ -n "$GIT_RELEASE_TAG" ]; then
 
   echo "Writing bundled Warp version metadata to $VERSION_METADATA_PATH"
   mkdir -p "$VERSION_METADATA_DIR"
-  printf '{\n  "warp_version": "%s"\n}\n' "$GIT_RELEASE_TAG" > "$VERSION_METADATA_PATH"
+  if [ "$CHANNEL" = "oss" ]; then
+    printf '{\n  "warp_version": "%s",\n  "slipstream_version": "%s"\n}\n' "$GIT_RELEASE_TAG" "$GIT_RELEASE_TAG" > "$VERSION_METADATA_PATH"
+  else
+    printf '{\n  "warp_version": "%s"\n}\n' "$GIT_RELEASE_TAG" > "$VERSION_METADATA_PATH"
+  fi
 fi
 
 build_and_copy_local_multi_agent() {

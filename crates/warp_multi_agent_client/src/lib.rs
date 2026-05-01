@@ -60,24 +60,34 @@ pub async fn generate_multi_agent_output_with_server_root_url(
     server_root_url_override: Option<&str>,
     openai_base_url: Option<&str>,
 ) -> Result<OutputStream, Error> {
-    let auth_token = client
-        .get_or_refresh_access_token()
-        .await
-        .map_err(Error::Authentication)?;
     let is_passive = is_passive_suggestion_request(request);
     let url = endpoint_url(is_passive, server_root_url_override);
+    let should_authenticate = should_send_authenticated_request(server_root_url_override);
+    let auth_token = if should_authenticate {
+        Some(
+            client
+                .get_or_refresh_access_token()
+                .await
+                .map_err(Error::Authentication)?,
+        )
+    } else {
+        None
+    };
 
     let mut request_builder = client
         .http_client()
         .post(url)
         .proto(request)
         .prevent_sleep("Agent Mode request in-progress");
-    if let Some(token) = auth_token.as_bearer_token() {
+    if let Some(token) = auth_token
+        .as_ref()
+        .and_then(|token| token.as_bearer_token())
+    {
         request_builder = request_builder.bearer_auth(token);
     }
 
     for (name, value) in client
-        .ambient_headers(ambient_policy(is_passive))
+        .ambient_headers(ambient_policy_for_request(is_passive, should_authenticate))
         .await
         .map_err(Error::AmbientHeaders)?
     {
@@ -177,6 +187,28 @@ fn ambient_policy(is_passive: bool) -> AmbientHeaderPolicy {
         AmbientHeaderPolicy::omit_all()
     } else {
         AmbientHeaderPolicy::workload_only()
+    }
+}
+
+fn ambient_policy_for_request(is_passive: bool, should_authenticate: bool) -> AmbientHeaderPolicy {
+    if should_authenticate {
+        ambient_policy(is_passive)
+    } else {
+        AmbientHeaderPolicy::omit_all()
+    }
+}
+
+fn should_send_authenticated_request(server_root_url_override: Option<&str>) -> bool {
+    server_root_url_override.is_none() && !no_cloud_mode_enabled()
+}
+
+fn no_cloud_mode_enabled() -> bool {
+    match std::env::var("WARP_NO_CLOUD") {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => true,
     }
 }
 
