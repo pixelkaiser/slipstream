@@ -8,6 +8,7 @@ use warp_core::ui::{
     theme::ColorScheme,
 };
 use warpui::{
+    Action, AppContext, Element, SingletonEntity as _,
     assets::asset_cache::AssetSource,
     elements::{
         Border, CacheOption, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Fill,
@@ -20,7 +21,6 @@ use warpui::{
         components::{Coords, UiComponent, UiComponentStyles},
         switch::SwitchStateHandle,
     },
-    Action, AppContext, Element, SingletonEntity as _,
 };
 
 use crate::settings::PrivacySettings;
@@ -175,9 +175,14 @@ where
         ..Default::default()
     };
 
-    let paragraph_1 = "All of Warp’s non-cloud features work offline.";
-    let paragraph_2 = "However, we require users to be online when using Warp for the first time in order to enable Warp's AI and cloud features.";
-    let paragraph_3 = "We offer cloud features to all users, and so we need an internet connection to meter AI usage, prevent abuse, and associate cloud objects with users. If you opt to use Warp logged-out, a unique ID will be attached to an anonymous user account in order to support these features.";
+    let product_name = ChannelState::product_name();
+    let paragraph_1 = format!("All of {product_name}'s non-cloud features work offline.");
+    let paragraph_2 = format!(
+        "However, we require users to be online when using {product_name} for the first time in order to enable {product_name}'s AI and cloud features."
+    );
+    let paragraph_3 = format!(
+        "We offer cloud features to all users, and so we need an internet connection to meter AI usage, prevent abuse, and associate cloud objects with users. If you opt to use {product_name} logged-out, a unique ID will be attached to an anonymous user account in order to support these features."
+    );
 
     Container::new(
         Flex::column()
@@ -191,7 +196,7 @@ where
                 Container::new(
                     appearance
                         .ui_builder()
-                        .span("Using Warp Offline")
+                        .span(format!("Using {product_name} Offline"))
                         .with_style(header_styles)
                         .build()
                         .finish(),
@@ -475,7 +480,10 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
 
     let telemetry_description = render_description(
         appearance,
-        "High-level feature usage data helps Warp's product team prioritize the roadmap.".into(),
+        format!(
+            "High-level feature usage data helps {}'s product team prioritize the roadmap.",
+            ChannelState::product_name()
+        ),
     );
 
     let telemetry_link = Flex::row()
@@ -520,7 +528,10 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
 
     let crash_reporting_description = render_description(
         appearance,
-        "Crash reporting helps Warp's engineering team understand stability and improve performance.".into(),
+        format!(
+            "Crash reporting helps {}'s engineering team understand stability and improve performance.",
+            ChannelState::product_name()
+        ),
     );
 
     let toggle_cloud = actions.toggle_cloud_conversation_storage.clone();
@@ -554,11 +565,13 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
     let cloud_conversation_storage_description = render_description(
         appearance,
         if PrivacySettings::as_ref(app).is_cloud_conversation_storage_enabled {
-            "Agent conversations can be shared with others and are retained when you log in on different devices. This data is only stored for product functionality, and Warp will not use it for analytics."
+            format!(
+                "Agent conversations can be shared with others and are retained when you log in on different devices. This data is only stored for product functionality, and {} will not use it for analytics.",
+                ChannelState::product_name()
+            )
         } else {
-            "Agent conversations are only stored locally on your machine, are lost upon logout, and cannot be shared. Note: conversation data for ambient agents are still stored in the cloud."
-        }
-        .into(),
+            "Agent conversations are only stored locally on your machine, are lost upon logout, and cannot be shared. Note: conversation data for ambient agents are still stored in the cloud.".to_string()
+        },
     );
 
     let mut col = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);

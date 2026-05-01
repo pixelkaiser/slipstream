@@ -122,7 +122,9 @@ use warpui::{FocusContext, NextNewWindowsHasThisWindowsBoundsUponClose};
 #[cfg(target_family = "wasm")]
 use crate::auth::web_handoff::{WebHandoffEvent, WebHandoffView};
 
-const WINDOW_TITLE: &str = "Warp";
+fn window_title() -> String {
+    ChannelState::app_display_name().to_owned()
+}
 
 lazy_static! {
     static ref FALLBACK_WINDOW_SIZE: Vector2F = vec2f(800.0, 600.0);
@@ -699,7 +701,7 @@ pub fn create_transferred_window(
         AddWindowOptions {
             window_style,
             window_bounds,
-            title: Some(WINDOW_TITLE.to_owned()),
+            title: Some(window_title()),
             background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
             background_blur_texture: *window_settings.background_blur_texture,
             on_gpu_driver_selected: on_gpu_driver_selected_callback(),
@@ -794,7 +796,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                         AddWindowOptions {
                             window_style: WindowStyle::Pin,
                             window_bounds: WindowBounds::ExactPosition(frame_args.window_bounds),
-                            title: Some("Warp".to_owned()),
+                            title: Some(window_title()),
                             fullscreen_state: window.fullscreen_state,
                             background_blur_radius_pixels,
                             background_blur_texture,
@@ -837,7 +839,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                         ctx.add_window(
                             AddWindowOptions {
                                 window_bounds: WindowBounds::new(window.bounds),
-                                title: Some("Warp".to_owned()),
+                                title: Some(window_title()),
                                 fullscreen_state: window.fullscreen_state,
                                 background_blur_radius_pixels,
                                 background_blur_texture,
@@ -889,7 +891,7 @@ fn open_from_restored(arg: &OpenFromRestoredArg, ctx: &mut AppContext) {
                 ctx.add_window(
                     AddWindowOptions {
                         window_bounds: WindowBounds::new(window.bounds),
-                        title: Some("Warp".to_owned()),
+                        title: Some(window_title()),
                         fullscreen_state: window.fullscreen_state,
                         background_blur_radius_pixels,
                         background_blur_texture,
@@ -1261,7 +1263,7 @@ fn default_window_options(window_settings: &WindowSettings, ctx: &AppContext) ->
     AddWindowOptions {
         window_style,
         window_bounds: next_bounds,
-        title: Some("Warp".to_owned()),
+        title: Some(window_title()),
         background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
         background_blur_texture: *window_settings.background_blur_texture,
         on_gpu_driver_selected: on_gpu_driver_selected_callback(),
@@ -1446,7 +1448,7 @@ fn toggle_quake_mode_window(global_resource_handles: &GlobalResourceHandles, ctx
                 AddWindowOptions {
                     window_style: WindowStyle::Pin,
                     window_bounds: WindowBounds::ExactPosition(config.window_bounds),
-                    title: Some("Warp".to_owned()),
+                    title: Some(window_title()),
                     background_blur_radius_pixels: Some(*window_settings.background_blur_radius),
                     background_blur_texture: *window_settings.background_blur_texture,
                     // Ignore the quake window for positioning the next window
@@ -2250,16 +2252,16 @@ impl RootView {
                 }
 
                 let is_logged_in = AuthStateProvider::as_ref(ctx).get().is_logged_in();
-                // If the user isn't logged in, only require login if the applied
-                // settings need an account (AI or Warp Drive enabled).
+                // If the user isn't logged in, only pause onboarding for local
+                // provider setup when AI is enabled. Slipstream does not require
+                // cloud account setup during first-run onboarding.
                 let ai_enabled = selected_settings.is_ai_enabled();
-                let warp_drive_enabled = selected_settings.is_warp_drive_enabled();
                 // With old onboarding, we ask user to log in before onboarding, so don't do it after onboarding completes.
-                let requires_login = !is_logged_in
-                    && (ai_enabled || warp_drive_enabled)
+                let requires_provider_setup = !is_logged_in
+                    && ai_enabled
                     && FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
 
-                if requires_login {
+                if requires_provider_setup {
                     let tutorial = OnboardingTutorial::from(selected_settings.clone());
                     self.pending_tutorial = Some(tutorial);
 
@@ -2379,6 +2381,9 @@ impl RootView {
                 ctx.notify();
             }
             AgentOnboardingEvent::PrivacySettingsFromTerminalThemeSlideRequested => {
+                if ChannelState::product_name() == "Slipstream" {
+                    return;
+                }
                 let AuthOnboardingState::Onboarding {
                     target,
                     onboarding_view,
@@ -3367,9 +3372,9 @@ impl View for RootView {
             login_slide_view, ..
         } = &self.auth_onboarding_state
         {
-            // Redirect focus unless the auth token editor is visible and should
-            // accept user input.
-            if !login_slide_view.as_ref(ctx).is_auth_token_input_visible() {
+            // Redirect focus unless the active login slide step has an editor
+            // that should accept user input.
+            if !login_slide_view.as_ref(ctx).should_allow_text_input_focus() {
                 self.focus(ctx);
             }
         }

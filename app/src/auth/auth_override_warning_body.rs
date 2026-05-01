@@ -1,5 +1,7 @@
 use crate::appearance::Appearance;
 use crate::util::color::lighten;
+use onboarding::drive_name;
+use warp_core::channel::ChannelState;
 use warp_core::ui::builder::UiBuilder;
 use warp_core::ui::color::darken;
 use warpui::keymap::FixedBinding;
@@ -28,11 +30,8 @@ const ACTION_BUTTON_BORDER_WIDTH: f32 = 2.;
 const ACTION_BUTTON_HORIZONTAL_PADDING: f32 = 8.;
 const ACTION_BUTTON_FONT_SIZE: f32 = 14.;
 
-const AUTH_OVERRIDE_DESCRIPTION: &str = "It looks like you logged into a Warp account through a web browser. If you continue, any personal Warp drive objects and preferences from this anonymous session with be permanently deleted.";
 const AUTH_OVERRIDE_CONFIRMATION_WARNING: &str = "This cannot be undone.";
 const AUTH_OVERRIDE_INITIAL_STEP_HEADER: &str = "New login detected";
-const AUTH_OVERRIDE_CONFIRM_CONFIRMATION_STEP_HEADER: &str =
-    "Delete personal Warp Drive objects and preferences?";
 const AUTH_OVERRIDE_BULK_EXPORT_BUTTON_LABEL: &str = "Export your data";
 const AUTH_OVERRIDE_BULK_EXPORT_DESCRIPTION: &str = " to import later.";
 const AUTH_OVERRIDE_CANCEL_BUTTON_LABEL: &str = "Cancel";
@@ -100,9 +99,9 @@ impl AuthOverrideWarningBody {
         };
 
         let text = match self.confirmation_step {
-            AuthOverrideConfirmationStep::Initial => AUTH_OVERRIDE_INITIAL_STEP_HEADER,
+            AuthOverrideConfirmationStep::Initial => AUTH_OVERRIDE_INITIAL_STEP_HEADER.to_string(),
             AuthOverrideConfirmationStep::ConfirmChangeUser => {
-                AUTH_OVERRIDE_CONFIRM_CONFIRMATION_STEP_HEADER
+                format!("Delete personal {} objects and preferences?", drive_name())
             }
         };
 
@@ -154,7 +153,11 @@ impl AuthOverrideWarningBody {
             AuthOverrideConfirmationStep::Initial => {
                 let description = Container::new(
                     ui_builder
-                        .paragraph(AUTH_OVERRIDE_DESCRIPTION)
+                        .paragraph(format!(
+                            "It looks like you logged into a {} account through a web browser. If you continue, any personal {} objects and preferences from this anonymous session will be permanently deleted.",
+                            ChannelState::product_name(),
+                            drive_name()
+                        ))
                         .with_style(muted_styles)
                         .build()
                         .finish(),

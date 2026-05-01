@@ -11,6 +11,7 @@ use indexmap::IndexMap;
 use crate::ai::request_usage_model::RequestLimitInfo;
 use crate::auth::AuthStateProvider;
 use crate::report_if_error;
+use crate::server::server_api::no_cloud_mode_enabled;
 use crate::terminal::CLIAgent;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use cfg_if::cfg_if;
@@ -1458,7 +1459,7 @@ define_settings_group!(AISettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
         private: false,
         toml_path: "agents.warp_agent.other.agent_attribution_enabled",
-        description: "Whether the Warp Agent adds an attribution co-author line to commit messages and pull requests it creates.",
+        description: "Whether the agent adds an attribution co-author line to commit messages and pull requests it creates.",
     }
 ]);
 
@@ -1503,7 +1504,7 @@ impl AISettings {
             .is_anonymous_or_logged_out();
 
         *self.is_any_ai_enabled
-            && !is_anonymous_or_logged_out
+            && (!is_anonymous_or_logged_out || no_cloud_mode_enabled())
             && !self.is_ai_disabled_due_to_remote_session_org_policy(app)
     }
 

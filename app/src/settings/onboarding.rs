@@ -9,12 +9,13 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings};
 use onboarding::{SelectedSettings, SessionDefault, UICustomizationSettings};
 use settings::Setting as _;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity as _};
 
 /// Applies onboarding settings based on the user's selected mode.
 pub fn apply_onboarding_settings(selected_settings: &SelectedSettings, app: &mut AppContext) {
-    let is_ai_enabled = match selected_settings {
+    let mut is_ai_enabled = match selected_settings {
         SelectedSettings::AgentDrivenDevelopment {
             agent_settings,
             ui_customization,
@@ -51,6 +52,9 @@ pub fn apply_onboarding_settings(selected_settings: &SelectedSettings, app: &mut
             }
         }
     };
+    if ChannelState::product_name() == "Slipstream" {
+        is_ai_enabled = true;
+    }
 
     if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
         AISettings::handle(app).update(app, |settings, ctx| {

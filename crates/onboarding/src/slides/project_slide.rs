@@ -1,15 +1,19 @@
+use crate::final_cta_label;
 use crate::model::OnboardingStateModel;
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::telemetry::OnboardingEvent;
 use crate::visuals::project_visual;
-use ui_components::{button, keyboard_shortcut, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button, keyboard_shortcut};
+use warp_core::channel::ChannelState;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::{
-    appearance::Appearance, color::coloru_with_opacity, theme::color::internal_colors, Icon,
+    Icon, appearance::Appearance, color::coloru_with_opacity, theme::color::internal_colors,
 };
 use warpui::prelude::{MainAxisAlignment, MainAxisSize, Vector2F};
 use warpui::ui_components::button::{ButtonVariant, TextAndIcon, TextAndIconAlignment};
 use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
+    ViewContext,
     elements::{
         Align, ClippedScrollStateHandle, ConstrainedBox, Container, CrossAxisAlignment, Flex,
         MouseStateHandle, ParentElement, Shrinkable,
@@ -18,8 +22,6 @@ use warpui::{
     keymap::Keystroke,
     platform::file_picker::{FilePickerConfiguration, FilePickerError},
     ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
 };
 
 use super::OnboardingSlide;
@@ -134,7 +136,10 @@ impl ProjectSlide {
 
         let subtitle = appearance
             .ui_builder()
-            .paragraph("Set up a project to optimize it for coding in Warp.")
+            .paragraph(format!(
+                "Set up a project to optimize it for coding in {}.",
+                ChannelState::product_name()
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(20.),
                 font_weight: Some(Weight::Normal),
@@ -298,7 +303,7 @@ impl ProjectSlide {
                 if theme_picker_last {
                     "Next"
                 } else {
-                    "Get Warping"
+                    final_cta_label()
                 },
                 Keystroke::parse("enter").unwrap_or_default(),
                 ProjectSlideAction::NextClicked,

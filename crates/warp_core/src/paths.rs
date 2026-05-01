@@ -39,7 +39,7 @@ fn base_warp_config_dir_name() -> String {
         // Preview shares the same directory as Stable for backward
         // compatibility — existing users already have config in `.warp`.
         Channel::Stable | Channel::Preview => WARP_CONFIG_DIR.to_owned(),
-        Channel::Oss => format!("{WARP_CONFIG_DIR}-oss"),
+        Channel::Oss => ".slipstream".to_owned(),
         Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
         Channel::Integration => format!("{WARP_CONFIG_DIR}-integration"),
         Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
@@ -88,7 +88,7 @@ fn macos_config_dir_name() -> String {
     match ChannelState::channel() {
         Channel::Stable => WARP_CONFIG_DIR.to_owned(),
         Channel::Preview => format!("{WARP_CONFIG_DIR}-preview"),
-        Channel::Oss => format!("{WARP_CONFIG_DIR}-oss"),
+        Channel::Oss => ".slipstream".to_owned(),
         Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
         Channel::Integration => format!("{WARP_CONFIG_DIR}-integration"),
         Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
@@ -241,11 +241,27 @@ fn project_dirs_for_app_id(
             // Adjust the base application name so that we end up with
             // directories like "warp-terminal" and "warp-terminal-dev", to
             // match our Linux package name.
-            let base_app_name = match app_id.application_name() {
-                "Warp" => "Warp-Terminal".to_owned(),
-                "WarpOss" => "Warp-Oss".to_owned(),
-                other if other.starts_with("Warp") => other.replace("Warp", "Warp-Terminal-"),
-                _ => app_id.application_name().to_owned(),
+            let base_app_name = if app_id.qualifier() == "com"
+                && app_id.organization() == "slipstream"
+                && app_id.application_name() == "app"
+            {
+                "Slipstream".to_owned()
+            } else {
+                match app_id.application_name() {
+                    "Warp" => "Warp-Terminal".to_owned(),
+                    "WarpOss" => "Warp-Oss".to_owned(),
+                    other if other.starts_with("Warp") => other.replace("Warp", "Warp-Terminal-"),
+                    _ => app_id.application_name().to_owned(),
+                }
+            };
+        } else if #[cfg(windows)] {
+            let base_app_name = if app_id.qualifier() == "com"
+                && app_id.organization() == "slipstream"
+                && app_id.application_name() == "app"
+            {
+                "Slipstream".to_owned()
+            } else {
+                app_id.application_name().to_owned()
             };
         } else {
             let base_app_name = app_id.application_name().to_owned();
@@ -271,10 +287,10 @@ fn project_dirs_for_app_id(
 pub fn app_group_container_path() -> Option<PathBuf> {
     // The shared app-group container is a first-party entitlement. OSS/local builds should not
     // probe it, since macOS treats that as accessing another app's data.
-    if !matches!(
-        ChannelState::channel(),
-        Channel::Stable | Channel::Preview | Channel::Dev
-    ) {
+    let channel = ChannelState::channel();
+    if channel == Channel::Oss {
+        option_env!("SLIPSTREAM_APP_GROUP_ID").filter(|group_id| !group_id.is_empty())?;
+    } else if !matches!(channel, Channel::Stable | Channel::Preview | Channel::Dev) {
         return None;
     }
 
@@ -283,8 +299,14 @@ pub fn app_group_container_path() -> Option<PathBuf> {
         use objc2_foundation::{NSFileManager, NSString};
 
         let fm = NSFileManager::defaultManager();
-        // Keep in sync with Entitlements.plist
-        let group_id = format!("{}.dev.warp", crate::macos::APPLE_TEAM_ID);
+        // Keep in sync with the entitlements selected by script/macos/bundle.
+        let group_id = if ChannelState::channel() == Channel::Oss {
+            option_env!("SLIPSTREAM_APP_GROUP_ID")
+                .filter(|group_id| !group_id.is_empty())?
+                .to_owned()
+        } else {
+            format!("{}.dev.warp", crate::macos::apple_team_id())
+        };
         let group_id = NSString::from_str(&group_id);
         // containerURLForSecurityApplicationGroupIdentifier always returns a value on macOS (unlike iOS).
         // We have to double-check that the path points to a directory we can actually use. In addition to

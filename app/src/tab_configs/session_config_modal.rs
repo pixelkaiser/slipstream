@@ -1,17 +1,18 @@
 use std::path::PathBuf;
 
+use onboarding::final_cta_label;
 use pathfinder_geometry::vector::vec2f;
+use warpui::FocusContext;
 use warpui::elements::{
     ChildAnchor, ChildView, ConstrainedBox, Container, CrossAxisAlignment, Flex,
     FormattedTextElement, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
     ParentOffsetBounds, Stack,
 };
 use warpui::fonts::Weight;
-use warpui::keymap::macros::id;
 use warpui::keymap::FixedBinding;
 use warpui::keymap::Keystroke;
+use warpui::keymap::macros::id;
 use warpui::platform::file_picker::FilePickerConfiguration;
-use warpui::FocusContext;
 use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
@@ -22,7 +23,7 @@ use crate::view_components::action_button::{
     ActionButton, ButtonSize, KeystrokeSource, NakedTheme, PrimaryTheme,
 };
 
-use super::session_config::{is_git_repo, SessionConfigSelection, SessionType};
+use super::session_config::{SessionConfigSelection, SessionType, is_git_repo};
 use super::session_config_rendering;
 
 pub fn init(app: &mut warpui::AppContext) {
@@ -88,7 +89,7 @@ impl SessionConfigModal {
         });
 
         let submit_button = ctx.add_view(|ctx| {
-            ActionButton::new("Get Warping", PrimaryTheme)
+            ActionButton::new(final_cta_label(), PrimaryTheme)
                 .with_full_width(true)
                 .with_keybinding(
                     KeystrokeSource::Fixed(Keystroke::parse("enter").unwrap_or_default()),

@@ -1,6 +1,8 @@
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::{self, appearance::Appearance, color::blend::Blend as _};
 use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
+    ViewContext, ViewHandle,
     elements::{
         Align, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Flex, Icon,
         MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement as _, Radius,
@@ -11,26 +13,24 @@ use warpui::{
         button::{ButtonVariant, TextAndIcon, TextAndIconAlignment},
         components::{Coords, UiComponent, UiComponentStyles},
     },
-    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext, ViewHandle,
 };
 
 use crate::{
+    ChannelState, TelemetryEvent,
     coding_entrypoints::{
         clone_repo_view::{CloneRepoEvent, CloneRepoView},
         create_project_view::{CreateProjectEvent, CreateProjectView},
         project_buttons::{ProjectButtons, ProjectButtonsEvent},
     },
     pane_group::{
-        focus_state::PaneFocusHandle, pane::view, BackingView, PaneConfiguration, PaneEvent,
+        BackingView, PaneConfiguration, PaneEvent, focus_state::PaneFocusHandle, pane::view,
     },
     send_telemetry_from_ctx,
     terminal::TerminalView,
-    util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction},
+    util::bindings::{BindingGroup, CustomAction, keybinding_name_to_display_string},
     view_components::DismissibleToast,
     workspace::ToastStack,
     workspace::{Workspace, WorkspaceAction},
-    TelemetryEvent,
 };
 
 pub fn init(app: &mut AppContext) {
@@ -229,7 +229,7 @@ impl GetStartedView {
                 .finish(),
                 appearance
                     .ui_builder()
-                    .paragraph("Welcome to Warp")
+                    .paragraph(format!("Welcome to {}", ChannelState::product_name()))
                     .with_style(UiComponentStyles {
                         font_size: Some(20.),
                         ..Default::default()
