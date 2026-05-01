@@ -15,6 +15,9 @@ inputs:
     description: If true, dependencies needed for building release artifacts will be installed (e.g., cargo-about for license generation).
   cache_key:
     description: If set, the cache key to use.  If unset, the cache key will be derived from the target OS.
+  cache_on_failure:
+    description: If true, save the Rust cache even when the job fails.
+    default: "false"
   ssh_key:
     description: SSH private key used to clone the private warp-channel-config repository. Only consumed when running in warpdotdev/warp-internal.
 
@@ -79,6 +82,7 @@ runs:
         # caches are not reusable, and forks may use a default branch other than
         # master.
         save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        cache-on-failure: ${{ inputs.cache_on_failure }}
 
     - name: Set up Namespace cache
       if: ${{ startsWith(runner.name, 'nsc-runner') }}
