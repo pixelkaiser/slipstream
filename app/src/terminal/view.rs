@@ -2300,6 +2300,7 @@ struct TerminalViewMouseStates {
     jump_to_bottom_of_block_button: MouseStateHandle,
 
     parent_conversation_header_link: MouseStateHandle,
+    share_session_header_button: MouseStateHandle,
 }
 
 /// Where content was routed when sent to a CLI agent.

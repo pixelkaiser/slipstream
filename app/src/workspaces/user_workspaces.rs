@@ -1495,6 +1495,12 @@ impl UserWorkspaces {
             return;
         }
 
+        if crate::server::server_api::no_cloud_mode_enabled() {
+            FeatureFlag::CreatingSharedSessions
+                .set_enabled(ChannelState::session_sharing_server_url().is_some());
+            return;
+        }
+
         // If we have experiment state to unconditionally enable / disable the feature,
         // then we defer to that.
         let server_experiments = ServerExperiments::as_ref(ctx);

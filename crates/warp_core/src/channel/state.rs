@@ -109,6 +109,14 @@ impl ChannelState {
         Ok(())
     }
 
+    pub fn clear_session_sharing_server_url() {
+        CHANNEL_STATE
+            .lock()
+            .config
+            .server_config
+            .session_sharing_server_url = None;
+    }
+
     pub fn uses_staging_server() -> bool {
         let Ok(url) = Url::parse(Self::server_root_url().as_ref()) else {
             return false;

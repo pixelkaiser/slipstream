@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use chrono::{DateTime, Local};
-use session_sharing_protocol::common::SessionId;
+use session_sharing_protocol::common::{SessionId, SessionSecret};
 use warp_core::{channel::ChannelState, ui::appearance::Appearance};
 use warpui::{
     color::ColorU,
@@ -13,7 +13,7 @@ use crate::{
     ai::{agent::conversation::AIConversationId, blocklist::BlocklistAIHistoryModel},
     cloud_object::model::persistence::CloudModel,
     server::{ids::ServerId, server_api::object::GuestIdentifier},
-    terminal::{shared_session::join_link, TerminalView},
+    terminal::{shared_session::join_link_with_secret, TerminalView},
     ui_components::{
         avatar::{Avatar, AvatarContent},
         icons::Icon,
@@ -40,6 +40,7 @@ pub enum ShareableObject {
     Session {
         handle: WeakViewHandle<TerminalView>,
         session_id: SessionId,
+        session_secret: Option<SessionSecret>,
         started_at: DateTime<Local>,
     },
     /// An AI conversation.
@@ -53,7 +54,11 @@ impl ShareableObject {
             ShareableObject::WarpDriveObject(id) => CloudModel::as_ref(app)
                 .get_by_uid(&id.uid())
                 .and_then(|object| object.object_link()),
-            ShareableObject::Session { session_id, .. } => Some(join_link(session_id)),
+            ShareableObject::Session {
+                session_id,
+                session_secret,
+                ..
+            } => Some(join_link_with_secret(session_id, session_secret.as_ref())),
             ShareableObject::AIConversation(id) => {
                 // Use the unified helper that checks both loaded conversation and historical metadata
                 BlocklistAIHistoryModel::as_ref(app)
