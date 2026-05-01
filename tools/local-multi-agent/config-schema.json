@@ -3,6 +3,7 @@
   "defaults": {
     "HOST": "127.0.0.1",
     "PORT": 8787,
+    "OPENAI_BASE_URL": "",
     "OPENAI_MODEL": "",
     "LOCAL_MODEL_ALIASES": "{\"auto-efficient\":\"Qwen/Qwen3.6-27B-FP8\",\"auto-coding\":\"Qwen/Qwen3.6-27B-FP8\"}",
     "LOCAL_MODEL_LIST": "Qwen/Qwen3.6-27B-FP8",

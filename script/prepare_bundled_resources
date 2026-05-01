@@ -74,6 +74,7 @@ fi
 build_and_copy_local_multi_agent() {
   local local_agent_src="$REPO_ROOT/tools/local-multi-agent"
   local local_agent_dest="$DEST_DIR/bundled/local-multi-agent"
+  local local_agent_node_target="${LOCAL_AGENT_NODE_TARGET_VERSION:-22.12.0}"
 
   if [ ! -d "$local_agent_src" ]; then
     echo "Error: Local multi-agent service not found at $local_agent_src" >&2
@@ -97,7 +98,11 @@ build_and_copy_local_multi_agent() {
 
   (
     cd "$local_agent_stage"
+    export npm_config_target="$local_agent_node_target"
+    export npm_config_runtime="node"
+    export npm_config_disturl="https://nodejs.org/dist"
     npm ci
+    npm rebuild better-sqlite3 --build-from-source
     npm run build
     npm prune --omit=dev
   )
