@@ -39,6 +39,7 @@ use crate::terminal::session_settings::{
     SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
 };
 use crate::terminal::view::{ContextMenuAction, PromptPart, PromptPosition, TerminalAction};
+use crate::util::time_format::format_compact_duration_hms;
 
 #[cfg(test)]
 #[path = "current_prompt_tests.rs"]
@@ -157,6 +158,7 @@ pub struct CurrentPrompt {
     sessions: ModelHandle<Sessions>,
     prompt_chip_logger: PromptChipLogger,
     update_tx: async_channel::Sender<()>,
+    last_command_runtime_value: Option<ChipValue>,
 
     /// When set, git-backed chip values are populated from `GitRepoStatusModel`.
     /// `ShellGitBranch` and `GitDiffStats` are driven by filesystem events;
@@ -230,6 +232,7 @@ impl CurrentPrompt {
             latest_context: None,
             prompt_chip_logger: PromptChipLogger::default(),
             update_tx,
+            last_command_runtime_value: None,
             same_line_prompt_enabled: prompt.as_ref(ctx).same_line_prompt_enabled(),
             separator: prompt.as_ref(ctx).separator(),
             #[cfg(feature = "local_fs")]
@@ -991,6 +994,11 @@ impl CurrentPrompt {
                 return;
             }
 
+            if matches!(chip_kind, ContextChipKind::LastCommandRuntime) {
+                self.update_chip_value(chip_kind, self.last_command_runtime_value.clone());
+                return;
+            }
+
             match chip.refresh_config() {
                 RefreshConfig::OnDemandOnly => {
                     self.fetch_chip_value_once(
@@ -1083,6 +1091,8 @@ impl CurrentPrompt {
     /// existing states map with new information.
     /// This is called when the context gets updated (ie. a new block metadata is received).
     fn update_states_with_new_context_and_session(&mut self, ctx: &mut ModelContext<Self>) {
+        self.last_command_runtime_value = None;
+
         // 1. Terminating existing spawned operations.
         self.clear_chips_and_cache();
 
@@ -1214,9 +1224,9 @@ impl CurrentPrompt {
 
     fn handle_model_event(&mut self, event: &ModelEvent, ctx: &mut ModelContext<Self>) {
         if let ModelEvent::AfterBlockCompleted(after_block_completed) = event {
-            if let BlockType::User(UserBlockCompleted { command, .. }) =
-                &after_block_completed.block_type
-            {
+            if let BlockType::User(block_completed) = &after_block_completed.block_type {
+                self.update_last_command_runtime(block_completed);
+                let UserBlockCompleted { command, .. } = block_completed;
                 if let Some(cmd) = command.split_whitespace().next() {
                     // Resolve aliases so that e.g. `alias g=git` followed by `g push`
                     // still triggers invalidation for chips watching "git".
@@ -1243,6 +1253,25 @@ impl CurrentPrompt {
                 }
             }
         }
+    }
+
+    fn update_last_command_runtime(&mut self, block_completed: &UserBlockCompleted) {
+        if block_completed.command.trim().is_empty() {
+            return;
+        }
+
+        let value = block_completed
+            .serialized_block
+            .start_ts
+            .as_ref()
+            .zip(block_completed.serialized_block.completed_ts.as_ref())
+            .and_then(|(start, completed)| {
+                format_compact_duration_hms(completed.clone().signed_duration_since(start.clone()))
+            })
+            .map(ChipValue::Text);
+
+        self.last_command_runtime_value = value.clone();
+        self.update_chip_value(&ContextChipKind::LastCommandRuntime, value);
     }
 
     /// Update the prompt context to reflect a new active block. This should be called from the
