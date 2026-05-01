@@ -279,7 +279,9 @@ impl MainSettingsPageView {
 
         widgets.push(Box::new(SettingsSyncWidget::default()));
 
-        widgets.push(Box::new(EarnRewardsWidget::default()));
+        if !SettingsSection::Referrals.is_hidden_in_settings() {
+            widgets.push(Box::new(EarnRewardsWidget::default()));
+        }
 
         if ChannelState::app_version().is_some() {
             widgets.push(Box::new(VersionInfoWidget::default()));
