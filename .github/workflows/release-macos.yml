@@ -101,25 +101,13 @@ jobs:
             exit 1
           fi
 
-  build_arch:
-    name: Build macOS ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+  build_arm64:
+    name: Build macOS Apple Silicon
+    runs-on: macos-26
     needs:
       - release_metadata
       - validate_signing_secrets
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: aarch64
-            runner: macos-26
-            rust_target: aarch64-apple-darwin
-            dmg_name_suffix: arm64
-          - arch: x86_64
-            runner: macos-26-intel
-            rust_target: x86_64-apple-darwin
-            dmg_name_suffix: x86_64
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -130,7 +118,7 @@ jobs:
           install_release_deps: true
 
       - name: Ensure Rust target is installed
-        run: rustup target add ${{ matrix.rust_target }}
+        run: rustup target add aarch64-apple-darwin
         shell: bash
 
       - name: Setup Go
@@ -146,21 +134,21 @@ jobs:
         run: brew install create-dmg
         shell: bash
 
-      - name: Build unsigned ${{ matrix.arch }} bundle
+      - name: Build unsigned Apple Silicon bundle
         id: bundle_app
         run: |
           set -euo pipefail
           script/bundle \
             --nosign \
             --channel "$RELEASE_CHANNEL" \
-            --arch "${{ matrix.arch }}" \
+            --arch aarch64 \
             --release-tag "$TAG" \
-            --dmg-name-suffix "${{ matrix.dmg_name_suffix }}"
+            --dmg-name-suffix arm64
         shell: bash
         env:
           TAG: ${{ needs.release_metadata.outputs.tag }}
 
-      - name: Archive ${{ matrix.arch }} build inputs
+      - name: Archive Apple Silicon build inputs
         shell: bash
         env:
           BINARY_PATH: ${{ steps.bundle_app.outputs.binary_path }}
@@ -190,23 +178,23 @@ jobs:
             fi
           done
 
-          tar czf "build-inputs-${{ matrix.arch }}.tar.gz" "${paths[@]}"
+          tar czf build-inputs-aarch64.tar.gz "${paths[@]}"
 
-      - name: Upload ${{ matrix.arch }} build inputs
+      - name: Upload Apple Silicon build inputs
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: macos-${{ matrix.arch }}-${{ needs.release_metadata.outputs.tag }}
+          name: macos-aarch64-${{ needs.release_metadata.outputs.tag }}
           retention-days: 1
           compression-level: 0
-          path: build-inputs-${{ matrix.arch }}.tar.gz
+          path: build-inputs-aarch64.tar.gz
 
-  package_universal:
-    name: Package notarized universal DMG
+  package_arm64:
+    name: Package notarized Apple Silicon DMG
     runs-on: macos-26
     needs:
       - release_metadata
       - validate_signing_secrets
-      - build_arch
+      - build_arm64
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -232,16 +220,6 @@ jobs:
         run: tar xzf artifacts/aarch64/build-inputs-aarch64.tar.gz
         shell: bash
 
-      - name: Download x86_64 build inputs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: macos-x86_64-${{ needs.release_metadata.outputs.tag }}
-          path: artifacts/x86_64
-
-      - name: Extract x86_64 build inputs
-        run: tar xzf artifacts/x86_64/build-inputs-x86_64.tar.gz
-        shell: bash
-
       - name: Install cargo-bundle
         run: script/install_cargo_bundle
         shell: bash
@@ -250,7 +228,7 @@ jobs:
         run: brew install create-dmg
         shell: bash
 
-      - name: Bundle, sign, and notarize universal app
+      - name: Bundle, sign, and notarize Apple Silicon app
         id: bundle_app
         run: |
           set -euo pipefail
@@ -258,6 +236,7 @@ jobs:
             --skip-build \
             --read-passwords-from-env \
             --channel "$RELEASE_CHANNEL" \
+            --arch aarch64 \
             --release-tag "$TAG"
         shell: bash
         env:
@@ -309,7 +288,7 @@ jobs:
     runs-on: ubuntu-latest
     needs:
       - release_metadata
-      - package_universal
+      - package_arm64
     if: ${{ needs.release_metadata.outputs.should_publish == 'true' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
