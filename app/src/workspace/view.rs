@@ -267,7 +267,7 @@ use crate::remote_server::manager::RemoteServerManager;
 #[cfg(feature = "local_fs")]
 use crate::remote_server::manager::RemoteServerManagerEvent;
 use crate::terminal::keys_settings::KeysSettings;
-use crate::terminal::shared_session::SharedSessionActionSource;
+use crate::terminal::shared_session::{SharedSessionActionSource, SharedSessionJoinArgs};
 
 use crate::ai::blocklist::agent_view::editor::{AgentToolbarEditorEvent, AgentToolbarEditorModal};
 use crate::prompt::editor_modal::{
@@ -397,7 +397,6 @@ use itertools::Itertools;
 use parking_lot::FairMutex;
 use pathfinder_geometry::rect::RectF;
 use repo_metadata::repositories::DetectedRepositories;
-use session_sharing_protocol::common::SessionId as SharedSessionId;
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "local_fs")]
 use std::convert::TryFrom;
@@ -3659,8 +3658,8 @@ impl Workspace {
                 );
                 self.check_and_trigger_onboarding(ctx);
             }
-            NewWorkspaceSource::SharedSessionAsViewer { session_id } => {
-                self.add_tab_for_joining_shared_session(session_id, ctx);
+            NewWorkspaceSource::SharedSessionAsViewer { join_args } => {
+                self.add_tab_for_joining_shared_session(join_args, ctx);
             }
             NewWorkspaceSource::FromCloudConversationId { conversation_id } => {
                 self.open_cloud_conversation_from_server_token(conversation_id, ctx);
@@ -3956,12 +3955,12 @@ impl Workspace {
 
     pub fn add_tab_for_joining_shared_session(
         &mut self,
-        session_id: SharedSessionId,
+        join_args: SharedSessionJoinArgs,
         ctx: &mut ViewContext<Self>,
     ) {
         let new_pane_group = ctx.add_typed_action_view(|ctx| {
             PaneGroup::new_for_shared_session_viewer(
-                session_id,
+                join_args,
                 self.tips_completed.clone(),
                 self.user_default_shell_unsupported_banner_model_handle
                     .clone(),
@@ -4206,9 +4205,13 @@ impl Workspace {
                 ManagerEvent::StartedShare {
                     window_id,
                     session_id,
+                    session_secret,
                 } => {
                     if *window_id == ctx.window_id() {
-                        me.copy_shared_session_link(session_id, ctx);
+                        me.copy_shared_session_link(
+                            &SharedSessionJoinArgs::new(*session_id, session_secret.clone()),
+                            ctx,
+                        );
                     }
                 }
                 #[cfg(target_family = "wasm")]
@@ -4243,11 +4246,14 @@ impl Workspace {
 
     fn copy_shared_session_link(
         &mut self,
-        session_id: &SharedSessionId,
+        join_args: &SharedSessionJoinArgs,
         ctx: &mut ViewContext<Self>,
     ) {
         ctx.clipboard().write(ClipboardContent::plain_text(
-            terminal::shared_session::join_link(session_id),
+            terminal::shared_session::join_link_with_secret(
+                &join_args.session_id,
+                join_args.session_secret.as_ref(),
+            ),
         ));
 
         self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -21559,7 +21565,7 @@ impl TypedActionView for Workspace {
                 {
                     self.activate_tab(tab_index, ctx);
                 } else {
-                    self.add_tab_for_joining_shared_session(*session_id, ctx);
+                    self.add_tab_for_joining_shared_session((*session_id).into(), ctx);
                 }
             }
             OpenConversationTranscriptViewer {

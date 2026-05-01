@@ -1444,6 +1444,7 @@ impl TerminalManager {
         ctx.subscribe_to_model(&network, move |network, event, ctx| match event {
             NetworkEvent::SharedSessionCreatedSuccessfully {
                 session_id,
+                session_secret,
                 sharer_id,
                 sharer_firebase_uid,
             } => {
@@ -1459,6 +1460,7 @@ impl TerminalManager {
                         *sharer_firebase_uid,
                         scrollback_type,
                         *session_id,
+                        session_secret.clone(),
                         source_type.clone(),
                         ctx,
                     );
@@ -1471,7 +1473,13 @@ impl TerminalManager {
 
                 // Let the manager know the share is active with the relevant metadata.
                 Manager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.started_share(terminal_view.downgrade(), *session_id, window_id, ctx);
+                    manager.started_share(
+                        terminal_view.downgrade(),
+                        *session_id,
+                        session_secret.clone(),
+                        window_id,
+                        ctx,
+                    );
                 });
 
                 // Flush the initial input operations that the sharer performed
