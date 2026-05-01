@@ -1,4 +1,4 @@
-use super::two_line_button::{render_two_line_button, TwoLineButtonSpec};
+use super::two_line_button::{TwoLineButtonSpec, render_two_line_button};
 use crate::model::{OnboardingAuthState, OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::telemetry::OnboardingEvent;
@@ -7,13 +7,16 @@ use warp_core::send_telemetry_from_ctx;
 use super::OnboardingSlide;
 use crate::visuals::agent_visual;
 use pathfinder_geometry::vector::vec2f;
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::{
     appearance::Appearance,
-    theme::{color::internal_colors, Fill},
+    theme::{Fill, color::internal_colors},
 };
 use warpui::{
+    AppContext, Element, Entity, Gradient, SingletonEntity as _, TypedActionView, View,
+    ViewContext,
     elements::{
         AnchorPair, Border, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
         CornerRadius, CrossAxisAlignment, Dismiss, Empty, Flex, FormattedTextElement, Hoverable,
@@ -28,8 +31,6 @@ use warpui::{
     scene::DropShadow,
     text_layout::TextAlignment,
     ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, Gradient, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
 };
 
 use ai::LLMId;
@@ -164,8 +165,6 @@ pub struct AgentSlide {
     autonomy_partial_mouse_state: MouseStateHandle,
     autonomy_none_mouse_state: MouseStateHandle,
 
-    disable_oz_mouse: MouseStateHandle,
-
     back_button: button::Button,
     next_button: button::Button,
     upgrade_button: button::Button,
@@ -260,7 +259,6 @@ impl AgentSlide {
             autonomy_full_mouse_state: MouseStateHandle::default(),
             autonomy_partial_mouse_state: MouseStateHandle::default(),
             autonomy_none_mouse_state: MouseStateHandle::default(),
-            disable_oz_mouse: MouseStateHandle::default(),
             back_button: button::Button::default(),
             next_button: button::Button::default(),
             upgrade_button: button::Button::default(),
@@ -323,7 +321,10 @@ impl AgentSlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph("Customize your Warp Agent")
+            .paragraph(format!(
+                "Customize your {} Agent",
+                ChannelState::product_name()
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -389,18 +390,9 @@ impl AgentSlide {
             upper_col.finish()
         };
 
-        let mut col = Flex::column()
+        let col = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(upper_sections);
-
-        if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
-            let disable_oz_section = self.render_disable_oz_section(appearance, settings);
-            col = col.with_child(
-                Container::new(disable_oz_section)
-                    .with_margin_top(24.)
-                    .finish(),
-            );
-        }
 
         Container::new(col.finish()).with_margin_top(40.).finish()
     }
@@ -939,38 +931,6 @@ impl AgentSlide {
             .finish()
     }
 
-    fn render_disable_oz_section(
-        &self,
-        appearance: &Appearance,
-        settings: &AgentDevelopmentSettings,
-    ) -> Box<dyn Element> {
-        let theme = appearance.theme();
-        let background_for_text = theme.background().into_solid();
-
-        let checkbox = appearance
-            .ui_builder()
-            .checkbox(self.disable_oz_mouse.clone(), Some(12.))
-            .check(settings.disable_oz)
-            .build()
-            .on_click(|ctx, _, _| ctx.dispatch_typed_action(AgentSlideAction::ToggleDisableOz))
-            .finish();
-
-        let label = Text::new("Disable Warp Agent", appearance.ui_font_family(), 14.0)
-            .with_color(internal_colors::text_sub(theme, background_for_text))
-            .with_style(Properties {
-                weight: Weight::Normal,
-                ..Default::default()
-            })
-            .with_line_height_ratio(1.0)
-            .finish();
-
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(checkbox)
-            .with_child(Container::new(label).with_margin_left(8.).finish())
-            .finish()
-    }
-
     fn render_bottom_nav(&self, appearance: &Appearance) -> Box<dyn Element> {
         let back_button = self.back_button.render(
             appearance,
@@ -1002,12 +962,10 @@ impl AgentSlide {
             },
         );
 
-        let step_index = 2;
-        let step_count = if warp_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
-        {
-            5
+        let (step_index, step_count) = if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+            (1, 4)
         } else {
-            4
+            (2, 4)
         };
         bottom_nav::onboarding_bottom_nav(
             appearance,

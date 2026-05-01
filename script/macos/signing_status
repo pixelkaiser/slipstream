@@ -22,7 +22,7 @@ else
   echo "In Xcode, sign in to your Apple developer account and create an Apple Development certificate."
 fi
 
-APP_PATH="${WARP_APP_PATH:-target/release-lto/bundle/osx/WarpOss.app}"
+APP_PATH="${WARP_APP_PATH:-target/release-lto/bundle/osx/Slipstream.app}"
 if [ -d "$APP_PATH" ]; then
   echo
   echo "Current app signature for $APP_PATH:"

@@ -132,6 +132,7 @@ impl AISubpage {
 }
 use crate::ai::{AIRequestUsageModel, AIRequestUsageModelEvent};
 use crate::menu::{MenuItem, MenuItemFields};
+use crate::server::server_api::no_cloud_mode_enabled;
 use crate::server::telemetry::{
     AgentModeAutoDetectionSettingOrigin, AutonomySettingToggleSource,
     ToggleCodeSuggestionsSettingSource,
@@ -163,6 +164,14 @@ const PRIMARY_HEADER_FONT_SIZE: f32 = 24.;
 
 const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
 const AI_SETTINGS_DROPDOWN_MAX_HEIGHT: f32 = 250.;
+
+fn agent_display_name() -> &'static str {
+    if ChannelState::product_name() == "Slipstream" {
+        "Agent"
+    } else {
+        "Warp Agent"
+    }
+}
 const CONTEXT_WINDOW_SLIDER_WIDTH: f32 = 220.;
 const CONTEXT_WINDOW_INPUT_BOX_WIDTH: f32 = 120.;
 
@@ -3768,7 +3777,8 @@ impl SettingsWidget for GlobalAIWidget {
 
         let is_anonymous = AuthStateProvider::as_ref(app)
             .get()
-            .is_anonymous_or_logged_out();
+            .is_anonymous_or_logged_out()
+            && !no_cloud_mode_enabled();
 
         let mut row = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
@@ -3776,7 +3786,7 @@ impl SettingsWidget for GlobalAIWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(
                 Text::new_inline(
-                    "Warp Agent",
+                    agent_display_name(),
                     appearance.ui_font_family(),
                     PRIMARY_HEADER_FONT_SIZE,
                 )
@@ -5030,9 +5040,13 @@ impl AgentsWidget {
             Some(&view.command_denylist_editor),
             appearance,
         );
+        let description = format!(
+            "Regular expressions to match commands that the {} should always ask permission to execute.",
+            agent_display_name()
+        );
         render_ai_list(
             "Command denylist",
-            "Regular expressions to match commands that the Warp Agent should always ask permission to execute.",
+            &description,
             list,
             view,
             ai_settings,
@@ -5065,9 +5079,13 @@ impl AgentsWidget {
             appearance,
         );
 
+        let description = format!(
+            "Regular expressions to match commands that can be automatically executed by the {}.",
+            agent_display_name()
+        );
         render_ai_list(
             "Command allowlist",
-            "Regular expressions to match commands that can be automatically executed by the Warp Agent.",
+            &description,
             list,
             view,
             ai_settings,
@@ -5165,12 +5183,15 @@ impl AgentsWidget {
             .finish()
         };
 
+        let base_model_description = format!(
+            "This model serves as the primary engine behind the {}. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. {} may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
+            agent_display_name(),
+            ChannelState::product_name()
+        );
         render_dropdown_item(
             appearance,
             "Base model",
-            Some(
-                "This model serves as the primary engine behind the Warp Agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Warp may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
-            ),
+            Some(base_model_description.as_str()),
             Some(show_in_prompt_checkbox),
             LocalOnlyIconState::Hidden,
             (!ai_settings.is_any_ai_enabled(app))
@@ -5199,9 +5220,10 @@ impl AgentsWidget {
         );
 
         let codebase_context_description = vec![
-            FormattedTextFragment::plain_text(
-                "Allow the Warp Agent to generate an outline of your codebase that can be used for context. No code is ever stored on our servers. ",
-            ),
+            FormattedTextFragment::plain_text(format!(
+                "Allow the {} to generate an outline of your codebase that can be used for context. No code is ever stored on our servers. ",
+                agent_display_name()
+            )),
             FormattedTextFragment::hyperlink(
                 "Learn more",
                 "https://docs.warp.dev/agent-platform/capabilities/codebase-context",
@@ -5272,9 +5294,10 @@ impl AgentsWidget {
 
         let subtext = {
             let subtext_fragments = vec![
-                FormattedTextFragment::plain_text(
-                    "You haven't added any MCP servers yet. Once you do, you'll be able to control how much autonomy the Warp Agent has when interacting with them. ",
-                ),
+                FormattedTextFragment::plain_text(format!(
+                    "You haven't added any MCP servers yet. Once you do, you'll be able to control how much autonomy the {} has when interacting with them. ",
+                    agent_display_name()
+                )),
                 FormattedTextFragment::hyperlink_action(
                     "Add a server",
                     AISettingsPageAction::OpenMCPServerCollection,
@@ -5352,9 +5375,13 @@ impl AgentsWidget {
         if current_mcp_setting == ActionPermission::AlwaysAsk
             || current_mcp_setting == ActionPermission::AgentDecides
         {
+            let allowlist_description = format!(
+                "Allow the {} to call these MCP servers.",
+                agent_display_name()
+            );
             let allowlist = self.render_mcp_list(
                 "MCP allowlist",
-                "Allow the Warp Agent to call these MCP servers.",
+                &allowlist_description,
                 &view.mcp_allowlist_dropdown,
                 BlocklistAIPermissions::as_ref(app).get_mcp_allowlist(app, None),
                 view.mcp_allowlist_mouse_state_handles.clone(),
@@ -5369,9 +5396,13 @@ impl AgentsWidget {
         if current_mcp_setting == ActionPermission::AlwaysAllow
             || current_mcp_setting == ActionPermission::AgentDecides
         {
+            let denylist_description = format!(
+                "The {} will always ask for permission before calling any MCP servers on this list.",
+                agent_display_name()
+            );
             let denylist = self.render_mcp_list(
                 "MCP denylist",
-                "The Warp Agent will always ask for permission before calling any MCP servers on this list.",
+                &denylist_description,
                 &view.mcp_denylist_dropdown,
                 BlocklistAIPermissions::as_ref(app).get_mcp_denylist(app, None),
                 view.mcp_denylist_mouse_state_handles.clone(),
@@ -5742,10 +5773,11 @@ impl SettingsWidget for MCPServersWidget {
         .finish();
 
         let mcp_description = vec![
-            FormattedTextFragment::plain_text(
-                "Add MCP servers to extend the Warp Agent's capabilities. \
+            FormattedTextFragment::plain_text(format!(
+                "Add MCP servers to extend the {}'s capabilities. \
             MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. ",
-            ),
+                agent_display_name()
+            )),
             FormattedTextFragment::hyperlink(
                 "Learn more",
                 "https://docs.warp.dev/agent-platform/capabilities/mcp",
@@ -5874,9 +5906,10 @@ impl AIFactWidget {
         );
 
         let rules_description = vec![
-            FormattedTextFragment::plain_text(
-                "Rules help the Warp Agent follow your conventions, whether for codebases or specific workflows. ",
-            ),
+            FormattedTextFragment::plain_text(format!(
+                "Rules help the {} follow your conventions, whether for codebases or specific workflows. ",
+                agent_display_name()
+            )),
             FormattedTextFragment::hyperlink(
                 "Learn more",
                 "https://docs.warp.dev/agent-platform/capabilities/rules",
@@ -5953,7 +5986,10 @@ impl AIFactWidget {
         );
 
         let description = render_ai_setting_description(
-            "The Warp Agent can leverage your Warp Drive Contents to tailor responses to your personal and team developer workflows and environments. This includes any Workflows, Notebooks, and Environment Variables.",
+            format!(
+                "The {} can leverage your Warp Drive Contents to tailor responses to your personal and team developer workflows and environments. This includes any Workflows, Notebooks, and Environment Variables.",
+                agent_display_name()
+            ),
             ai_settings.is_any_ai_enabled(app),
             app,
         );
@@ -7685,9 +7721,10 @@ impl ApiKeysWidget {
     fn render_custom_inference_description(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let text_fragments = vec![
-            FormattedTextFragment::plain_text(
-                "Use your own API keys from model providers for Warp Agent. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored locally and are never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
-            ),
+            FormattedTextFragment::plain_text(format!(
+                "Use your own API keys from model providers for the {} to use. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored locally and are never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
+                agent_display_name()
+            )),
             FormattedTextFragment::hyperlink(
                 "Learn more",
                 CUSTOM_INFERENCE_LEARN_MORE_URL,

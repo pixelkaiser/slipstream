@@ -529,8 +529,7 @@ impl LocalDiffStateModel {
     /// Stashes uncommitted changes for specific files
     #[cfg(feature = "local_fs")]
     async fn stash_uncommitted_changes(repo_path: &Path, relative_paths: &[String]) -> Result<()> {
-        let app_id = ChannelState::app_id();
-        let app_name = app_id.application_name();
+        let app_name = ChannelState::app_display_name();
         let msg = if relative_paths.len() == 1 {
             format!("{app_name}: stash {}", relative_paths[0])
         } else {

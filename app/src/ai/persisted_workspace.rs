@@ -1053,7 +1053,7 @@ impl PersistedWorkspace {
                 server,
                 workspace_root.clone(),
                 path_env_var.clone(),
-                ChannelState::app_id().application_name().to_string(),
+                ChannelState::app_display_name().to_string(),
                 http_client,
             )
             .with_log_relative_path(log_relative_path);

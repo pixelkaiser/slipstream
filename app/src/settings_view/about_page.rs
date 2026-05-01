@@ -54,7 +54,7 @@ impl SettingsWidget for AboutPageWidget {
     type View = AboutPageView;
 
     fn search_terms(&self) -> &str {
-        "about warp version"
+        "about warp slipstream version"
     }
 
     fn render(
@@ -66,7 +66,13 @@ impl SettingsWidget for AboutPageWidget {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder();
 
-        let image_path = if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
+        let image_path: &'static str = if ChannelState::product_name() == "Slipstream" {
+            if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
+                "bundled/svg/slipstream-logo-with-light-title.svg"
+            } else {
+                "bundled/svg/slipstream-logo-with-dark-title.svg"
+            }
+        } else if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
             "bundled/svg/warp-logo-with-light-title.svg"
         } else {
             "bundled/svg/warp-logo-with-dark-title.svg"
@@ -118,7 +124,7 @@ impl SettingsWidget for AboutPageWidget {
                 .with_child(version_row.finish())
                 .with_child(
                     ui_builder
-                        .span("Copyright 2026 Warp")
+                        .span(format!("Copyright 2026 {}", ChannelState::product_name()))
                         .build()
                         .with_margin_top(16.)
                         .finish(),

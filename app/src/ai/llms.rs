@@ -8,6 +8,8 @@ use warp_core::ui::icons::Icon;
 use warp_core::user_preferences::GetUserPreferences;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
+#[cfg(not(target_family = "wasm"))]
+use crate::local_multi_agent::LocalMultiAgentConfig;
 use crate::{
     auth::{
         auth_manager::{AuthManager, AuthManagerEvent},
@@ -610,15 +612,16 @@ impl LLMPreferences {
         let base_llm_for_terminal_view = HashMap::new();
         let custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(ctx).keys());
 
-        let me = Self {
+        let mut me = Self {
             models_by_feature,
             last_update: None,
             base_llm_for_terminal_view,
             custom_llms,
         };
 
-        // In agent mode eval and no-cloud builds, eagerly kick off a fetch of the model list.
+        // In agent mode eval builds, eagerly kick off a fetch of the model list.
         // Normal cloud mode handles this reactively on auth complete, network online, etc.
+        // No-cloud mode gets local provider choices from `LocalMultiAgentManager`.
         if Self::should_refresh_models_on_init() {
             me.refresh_available_models(ctx);
         }
@@ -627,7 +630,7 @@ impl LLMPreferences {
     }
 
     fn should_refresh_models_on_init() -> bool {
-        cfg!(feature = "agent_mode_evals") || no_cloud_mode_enabled()
+        cfg!(feature = "agent_mode_evals")
     }
 
     /// Returns the `LLMInfo` for the base LLM to be used for an Agent Mode request.
@@ -1067,6 +1070,10 @@ impl LLMPreferences {
 
     /// Fetches the latest set of models from the server for the currently logged in user, and updates the model.
     pub fn refresh_authed_models(&self, ctx: &mut ModelContext<Self>) {
+        if no_cloud_mode_enabled() {
+            return;
+        }
+
         // Don't try to fetch auth'd models if the user is not logged in yet.
         if !AuthStateProvider::as_ref(ctx).get().is_logged_in() {
             return;
@@ -1090,6 +1097,10 @@ impl LLMPreferences {
 
     /// No auth required (i.e. to populate the pre-login onboarding picker).
     fn refresh_public_models(&self, ctx: &mut ModelContext<Self>) {
+        if no_cloud_mode_enabled() {
+            return;
+        }
+
         let ai_api_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         ctx.spawn(
             async move { ai_api_client.get_free_available_models(None).await },
@@ -1106,11 +1117,32 @@ impl LLMPreferences {
         );
     }
 
-    pub fn refresh_available_models(&self, ctx: &mut ModelContext<Self>) {
+    pub fn refresh_available_models(&mut self, ctx: &mut ModelContext<Self>) {
+        if no_cloud_mode_enabled() {
+            return;
+        }
+
         if AuthStateProvider::as_ref(ctx).get().is_logged_in() {
             self.refresh_authed_models(ctx);
         } else {
             self.refresh_public_models(ctx);
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub fn update_local_multi_agent_models(
+        &mut self,
+        config: &LocalMultiAgentConfig,
+        discovered_models: &[String],
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(update) = models_by_feature_for_local_multi_agent(config, discovered_models)
+        else {
+            return;
+        };
+
+        if update != self.models_by_feature {
+            self.on_server_update(update, ctx);
         }
     }
 
@@ -1325,6 +1357,52 @@ fn custom_llm_info_from(endpoint: &CustomEndpoint, model: &CustomEndpointModel) 
             credit_multiplier: None,
         },
         description: Some(format!("Custom · {}", endpoint.name)),
+        disable_reason: None,
+        vision_supported: true,
+        spec: None,
+        provider: LLMProvider::Unknown,
+        host_configs: HashMap::new(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn models_by_feature_for_local_multi_agent(
+    config: &LocalMultiAgentConfig,
+    discovered_models: &[String],
+) -> Option<ModelsByFeature> {
+    let choices = config.model_choices(discovered_models);
+    let default_id = config
+        .openai_model
+        .as_ref()
+        .filter(|model| choices.iter().any(|choice| choice == *model))
+        .or_else(|| choices.first())?
+        .clone()
+        .into();
+    let choices = choices.into_iter().map(local_multi_agent_llm_info);
+    let available = AvailableLLMs::new(default_id, choices, None).ok()?;
+
+    Some(ModelsByFeature {
+        agent_mode: available.clone(),
+        coding: available.clone(),
+        cli_agent: Some(available),
+        computer_use: None,
+    })
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn local_multi_agent_llm_info(model: String) -> LLMInfo {
+    LLMInfo {
+        display_name: model.clone(),
+        base_model_name: model.clone(),
+        id: model.into(),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: None,
         disable_reason: None,
         vision_supported: true,
         spec: None,

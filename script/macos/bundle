@@ -70,7 +70,7 @@ cleanup_dmg_files() {
         find "$target_dir" -name "rw.*.dmg" -type f -delete
     fi
     # Also check if any volumes are mounted and unmount them
-    hdiutil info | grep "/Volumes/Warp.*" | awk '{print $1}' | while read -r disk; do
+    hdiutil info | grep -E "/Volumes/(Warp|Slipstream).*" | awk '{print $1}' | while read -r disk; do
         echo "Unmounting disk image: $disk"
         hdiutil detach "$disk" -force || true
     done
@@ -107,6 +107,10 @@ CODESIGN=true
 SELFSIGN=false
 OPEN_AFTER_BUNDLE=false
 READ_PASSWORDS_FROM_ENV=false
+
+if [[ -n "${APPLE_TEAM_ID:-}" && -z "${WARP_APPLE_TEAM_ID:-}" ]]; then
+  export WARP_APPLE_TEAM_ID="$APPLE_TEAM_ID"
+fi
 
 PARAMS=""
 while (( "$#" )); do
@@ -308,9 +312,9 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     WARP_BIN="warp-oss"
-    BUNDLE_ID="dev.warp.WarpOss"
-    WARP_APP_NAME="WarpOss"
-    WARP_SCHEME_NAME="warposs"
+    BUNDLE_ID="com.slipstream.app"
+    WARP_APP_NAME="Slipstream"
+    WARP_SCHEME_NAME="slipstream"
     # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
     # (which would otherwise pull in the Sentry framework dependency).
     FEATURES="release_bundle,extern_plist"
@@ -318,6 +322,7 @@ fi
 
 OUT_DIR="target/$TARGET_PROFILE_DIR/bundle/osx"
 DOCK_TILE_PLUGIN_DIR="target/$TARGET_PROFILE_DIR/WarpDockTilePlugin.docktileplugin"
+ENTITLEMENTS_PLIST="script/Entitlements.plist"
 
 # Handle specific architecture targeting
 if [[ -n "$TARGET_ARCH" ]]; then
@@ -360,6 +365,11 @@ elif [[ "$ARTIFACT" == app ]]; then
   fi
 fi
 
+DMG_BACKGROUND="app/assets/resources/mac/warp_install_image.png"
+if [[ $RELEASE_CHANNEL = "oss" ]]; then
+  DMG_BACKGROUND="app/assets/resources/mac/slipstream_install_image.png"
+fi
+
 # If we're building a universal bundle for the app artifact, make sure the additional target is available.
 if [[ $UNIVERSAL_BINARY = true ]]; then
     rustup target add "$ADDITIONAL_TARGET"
@@ -388,6 +398,61 @@ fi
 mkdir -p "$OUT_DIR"
 rm -R "$OUT_DIR/$WARP_APP_NAME.app" || echo "No old app to remove"
 rm -R "$OUT_DIR/$FINAL_DMG_NAME" || echo "No old dmg to remove"
+
+if [[ $RELEASE_CHANNEL = "oss" ]]; then
+  ENTITLEMENTS_PLIST="$OUT_DIR/Slipstream-Entitlements.plist"
+  if [[ -n "${SLIPSTREAM_APP_GROUP_ID:-}" ]]; then
+    cat > "$ENTITLEMENTS_PLIST" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
+    <key>com.apple.security.personal-information.photos-library</key>
+    <true/>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>$SLIPSTREAM_APP_GROUP_ID</string>
+    </array>
+</dict>
+</plist>
+EOF
+  else
+    cat > "$ENTITLEMENTS_PLIST" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.personal-information.addressbook</key>
+    <true/>
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
+    <key>com.apple.security.personal-information.photos-library</key>
+    <true/>
+</dict>
+</plist>
+EOF
+  fi
+fi
 
 ###########################
 ## Step 1: Build the app ##
@@ -538,7 +603,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
   if [[ $RELEASE_CHANNEL = "stable" ]]; then
     CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/oz"
   elif [[ $RELEASE_CHANNEL = "oss" ]]; then
-    CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/warp-oss"
+    CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/slipstream"
   else
     CLI_SCRIPT_PATH="$BUNDLED_RESOURCES_DIR/bin/oz-$RELEASE_CHANNEL"
   fi
@@ -572,6 +637,10 @@ elif [[ "$ARTIFACT" == "cli" ]]; then
 
     export WARP_PLIST_NO_FILE_TYPES=true
     ./script/update_plist
+    if [[ "$RELEASE_CHANNEL" == "oss" ]]; then
+      plutil -replace CFBundleDisplayName -string "$WARP_APP_NAME CLI" "$WARP_PLIST_PATH"
+      plutil -replace NSHumanReadableCopyright -string "© 2026, Slipstream contributors" "$WARP_PLIST_PATH"
+    fi
     plutil -insert CFBundleIdentifier -string "$BUNDLE_ID" "$WARP_PLIST_PATH"
     plutil -insert CFBundleName -string "$WARP_BIN" "$WARP_PLIST_PATH"
     plutil -insert CFBundleExecutable -string "$WARP_BIN" "$WARP_PLIST_PATH"
@@ -615,8 +684,8 @@ if [[ $READ_PASSWORDS_FROM_ENV != true ]]; then
 fi
 
 if [[ $CODESIGN = true ]]; then
-  # TODO - does this need to change per user?  Seems like it's tied to the WARP_NOTARIZATION_PASSWORD password.
-  APPLE_TEAM_ID="2BBY89MBSN"
+  APPLE_TEAM_ID="${WARP_APPLE_TEAM_ID:-${APPLE_TEAM_ID:-2BBY89MBSN}}"
+  export WARP_APPLE_TEAM_ID="$APPLE_TEAM_ID"
   CODESIGN_KEYCHAIN_NAME="warp-codesign-keychain"
 
   echo "Starting codesigning..."
@@ -674,10 +743,10 @@ elif [[ $CODESIGN = true ]]; then
   if [[ "$ARTIFACT" == app ]]; then
     echo "Codesigning $BUNDLE_DIR/$WARP_APP_NAME.app..."
     # Use --deep so we sign bundled frameworks as well
-    codesign --deep -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements script/Entitlements.plist
+    codesign --deep -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements "$ENTITLEMENTS_PLIST"
   elif [[ "$ARTIFACT" == cli ]]; then
     echo "Codesigning $OUT_DIR/$WARP_BIN..."
-    codesign -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$OUT_DIR/$WARP_BIN" --entitlements script/Entitlements.plist
+    codesign -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$OUT_DIR/$WARP_BIN" --entitlements "$ENTITLEMENTS_PLIST"
 
     # Create the .zip for notarization in a separate location - otherwise, Apple's codesigning
     # tools decide that it's a sealed resource that belongs to the binary and needs to also be signed.
@@ -707,10 +776,10 @@ if [[ "$ARTIFACT" = app ]]; then
     local source_folder="$1"
 
     local args=(
-      --volname Warp
+      --volname "$WARP_APP_NAME"
       # For --no-internet-enable, see https://github.com/create-dmg/create-dmg/issues/179
       --no-internet-enable
-      --background app/assets/resources/mac/warp_install_image.png
+      --background "$DMG_BACKGROUND"
       --icon-size 128
       --window-size 700 500
       --format UDZO

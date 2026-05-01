@@ -61,7 +61,11 @@ if ($env:GIT_RELEASE_TAG) {
         New-Item -ItemType Directory -Path $VersionMetadataDir -Force | Out-Null
     }
 
-    @{ warp_version = $env:GIT_RELEASE_TAG } |
+    $VersionMetadata = @{ warp_version = $env:GIT_RELEASE_TAG }
+    if ($Channel -eq 'oss') {
+        $VersionMetadata.slipstream_version = $env:GIT_RELEASE_TAG
+    }
+    $VersionMetadata |
         ConvertTo-Json |
         Set-Content -Path $VersionMetadataPath -Encoding utf8
 }

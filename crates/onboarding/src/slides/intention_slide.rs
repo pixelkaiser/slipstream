@@ -2,13 +2,16 @@ use super::OnboardingSlide;
 use crate::model::OnboardingStateModel;
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::visuals::{intention_terminal_visual, intention_visual};
-use crate::{OnboardingIntention, AI_FEATURES};
-use ui_components::{button, Component as _, Options as _};
+use crate::{OnboardingIntention, ai_features, final_cta_label};
+use ui_components::{Component as _, Options as _, button};
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::Fill;
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors, Icon};
+use warp_core::ui::{Icon, appearance::Appearance, theme::color::internal_colors};
 use warpui::prelude::Align;
 use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
+    ViewContext,
     elements::{
         Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
         CrossAxisAlignment, Flex, FormattedTextElement, Hoverable, MainAxisAlignment, MainAxisSize,
@@ -19,8 +22,6 @@ use warpui::{
     platform::Cursor,
     text_layout::TextAlignment,
     ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
 };
 
 #[derive(Debug, Clone)]
@@ -80,7 +81,7 @@ impl IntentionSlide {
 
         let title = appearance
             .ui_builder()
-            .paragraph("Welcome to Warp")
+            .paragraph(format!("Welcome to {}", ChannelState::product_name()))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -248,7 +249,7 @@ impl IntentionSlide {
         .finish();
 
         let checklist = {
-            let items = AI_FEATURES;
+            let items = ai_features();
             // When the agent card is selected, use the theme's green to match the
             // "Blended ANSI/green_fg" token in the design.
             let check_fill = if is_selected {
@@ -398,7 +399,7 @@ impl IntentionSlide {
 
         let new_settings_modes = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
         let next_text = if !new_settings_modes && selected_index == 1 {
-            "Get Warping"
+            final_cta_label()
         } else {
             "Next"
         };
@@ -420,11 +421,7 @@ impl IntentionSlide {
 
         let is_terminal = selected_index == 1;
         let (step_index, step_count) = if new_settings_modes {
-            if is_terminal {
-                (0, 4)
-            } else {
-                (0, 5)
-            }
+            if is_terminal { (0, 4) } else { (0, 5) }
         } else {
             (1, 4)
         };

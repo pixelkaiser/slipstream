@@ -3,9 +3,10 @@ use crate::model::{OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::telemetry::OnboardingEvent;
 use crate::visuals::theme_picker_visual;
-use crate::OnboardingIntention;
+use crate::{final_cta_label, OnboardingIntention};
 use pathfinder_color::ColorU;
 use ui_components::{button, Component as _, Options as _};
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::{appearance::Appearance, theme::color::internal_colors, theme::WarpTheme};
@@ -271,7 +272,7 @@ impl ThemePickerSlide {
 
         let theme_picker_last = FeatureFlag::OpenWarpNewSettingsModes.is_enabled();
         let next_label = if theme_picker_last {
-            "Get Warping"
+            final_cta_label()
         } else {
             "Next"
         };
@@ -298,9 +299,9 @@ impl ThemePickerSlide {
                 OnboardingIntention::Terminal
             );
             if is_terminal {
-                (3, 4)
+                (2, 3)
             } else {
-                (4, 5)
+                (3, 4)
             }
         } else {
             (0, 4)
@@ -567,40 +568,13 @@ impl ThemePickerSlide {
             ..Default::default()
         };
 
-        // The disclaimer block is only rendered on the Terminal-without-Drive
-        // path (see `render_theme_picker_content`), where AI is not part of the
-        // selected onboarding settings; skip the "and AI features" wording.
-        let privacy_line = Flex::row()
-            .with_child(
-                ui_builder
-                    .span("If you'd like to opt out of analytics, you can adjust your ")
-                    .with_style(disclaimer_styles)
-                    .build()
-                    .finish(),
-            )
-            .with_child(
-                ui_builder
-                    .link(
-                        "Privacy Settings".into(),
-                        None,
-                        Some(Box::new(|ctx| {
-                            ctx.dispatch_typed_action(
-                                ThemePickerSlideAction::PrivacySettingsClicked,
-                            );
-                        })),
-                        self.privacy_settings_mouse_state.clone(),
-                    )
-                    .soft_wrap(false)
-                    .with_style(link_styles)
-                    .build()
-                    .finish(),
-            )
-            .finish();
-
         let tos_line = Flex::row()
             .with_child(
                 ui_builder
-                    .span("By continuing, you agree to Warp's ")
+                    .span(format!(
+                        "By continuing, you agree to {}'s ",
+                        ChannelState::product_name()
+                    ))
                     .with_style(disclaimer_styles)
                     .build()
                     .finish(),
@@ -620,12 +594,50 @@ impl ThemePickerSlide {
             )
             .finish();
 
+        let show_privacy_settings_link = ChannelState::product_name() != "Slipstream";
+        let mut disclaimer_column = Flex::column()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Start);
+        if show_privacy_settings_link {
+            // The disclaimer block is only rendered on the Terminal-without-Drive
+            // path (see `render_theme_picker_content`), where AI is not part of the
+            // selected onboarding settings; skip the "and AI features" wording.
+            let privacy_line = Flex::row()
+                .with_child(
+                    ui_builder
+                        .span("If you'd like to opt out of analytics, you can adjust your ")
+                        .with_style(disclaimer_styles)
+                        .build()
+                        .finish(),
+                )
+                .with_child(
+                    ui_builder
+                        .link(
+                            "Privacy Settings".into(),
+                            None,
+                            Some(Box::new(|ctx| {
+                                ctx.dispatch_typed_action(
+                                    ThemePickerSlideAction::PrivacySettingsClicked,
+                                );
+                            })),
+                            self.privacy_settings_mouse_state.clone(),
+                        )
+                        .soft_wrap(false)
+                        .with_style(link_styles)
+                        .build()
+                        .finish(),
+                )
+                .finish();
+            disclaimer_column = disclaimer_column.with_child(privacy_line);
+        }
+
         Container::new(
-            Flex::column()
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_cross_axis_alignment(CrossAxisAlignment::Start)
-                .with_child(privacy_line)
-                .with_child(Container::new(tos_line).with_margin_top(8.).finish())
+            disclaimer_column
+                .with_child(
+                    Container::new(tos_line)
+                        .with_margin_top(if show_privacy_settings_link { 8. } else { 0. })
+                        .finish(),
+                )
                 .finish(),
         )
         .with_margin_top(24.)
@@ -730,7 +742,9 @@ impl TypedActionView for ThemePickerSlide {
                 self.next(ctx);
             }
             ThemePickerSlideAction::PrivacySettingsClicked => {
-                ctx.emit(ThemePickerSlideEvent::PrivacySettingsRequested);
+                if ChannelState::product_name() != "Slipstream" {
+                    ctx.emit(ThemePickerSlideEvent::PrivacySettingsRequested);
+                }
             }
         }
     }

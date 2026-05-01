@@ -1,4 +1,5 @@
 use crate::{
+    ChannelState,
     appearance::Appearance,
     auth::auth_view_shared_helpers::render_offline_contents,
     editor::{EditorView, InteractionState, SingleLineEditorOptions, TextColors, TextOptions},
@@ -14,11 +15,14 @@ use crate::{
 
 use anyhow::anyhow;
 use lazy_static::lazy_static;
+use onboarding::drive_name;
 use warp_core::{
     features::FeatureFlag,
     ui::{appearance::DEFAULT_COMMAND_PALETTE_FONT_SIZE, builder::UiBuilder},
 };
 use warpui::{
+    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, UpdateModel, View,
+    ViewContext, ViewHandle,
     accessibility::{AccessibilityContent, WarpA11yRole},
     clipboard::ClipboardContent,
     color::ColorU,
@@ -29,19 +33,17 @@ use warpui::{
     fonts::Weight,
     keymap::FixedBinding,
     ui_components::components::{Coords, UiComponent, UiComponentStyles},
-    AppContext, Element, Entity, FocusContext, SingletonEntity, TypedActionView, UpdateModel, View,
-    ViewContext, ViewHandle,
 };
 
 use super::{
+    AuthStateProvider,
     auth_manager::AuthManager,
     auth_view_modal::AuthViewVariant,
     auth_view_shared_helpers::{
-        action_button_color_and_variant, render_offline_info_overlay_body, render_overlay,
-        render_privacy_settings_overlay_body, render_square_logo, PrivacySettingsActions,
-        PrivacySettingsHandles,
+        PrivacySettingsActions, PrivacySettingsHandles, action_button_color_and_variant,
+        render_offline_info_overlay_body, render_overlay, render_privacy_settings_overlay_body,
+        render_square_logo,
     },
-    AuthStateProvider,
 };
 
 const TOS_URL: &str = "https://www.warp.dev/terms-of-service";
@@ -332,7 +334,10 @@ impl AuthViewBody {
             Flex::row()
                 .with_child(
                     ui_builder
-                        .span("By continuing, you agree to Warp's ")
+                        .span(format!(
+                            "By continuing, you agree to {}'s ",
+                            ChannelState::product_name()
+                        ))
                         .with_style(disclaimer_styles)
                         .build()
                         .finish(),
@@ -607,16 +612,18 @@ impl AuthViewBody {
         };
 
         let text = match self.variant {
-            AuthViewVariant::RequireLoginCloseable  => {
-                "In order to use Warp’s AI features or collaborate with others, please create an account."
-            }
-            AuthViewVariant::HitDriveObjectLimitCloseable => {
-                "In order to create more objects in Warp Drive, please create an account."
-            }
+            AuthViewVariant::RequireLoginCloseable => format!(
+                "In order to use {}'s AI features or collaborate with others, please create an account.",
+                ChannelState::product_name()
+            ),
+            AuthViewVariant::HitDriveObjectLimitCloseable => format!(
+                "In order to create more objects in {}, please create an account.",
+                drive_name()
+            ),
             AuthViewVariant::ShareRequirementCloseable => {
-                "In order to share, please create an account."
+                "In order to share, please create an account.".to_string()
             }
-            _ => "",
+            _ => String::new(),
         };
 
         Container::new(
@@ -640,10 +647,12 @@ impl AuthViewBody {
         };
 
         let text = match self.variant {
-            AuthViewVariant::Initial => "Welcome to Warp!",
+            AuthViewVariant::Initial => format!("Welcome to {}!", ChannelState::product_name()),
             AuthViewVariant::RequireLoginCloseable
             | AuthViewVariant::HitDriveObjectLimitCloseable
-            | AuthViewVariant::ShareRequirementCloseable => "Sign up for Warp",
+            | AuthViewVariant::ShareRequirementCloseable => {
+                format!("Sign up for {}", ChannelState::product_name())
+            }
         };
 
         ui_builder
@@ -998,7 +1007,7 @@ impl View for AuthViewBody {
 
     fn accessibility_contents(&self, _: &AppContext) -> Option<AccessibilityContent> {
         Some(AccessibilityContent::new(
-            "Welcome to Warp!",
+            format!("Welcome to {}!", ChannelState::product_name()),
             "Press enter to open your browser to Sign Up or Sign In.",
             WarpA11yRole::HelpRole,
         ))
