@@ -6,6 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use chrono::{Duration as ChronoDuration, Local};
 use itertools::Itertools;
 use parking_lot::Mutex;
 use settings::Setting as _;
@@ -33,10 +34,13 @@ use crate::{
     },
     settings::WarpPromptSeparator,
     terminal::{
+        event::{AfterBlockCompletedEvent, BlockType, UserBlockCompleted},
         model::{
-            block::BlockMetadata,
+            block::{BlockMetadata, SerializedBlock},
             session::{CommandExecutor, ExecuteCommandOptions, SessionId, SessionInfo, Sessions},
+            terminal_model::BlockIndex,
         },
+        model_events::ModelEvent,
         session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings},
         shell::Shell,
         view::PromptPosition,
@@ -48,6 +52,43 @@ use repo_metadata::DirectoryWatcher;
 use warp_completer::completer::{CommandExitStatus, CommandOutput};
 
 use super::{ChipUpdateStatus, CurrentPrompt, PromptContext};
+
+fn user_block_completed(
+    command: &str,
+    start_offset_seconds: Option<i64>,
+    completed_offset_seconds: Option<i64>,
+) -> UserBlockCompleted {
+    let now = Local::now();
+    let mut serialized_block =
+        SerializedBlock::new_for_test(command.as_bytes().to_vec(), Vec::new());
+    serialized_block.start_ts =
+        start_offset_seconds.map(|offset| now + ChronoDuration::seconds(offset));
+    serialized_block.completed_ts =
+        completed_offset_seconds.map(|offset| now + ChronoDuration::seconds(offset));
+
+    UserBlockCompleted {
+        index: BlockIndex::zero(),
+        serialized_block: Arc::new(serialized_block),
+        command: command.to_string(),
+        command_with_obfuscated_secrets: command.to_string(),
+        output_truncated: String::new(),
+        output_truncated_with_obfuscated_secrets: String::new(),
+        was_part_of_agent_interaction: false,
+        started_at: None,
+        num_output_lines: 0,
+        num_output_lines_truncated: 0,
+    }
+}
+
+fn after_user_block_completed(block: UserBlockCompleted) -> ModelEvent {
+    ModelEvent::AfterBlockCompleted(AfterBlockCompletedEvent {
+        command_finished_to_precmd_delay: None,
+        block_type: BlockType::User(block),
+        num_secrets_obfuscated: 0,
+        cloud_workflow_id: None,
+        cloud_env_var_collection_id: None,
+    })
+}
 
 #[test]
 fn test_context_menu_items() {
@@ -162,6 +203,122 @@ fn test_prompt_to_string() {
             // Components should be in order, and missing components should be skipped.
             assert_eq!(prompt_string, "user /path/to/dir git:(my-branch)");
         })
+    });
+}
+
+#[test]
+fn test_last_command_runtime_chip_updates_from_completed_user_block() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            Prompt::mock_with(
+                [ContextChipKind::LastCommandRuntime],
+                false,
+                WarpPromptSeparator::None,
+            )
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |current_prompt, ctx| {
+            current_prompt.update_states_with_new_context(ctx);
+            assert_eq!(
+                current_prompt.latest_chip_value(&ContextChipKind::LastCommandRuntime),
+                None
+            );
+
+            let event =
+                after_user_block_completed(user_block_completed("sleep 132", Some(0), Some(132)));
+            current_prompt.handle_model_event(&event, ctx);
+
+            assert_eq!(
+                current_prompt
+                    .latest_chip_value(&ContextChipKind::LastCommandRuntime)
+                    .and_then(|value| value.as_text()),
+                Some("2m12s")
+            );
+        });
+    });
+}
+
+#[test]
+fn test_last_command_runtime_chip_ignores_empty_command_and_clears_invalid_duration() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(|_| {
+            Prompt::mock_with(
+                [ContextChipKind::LastCommandRuntime],
+                false,
+                WarpPromptSeparator::None,
+            )
+        });
+        app.add_singleton_model(SessionSettings::new_with_defaults);
+        app.add_singleton_model(|_ctx| {
+            settings::PublicPreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+        app.add_singleton_model(|_| {
+            settings::PrivatePreferences::new(
+                Box::<user_preferences::in_memory::InMemoryPreferences>::default(),
+            )
+        });
+
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
+
+        current_prompt.update(&mut app, |current_prompt, ctx| {
+            current_prompt.update_states_with_new_context(ctx);
+
+            let valid_event =
+                after_user_block_completed(user_block_completed("echo ok", Some(0), Some(12)));
+            current_prompt.handle_model_event(&valid_event, ctx);
+            assert_eq!(
+                current_prompt
+                    .latest_chip_value(&ContextChipKind::LastCommandRuntime)
+                    .and_then(|value| value.as_text()),
+                Some("12s")
+            );
+
+            let empty_event =
+                after_user_block_completed(user_block_completed("   ", Some(0), Some(132)));
+            current_prompt.handle_model_event(&empty_event, ctx);
+            assert_eq!(
+                current_prompt
+                    .latest_chip_value(&ContextChipKind::LastCommandRuntime)
+                    .and_then(|value| value.as_text()),
+                Some("12s")
+            );
+
+            let missing_duration_event =
+                after_user_block_completed(user_block_completed("echo missing", None, Some(132)));
+            current_prompt.handle_model_event(&missing_duration_event, ctx);
+            assert_eq!(
+                current_prompt.latest_chip_value(&ContextChipKind::LastCommandRuntime),
+                None
+            );
+
+            let negative_duration_event = after_user_block_completed(user_block_completed(
+                "echo negative",
+                Some(132),
+                Some(0),
+            ));
+            current_prompt.handle_model_event(&negative_duration_event, ctx);
+            assert_eq!(
+                current_prompt.latest_chip_value(&ContextChipKind::LastCommandRuntime),
+                None
+            );
+        });
     });
 }
 
