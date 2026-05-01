@@ -1,7 +1,0 @@
-dist/
-node_modules/
-.env
-*.sqlite
-*.sqlite-shm
-*.sqlite-wal
-npm-debug.log*
