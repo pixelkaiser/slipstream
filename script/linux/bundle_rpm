@@ -23,6 +23,11 @@ else
 fi
 REPO_NAME="warpdotdev$CHANNEL_SUFFIX"
 
+if [ "$RELEASE_CHANNEL" = "oss" ]; then
+  CHANNEL_SUFFIX=""
+  REPO_NAME="slipstream"
+fi
+
 # On Linux, we keep the `-stable` suffix for stable to avoid package conflicts.
 # The binary name is still `oz`, and the repo name is still `warpdotdev`.
 if [ "$ARTIFACT" = "cli" -a "$RELEASE_CHANNEL" = "stable" ]; then
@@ -30,7 +35,9 @@ if [ "$ARTIFACT" = "cli" -a "$RELEASE_CHANNEL" = "stable" ]; then
 fi
 
 ARTIFACT="${ARTIFACT:-app}"
-if [ "$ARTIFACT" = "app" ]; then
+if [ "$RELEASE_CHANNEL" = "oss" ]; then
+  PACKAGE_NAME="slipstream"
+elif [ "$ARTIFACT" = "app" ]; then
   PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
 elif [ "$ARTIFACT" = "cli" ]; then
   PACKAGE_NAME="oz$CHANNEL_SUFFIX"
@@ -66,20 +73,73 @@ rm -rf "$RPMBUILD_DIR"
 mkdir -p "$RPMBUILD_DIR"/{SPEC,RPMS}
 
 # Move the RPM-specific package metadata into the package directory.
-VERSION="$GIT_RELEASE_TAG"
+VERSION="$(echo "$GIT_RELEASE_TAG" | sed -E "s/^v//; s/([a-z]+)_/\1./")"
 RELEASE="1"
-sed \
-    "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; \
-     s#@@BINARY_NAME@@#$BINARY_NAME#g; \
-     s#@@VERSION@@#$VERSION#g; \
-     s#@@RELEASE@@#$RELEASE#g; \
-     s#@@ARCH@@#$ARCH#g; \
-     s#@@WORKSPACEROOT@@#$WORKSPACE_ROOT_DIR#g; \
-     s#@@BUNDLEID@@#$BUNDLE_ID#g; \
-     s#@@REPO_NAME@@#$REPO_NAME#g; \
-     s#@@RELEASE_CHANNEL@@#$RELEASE_CHANNEL#g" \
-    < "$WORKSPACE_ROOT_DIR/resources/linux/rpm/$ARTIFACT/warp.spec.template" \
-    > "$RPMBUILD_DIR/SPEC/warp.spec"
+if [ "$RELEASE_CHANNEL" = "oss" ]; then
+  if [ "$ARTIFACT" = "app" ]; then
+    RPM_REQUIRES="Requires: 	 xdg-utils, (libvulkan.so.1()(64bit) or libEGL.so.1()(64bit)), (libwayland-egl.so.1()(64bit) if (libwayland-client.so.0()(64bit) and libEGL.so.1()(64bit))), libxcb.so.1()(64bit), libxkbcommon-x11.so.0()(64bit), libX11.so.6()(64bit), libX11-xcb.so.1()(64bit), libXcursor.so.1()(64bit), libXi.so.6()(64bit)
+Recommends:  libgallium_dri.so()(64bit), adwaita-icon-theme"
+    RPM_FILES_EXTRA="%{_datadir}/applications/$BUNDLE_ID.desktop
+%{_datadir}/icons/hicolor"
+  else
+    RPM_REQUIRES="Requires: 	 zlib"
+    RPM_FILES_EXTRA=""
+  fi
+  cat > "$RPMBUILD_DIR/SPEC/warp.spec" << EOF
+Summary:     Slipstream, the local-first OSS terminal
+Name:        $PACKAGE_NAME
+Version:     $VERSION
+Release:     $RELEASE
+Vendor:      Slipstream contributors
+Url:         https://github.com/pixelkaiser/slipstream
+Packager:    Slipstream contributors <noreply@github.com>
+License:     See bundled licenses
+
+$RPM_REQUIRES
+
+prefix:      /opt
+%define _build_id_links none
+
+%description
+Slipstream is a local-first distribution of Warp OSS focused on local inference.
+
+%build
+
+%install
+mkdir -p %{buildroot}
+OPT_DIR="%{prefix}/slipstream" $WORKSPACE_ROOT_DIR/script/linux/bundle_install %{buildroot}
+mkdir -p %{buildroot}%{_bindir}
+ln -s %{prefix}/slipstream/$BINARY_NAME %{buildroot}%{_bindir}/slipstream
+
+%files
+%{prefix}/slipstream
+%{_bindir}/slipstream
+$RPM_FILES_EXTRA
+
+%post
+if hash update-desktop-database 2>/dev/null; then
+	update-desktop-database
+fi
+
+%postun
+if hash update-desktop-database 2>/dev/null; then
+	update-desktop-database
+fi
+EOF
+else
+  sed \
+      "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; \
+       s#@@BINARY_NAME@@#$BINARY_NAME#g; \
+       s#@@VERSION@@#$VERSION#g; \
+       s#@@RELEASE@@#$RELEASE#g; \
+       s#@@ARCH@@#$ARCH#g; \
+       s#@@WORKSPACEROOT@@#$WORKSPACE_ROOT_DIR#g; \
+       s#@@BUNDLEID@@#$BUNDLE_ID#g; \
+       s#@@REPO_NAME@@#$REPO_NAME#g; \
+       s#@@RELEASE_CHANNEL@@#$RELEASE_CHANNEL#g" \
+      < "$WORKSPACE_ROOT_DIR/resources/linux/rpm/$ARTIFACT/warp.spec.template" \
+      > "$RPMBUILD_DIR/SPEC/warp.spec"
+fi
 
 # Build the actual package.
 fakeroot rpmbuild -v -bb "$RPMBUILD_DIR/SPEC/warp.spec" --target="$ARCH" --define "_topdir $RPMBUILD_DIR"
@@ -90,7 +150,7 @@ cp "$RPMBUILD_DIR/RPMS/$ARCH/$RPM_NAME" "$OUT_DIR"
 
 # If we're running on GitHub, sign the package using our signing key that
 # should have already been added to the gpg-agent with a preset passphrase.
-if [ "${GITHUB_ACTIONS}" == "true" ]; then
+if [ "${GITHUB_ACTIONS}" == "true" ] && [ "$RELEASE_CHANNEL" != "oss" ]; then
   # Import our signing key's public key into rpm so the signature can be
   # verified.
   sudo rpm --import https://releases.warp.dev/linux/keys/warp.asc

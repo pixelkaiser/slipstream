@@ -22,7 +22,11 @@ if [ "$ARTIFACT" = "cli" ]; then
 else
   CHANNEL_SUFFIX="${BINARY_NAME#warp}"
 fi
-PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
+if [ "$RELEASE_CHANNEL" = "oss" ]; then
+  PACKAGE_NAME="slipstream"
+else
+  PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
+fi
 
 
 # Adding NO_STRIP to stop linuxdeploy from attempting to strip symbols
@@ -52,7 +56,11 @@ mkdir -p "$STAGE_DIR"
 
 # Populate the directory with the package contents, in the appropriate
 # locations.
-OPT_DIR="/opt/warpdotdev/$PACKAGE_NAME"
+if [ "$RELEASE_CHANNEL" = "oss" ]; then
+  OPT_DIR="/opt/slipstream"
+else
+  OPT_DIR="/opt/warpdotdev/$PACKAGE_NAME"
+fi
 source "$WORKSPACE_ROOT_DIR/script/linux/bundle_install" "$STAGE_DIR"
 
 # Modify the "Exec=" line in the .desktop file to use the name of the installed
@@ -76,6 +84,11 @@ echo "Running linuxdeploy to create the AppImage"
 export WARP_BINARY_NAME="$BINARY_NAME"
 export WARP_PACKAGE_NAME="$PACKAGE_NAME"
 export WARP_BUNDLED_RESOURCES_DIR="${STAGE_DIR}${OPT_DIR}/resources"
+if [ "$RELEASE_CHANNEL" = "oss" ]; then
+  export WARP_APPDIR_OPT_SUBDIR="slipstream"
+else
+  unset WARP_APPDIR_OPT_SUBDIR
+fi
 export PATH="$WORKSPACE_ROOT_DIR/script/linux:$PATH"
 linuxdeploy \
   --appdir "$APP_DIR" \

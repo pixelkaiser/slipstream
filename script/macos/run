@@ -24,9 +24,11 @@ cd "${REPO_ROOT}"
 if [ "$WARP_CHANNEL" = "local" ]; then
     WARP_APP_PATH="target/debug/bundle/osx/WarpLocal.app"
     WARP_SCHEME_NAME="warplocal"
+    WARP_LOG_NAME="warp_local.log"
 else
-    WARP_APP_PATH="target/debug/bundle/osx/WarpOss.app"
-    WARP_SCHEME_NAME="warposs"
+    WARP_APP_PATH="target/debug/bundle/osx/Slipstream.app"
+    WARP_SCHEME_NAME="slipstream"
+    WARP_LOG_NAME="slipstream.log"
 fi
 DONT_OPEN=false
 # Launches the binary with "open", meaning the Warp process is
@@ -62,7 +64,7 @@ while (( "$#" )); do
       if [ "$WARP_CHANNEL" = "local" ]; then
           WARP_APP_PATH="target/release/bundle/osx/WarpLocal.app"
       else
-          WARP_APP_PATH="target/release/bundle/osx/WarpOss.app"
+          WARP_APP_PATH="target/release/bundle/osx/Slipstream.app"
       fi
       PARAMS="$PARAMS $1"
       shift
@@ -73,7 +75,7 @@ while (( "$#" )); do
       if [ "$WARP_CHANNEL" = "local" ]; then
           WARP_APP_PATH="target/${PROFILE}/bundle/osx/WarpLocal.app"
       else
-          WARP_APP_PATH="target/${PROFILE}/bundle/osx/WarpOss.app"
+          WARP_APP_PATH="target/${PROFILE}/bundle/osx/Slipstream.app"
       fi
       PARAMS="$PARAMS --profile $PROFILE"
       ;;
@@ -164,7 +166,7 @@ if [ "$DONT_OPEN" = false ] ; then
     if  [ "$OPEN_WITH_LAUNCHD" = true ]; then
         echo "Launching with MacOS application launcher"
         PATH="" /usr/bin/open "./$WARP_APP_PATH"
-        tail -f ~/Library/Logs/warp_local.log
+        tail -f ~/Library/Logs/"$WARP_LOG_NAME"
     else
         echo "Opening app at ./$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME"
         "./$WARP_APP_PATH/Contents/MacOS/$WARP_BIN_NAME" "${WARP_ARGS[@]}"

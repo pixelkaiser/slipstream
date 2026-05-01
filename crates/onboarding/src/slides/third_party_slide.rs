@@ -17,9 +17,9 @@ use warpui::{
 
 use super::toggle_card::{render_toggle_card, ToggleCardSpec};
 use super::OnboardingSlide;
+use crate::OnboardingIntention;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
-use crate::OnboardingIntention;
 
 /// Which setting card is currently expanded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -299,7 +299,14 @@ impl ThirdPartySlide {
         );
 
         let is_terminal = matches!(intention, OnboardingIntention::Terminal);
-        let (step_index, step_count) = if is_terminal { (2, 4) } else { (3, 5) };
+        let (step_index, step_count) =
+            if warp_core::features::FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
+                if is_terminal { (1, 3) } else { (2, 4) }
+            } else if is_terminal {
+                (2, 4)
+            } else {
+                (3, 5)
+            };
         bottom_nav::onboarding_bottom_nav(
             appearance,
             step_index,

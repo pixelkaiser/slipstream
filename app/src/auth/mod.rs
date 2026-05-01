@@ -23,6 +23,7 @@ pub use auth_manager::AuthManager;
 pub use auth_state::AuthStateProvider;
 use itertools::Itertools;
 pub use login_failure_notification::LoginFailureReason;
+use onboarding::drive_name;
 pub use user_uid::UserUid;
 use warp_core::user_preferences::GetUserPreferences as _;
 use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
@@ -43,7 +44,7 @@ use crate::server::sync_queue::SyncQueue;
 use crate::server::telemetry::{PaletteSource, TelemetryEvent};
 use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::settings::{
-    CloudPreferencesSettings, PrivacySettings, CRASH_REPORTING_ENABLED_DEFAULTS_KEY,
+    CRASH_REPORTING_ENABLED_DEFAULTS_KEY, CloudPreferencesSettings, PrivacySettings,
     TELEMETRY_ENABLED_DEFAULTS_KEY,
 };
 use crate::terminal::general_settings::GeneralSettings;
@@ -159,8 +160,9 @@ pub fn maybe_log_out(app: &mut AppContext) {
                 "object"
             };
             info_text_vec.push(format!(
-                "You have {num_unsaved_objects} unsynced Warp Drive {plural}. \
-            Logging out will cause you to lose the {plural}."
+                "You have {num_unsaved_objects} unsynced {} {plural}. \
+            Logging out will cause you to lose the {plural}.",
+                drive_name()
             ));
         }
 
@@ -189,9 +191,11 @@ pub fn maybe_log_out(app: &mut AppContext) {
             button_data,
             move |ctx| {
                 GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
-                    report_if_error!(general_settings
-                        .show_warning_before_quitting
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        general_settings
+                            .show_warning_before_quitting
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             },
         );

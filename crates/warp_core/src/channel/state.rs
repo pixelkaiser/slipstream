@@ -36,7 +36,7 @@ pub struct ChannelState {
 impl ChannelState {
     pub fn init() -> Self {
         let channel = Channel::Oss;
-        let app_id = AppId::new("dev", "warp", "WarpOss");
+        let app_id = AppId::new("com", "slipstream", "app");
         Self {
             channel,
             additional_features: Default::default(),
@@ -325,6 +325,14 @@ impl ChannelState {
         CHANNEL_STATE.lock().channel
     }
 
+    pub fn app_display_name() -> &'static str {
+        Self::channel().app_display_name()
+    }
+
+    pub fn product_name() -> &'static str {
+        Self::channel().product_name()
+    }
+
     #[cfg(feature = "test-util")]
     pub fn app_version() -> Option<&'static str> {
         let version = APP_VERSION.lock();
@@ -392,7 +400,7 @@ impl ChannelState {
             // Dummy value--integration tests shouldn't support URL schemes.
             Channel::Integration => "warpintegration",
             Channel::Local => "warplocal",
-            Channel::Oss => "warposs",
+            Channel::Oss => "slipstream",
         }
     }
 }
