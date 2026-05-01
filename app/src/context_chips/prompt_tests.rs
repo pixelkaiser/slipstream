@@ -8,6 +8,7 @@ use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{
     context_chips::{
+        available_chips,
         prompt::{PromptConfiguration, PromptSelection},
         ContextChipKind,
     },
@@ -68,6 +69,14 @@ fn test_prompt_config_after_nomalization() {
         normalized.chip_kinds(),
         vec![ContextChipKind::ShellGitBranch]
     );
+}
+
+#[test]
+fn test_last_command_runtime_chip_is_available_but_not_default() {
+    assert!(available_chips().contains(&ContextChipKind::LastCommandRuntime));
+    assert!(!PromptConfiguration::default_prompt()
+        .chip_kinds()
+        .contains(&ContextChipKind::LastCommandRuntime));
 }
 
 #[test]

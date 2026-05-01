@@ -55,6 +55,26 @@ pub fn human_readable_precise_duration(duration: Duration) -> String {
     format!("{} ms", duration.num_milliseconds())
 }
 
+/// Format a non-negative duration as a compact h/m/s string for tight UI surfaces.
+pub fn format_compact_duration_hms(duration: Duration) -> Option<String> {
+    if duration < Duration::zero() {
+        return None;
+    }
+
+    let total_seconds = duration.num_seconds();
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+
+    if hours > 0 {
+        Some(format!("{hours}h{minutes:02}m{seconds:02}s"))
+    } else if minutes > 0 {
+        Some(format!("{minutes}m{seconds:02}s"))
+    } else {
+        Some(format!("{seconds}s"))
+    }
+}
+
 fn format_sigfigs(num: f64, sigfigs: usize) -> String {
     let a = num.abs();
     let precision = if a > 1. {
