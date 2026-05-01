@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 cd "$REPO_ROOT"
 
 APP_PATH=""
-LOG_PATH="$HOME/Library/Logs/warp-oss.log"
+LOG_PATH="$HOME/Library/Logs/slipstream.log"
 TIMEOUT_SECONDS=15
 TERMINATE_EXISTING=false
 OPEN_NEW_TAB=true
@@ -22,11 +22,11 @@ Usage: script/macos/repro_launchd_shell_bootstrap [options]
 
 Options:
   --app-path PATH          Existing .app bundle to launch.
-                           Defaults to the first existing WarpOss bundle in:
-                             target/release-lto/bundle/osx/WarpOss.app
-                             target/release/bundle/osx/WarpOss.app
-                             target/debug/bundle/osx/WarpOss.app
-  --log PATH               App log to inspect. Defaults to ~/Library/Logs/warp-oss.log.
+                           Defaults to the first existing Slipstream bundle in:
+                             target/release-lto/bundle/osx/Slipstream.app
+                             target/release/bundle/osx/Slipstream.app
+                             target/debug/bundle/osx/Slipstream.app
+  --log PATH               App log to inspect. Defaults to ~/Library/Logs/slipstream.log.
   --timeout SECONDS        Seconds to wait for a bootstrap marker. Defaults to 15.
   --terminate-existing     Kill existing processes for this bundle executable before launch.
   --no-open-new-tab        Do not send the app a new-tab URI after launch.
@@ -80,9 +80,9 @@ done
 
 if [[ -z "$APP_PATH" ]]; then
   for candidate in \
-    target/release-lto/bundle/osx/WarpOss.app \
-    target/release/bundle/osx/WarpOss.app \
-    target/debug/bundle/osx/WarpOss.app
+    target/release-lto/bundle/osx/Slipstream.app \
+    target/release/bundle/osx/Slipstream.app \
+    target/debug/bundle/osx/Slipstream.app
   do
     if [[ -d "$candidate" ]]; then
       APP_PATH="$candidate"
@@ -92,7 +92,7 @@ if [[ -z "$APP_PATH" ]]; then
 fi
 
 if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
-  echo "Could not find an existing WarpOss.app bundle. Pass --app-path." >&2
+  echo "Could not find an existing Slipstream.app bundle. Pass --app-path." >&2
   exit 1
 fi
 

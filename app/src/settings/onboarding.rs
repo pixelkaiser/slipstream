@@ -1,6 +1,7 @@
 use onboarding::slides::{AgentAutonomy, AgentDevelopmentSettings};
 use onboarding::{SelectedSettings, SessionDefault, UICustomizationSettings};
 use settings::Setting as _;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity as _};
 
@@ -16,14 +17,14 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 /// Applies onboarding settings based on the user's selected mode.
 ///
 /// `has_account` indicates whether the user has (or is creating) a real Warp
-/// account. Warp's AI features run on a Warp account, so agent intent only
-/// enables AI when `has_account` is true; skipping login leaves AI off.
+/// account. Cloud Warp AI runs on a Warp account, so agent intent only enables
+/// AI when `has_account` is true; Slipstream keeps AI local and enabled.
 pub fn apply_onboarding_settings(
     selected_settings: &SelectedSettings,
     has_account: bool,
     app: &mut AppContext,
 ) {
-    let is_ai_enabled = match selected_settings {
+    let mut is_ai_enabled = match selected_settings {
         SelectedSettings::AgentDrivenDevelopment {
             agent_settings,
             ui_customization,
@@ -63,6 +64,9 @@ pub fn apply_onboarding_settings(
             }
         }
     };
+    if ChannelState::product_name() == "Slipstream" {
+        is_ai_enabled = true;
+    }
 
     if FeatureFlag::OpenWarpNewSettingsModes.is_enabled() {
         AISettings::handle(app).update(app, |settings, ctx| {

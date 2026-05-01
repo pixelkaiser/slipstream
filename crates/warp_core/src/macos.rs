@@ -2,7 +2,9 @@ use anyhow::Result;
 use objc2_foundation::NSBundle;
 
 /// Apple Developer Team ID used for code signing and validation.
-pub const APPLE_TEAM_ID: &str = "2BBY89MBSN";
+pub fn apple_team_id() -> &'static str {
+    option_env!("WARP_APPLE_TEAM_ID").unwrap_or("2BBY89MBSN")
+}
 
 /// Get the path to the macOS `.app` bundle.
 pub fn get_bundle_path() -> Result<String> {

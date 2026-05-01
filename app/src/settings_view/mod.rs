@@ -299,7 +299,13 @@ impl Display for SettingsSection {
             SettingsSection::MCPServers => write!(f, "MCP Servers"),
             SettingsSection::Scripting => write!(f, "Scripting"),
             SettingsSection::WarpDrive => write!(f, "Warp Drive"),
-            SettingsSection::WarpAgent => write!(f, "Warp Agent"),
+            SettingsSection::WarpAgent => {
+                if ChannelState::product_name() == "Slipstream" {
+                    write!(f, "Agent")
+                } else {
+                    write!(f, "Warp Agent")
+                }
+            }
             SettingsSection::AgentProfiles => write!(f, "Profiles"),
             SettingsSection::AgentMCPServers => write!(f, "MCP servers"),
             SettingsSection::Knowledge => write!(f, "Knowledge"),
@@ -409,7 +415,7 @@ impl FromStr for SettingsSection {
             "Warpify" => Ok(Self::Warpify),
             "WarpDrive" | "Warp Drive" => Ok(Self::WarpDrive),
             // This page was called "Oz" at one point, keep for backward compatibility.
-            "Oz" | "Warp Agent" => Ok(Self::WarpAgent),
+            "Oz" | "Warp Agent" | "Slipstream Agent" | "Agent" => Ok(Self::WarpAgent),
             "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
             "MCP servers" | "AgentMCPServers" => Ok(Self::AgentMCPServers),
             "Knowledge" => Ok(Self::Knowledge),

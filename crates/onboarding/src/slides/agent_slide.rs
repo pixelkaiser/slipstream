@@ -1,6 +1,7 @@
 use ai::LLMId;
 use pathfinder_color::ColorU;
 use ui_components::{button, Component as _, Options as _};
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
@@ -223,7 +224,10 @@ impl AgentSlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph("Customize your Warp Agent")
+            .paragraph(format!(
+                "Customize your {} Agent",
+                ChannelState::product_name()
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),

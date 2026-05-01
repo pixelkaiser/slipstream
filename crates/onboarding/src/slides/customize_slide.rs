@@ -1,4 +1,5 @@
 use ui_components::{button, Component as _, Options as _};
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
@@ -21,7 +22,7 @@ use super::OnboardingSlide;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel, UICustomizationSettings};
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::visuals::{intention_terminal_visual, intention_visual};
-use crate::OnboardingIntention;
+use crate::{drive_name, OnboardingIntention};
 
 /// Which setting card is currently selected (expanded).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,7 +148,7 @@ impl CustomizeUISlide {
     fn render_header(&self, appearance: &Appearance) -> Box<dyn Element> {
         let title = appearance
             .ui_builder()
-            .paragraph("Customize your Warp")
+            .paragraph(format!("Customize your {}", ChannelState::product_name()))
             .with_style(UiComponentStyles {
                 font_size: Some(36.),
                 font_weight: Some(Weight::Medium),
@@ -316,7 +317,7 @@ impl CustomizeUISlide {
             });
 
             chips.push(ChipSpec {
-                label: "Warp Drive",
+                label: drive_name(),
                 is_enabled: ui.show_warp_drive,
                 mouse_state: self.chip_warp_drive_mouse.clone(),
                 on_click: Box::new(|ctx, _, _| {
@@ -540,24 +541,60 @@ impl CustomizeUISlide {
                     let chip = hovered_chip.unwrap_or(default_chip);
                     if is_agent {
                         match (chip, vertical) {
-                            (ToolsPanelSubSetting::ConversationHistory, true) => "async/png/onboarding/agent_intention/customize_conversation_vertical.png",
-                            (ToolsPanelSubSetting::ConversationHistory, false) => "async/png/onboarding/agent_intention/customize_conversation_horizontal.png",
-                            (ToolsPanelSubSetting::ProjectExplorer, true) => "async/png/onboarding/agent_intention/customize_fileexplorer_vertical.png",
-                            (ToolsPanelSubSetting::ProjectExplorer, false) => "async/png/onboarding/agent_intention/customize_fileexplorer_horizontal.png",
-                            (ToolsPanelSubSetting::GlobalSearch, true) => "async/png/onboarding/agent_intention/customize_filesearch_vertical.png",
-                            (ToolsPanelSubSetting::GlobalSearch, false) => "async/png/onboarding/agent_intention/customize_filesearch_horizontal.png",
-                            (ToolsPanelSubSetting::WarpDrive, true) => "async/png/onboarding/agent_intention/customize_warpdrive_vertical.png",
-                            (ToolsPanelSubSetting::WarpDrive, false) => "async/png/onboarding/agent_intention/customize_warpdrive_horizontal.png",
+                            (ToolsPanelSubSetting::ConversationHistory, true) => {
+                                "async/png/onboarding/agent_intention/customize_conversation_vertical.png"
+                            }
+                            (ToolsPanelSubSetting::ConversationHistory, false) => {
+                                "async/png/onboarding/agent_intention/customize_conversation_horizontal.png"
+                            }
+                            (ToolsPanelSubSetting::ProjectExplorer, true) => {
+                                "async/png/onboarding/agent_intention/customize_fileexplorer_vertical.png"
+                            }
+                            (ToolsPanelSubSetting::ProjectExplorer, false) => {
+                                "async/png/onboarding/agent_intention/customize_fileexplorer_horizontal.png"
+                            }
+                            (ToolsPanelSubSetting::GlobalSearch, true) => {
+                                "async/png/onboarding/agent_intention/customize_filesearch_vertical.png"
+                            }
+                            (ToolsPanelSubSetting::GlobalSearch, false) => {
+                                "async/png/onboarding/agent_intention/customize_filesearch_horizontal.png"
+                            }
+                            (ToolsPanelSubSetting::WarpDrive, true) => {
+                                "async/png/onboarding/agent_intention/customize_warpdrive_vertical.png"
+                            }
+                            (ToolsPanelSubSetting::WarpDrive, false) => {
+                                "async/png/onboarding/agent_intention/customize_warpdrive_horizontal.png"
+                            }
                         }
                     } else {
                         // Terminal: no conversation chip; ConversationHistory falls through to file explorer.
                         match (chip, vertical) {
-                            (ToolsPanelSubSetting::ConversationHistory | ToolsPanelSubSetting::ProjectExplorer, true) => "async/png/onboarding/terminal_intention/terminal_customize_fileexplorer_vertical.png",
-                            (ToolsPanelSubSetting::ConversationHistory | ToolsPanelSubSetting::ProjectExplorer, false) => "async/png/onboarding/terminal_intention/terminal_customize_fileexplorer_horizontal.png",
-                            (ToolsPanelSubSetting::GlobalSearch, true) => "async/png/onboarding/terminal_intention/terminal_customize_filesearch_vertical.png",
-                            (ToolsPanelSubSetting::GlobalSearch, false) => "async/png/onboarding/terminal_intention/terminal_customize_filesearch_horizontal.png",
-                            (ToolsPanelSubSetting::WarpDrive, true) => "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_vertical.png",
-                            (ToolsPanelSubSetting::WarpDrive, false) => "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_horizontal.png",
+                            (
+                                ToolsPanelSubSetting::ConversationHistory
+                                | ToolsPanelSubSetting::ProjectExplorer,
+                                true,
+                            ) => {
+                                "async/png/onboarding/terminal_intention/terminal_customize_fileexplorer_vertical.png"
+                            }
+                            (
+                                ToolsPanelSubSetting::ConversationHistory
+                                | ToolsPanelSubSetting::ProjectExplorer,
+                                false,
+                            ) => {
+                                "async/png/onboarding/terminal_intention/terminal_customize_fileexplorer_horizontal.png"
+                            }
+                            (ToolsPanelSubSetting::GlobalSearch, true) => {
+                                "async/png/onboarding/terminal_intention/terminal_customize_filesearch_vertical.png"
+                            }
+                            (ToolsPanelSubSetting::GlobalSearch, false) => {
+                                "async/png/onboarding/terminal_intention/terminal_customize_filesearch_horizontal.png"
+                            }
+                            (ToolsPanelSubSetting::WarpDrive, true) => {
+                                "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_vertical.png"
+                            }
+                            (ToolsPanelSubSetting::WarpDrive, false) => {
+                                "async/png/onboarding/terminal_intention/terminal_customize_warpdrive_horizontal.png"
+                            }
                         }
                     }
                 }
@@ -565,10 +602,18 @@ impl CustomizeUISlide {
             Some(SettingCard::CodeReview) => {
                 if is_agent {
                     match (ui.show_code_review_button, vertical) {
-                        (true, true) => "async/png/onboarding/agent_intention/customize_codereview_enabled_vertical.png",
-                        (true, false) => "async/png/onboarding/agent_intention/customize_codereview_enabled_horizontal.png",
-                        (false, true) => "async/png/onboarding/agent_intention/customize_codereview_disabled_vertical.png",
-                        (false, false) => "async/png/onboarding/agent_intention/customize_codereview_disabled_horizontal.png",
+                        (true, true) => {
+                            "async/png/onboarding/agent_intention/customize_codereview_enabled_vertical.png"
+                        }
+                        (true, false) => {
+                            "async/png/onboarding/agent_intention/customize_codereview_enabled_horizontal.png"
+                        }
+                        (false, true) => {
+                            "async/png/onboarding/agent_intention/customize_codereview_disabled_vertical.png"
+                        }
+                        (false, false) => {
+                            "async/png/onboarding/agent_intention/customize_codereview_disabled_horizontal.png"
+                        }
                     }
                 } else if ui.show_code_review_button {
                     "async/png/onboarding/terminal_intention/terminal_codereview_enabled.png"

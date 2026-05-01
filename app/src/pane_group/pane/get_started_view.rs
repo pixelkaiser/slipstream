@@ -25,7 +25,7 @@ use crate::terminal::TerminalView;
 use crate::util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction};
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ToastStack, Workspace, WorkspaceAction};
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
+use crate::{send_telemetry_from_ctx, ChannelState, TelemetryEvent};
 
 pub fn init(app: &mut AppContext) {
     use warpui::keymap::macros::*;
@@ -223,7 +223,7 @@ impl GetStartedView {
                 .finish(),
                 appearance
                     .ui_builder()
-                    .paragraph("Welcome to Warp")
+                    .paragraph(format!("Welcome to {}", ChannelState::product_name()))
                     .with_style(UiComponentStyles {
                         font_size: Some(20.),
                         ..Default::default()

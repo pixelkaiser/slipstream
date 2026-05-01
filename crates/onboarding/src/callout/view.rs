@@ -1,4 +1,5 @@
 use ui_components::Component;
+use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
 use warpui_core::elements::Empty;
 use warpui_core::keymap::macros::*;
@@ -52,6 +53,14 @@ struct CheckboxOptions {
     checked: bool,
 }
 
+fn product_input_title() -> &'static str {
+    if ChannelState::product_name() == "Slipstream" {
+        "Meet the Slipstream input"
+    } else {
+        "Meet the Warp input"
+    }
+}
+
 fn get_universal_input_callout_options(
     state: UniversalInputCalloutState,
     has_project: bool,
@@ -59,7 +68,7 @@ fn get_universal_input_callout_options(
 ) -> Option<CalloutOptions> {
     match state {
         UniversalInputCalloutState::MeetInput => Some(CalloutOptions {
-            title: "Meet the Warp input",
+            title: product_input_title(),
             text: format!(
                 "Your terminal input accepts both terminal commands and agent prompts and automatically detects which you're using. Use {} to lock the input to Agent mode (natural language) or Terminal mode (commands).",
                 keybindings.toggle_input_mode
@@ -136,7 +145,8 @@ fn get_agent_modality_callout_options(
                 Some(CalloutOptions {
                     title: "You’re in terminal mode",
                     text: format!(
-                        "Run commands here, just like a regular terminal. If you type a question or task using natural language, Warp can suggest opening it in agent mode. You can always override using {}.",
+                        "Natural language input is off by default. If enabled, you can type requests in plain English and {} will autodetect queries for the agent. You can always override them using {}.",
+                        ChannelState::product_name(),
                         keybindings.toggle_input_mode
                     ),
                     step: StepStatus::new(0, total_steps),

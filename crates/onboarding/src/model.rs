@@ -79,6 +79,10 @@ pub enum SelectedSettings {
 
 impl SelectedSettings {
     pub fn is_ai_enabled(&self) -> bool {
+        if warp_core::channel::ChannelState::product_name() == "Slipstream" {
+            return true;
+        }
+
         use warp_core::features::FeatureFlag;
         match self {
             // Agent-driven development always means "I want AI" (including the

@@ -4,7 +4,8 @@ use prost::Message as _;
 use warp_server_client::base_client::AmbientHeaderPolicy;
 
 use super::{
-    Error, ambient_policy, decode_response_event, endpoint_url, is_passive_suggestion_request,
+    Error, ambient_policy, ambient_policy_for_request, decode_response_event, endpoint_url,
+    is_passive_suggestion_request, should_send_authenticated_request,
 };
 
 #[test]
@@ -58,6 +59,21 @@ fn endpoint_url_trims_override_trailing_slash() {
 fn selects_endpoint_specific_ambient_header_policies() {
     assert_eq!(ambient_policy(false), AmbientHeaderPolicy::workload_only());
     assert_eq!(ambient_policy(true), AmbientHeaderPolicy::omit_all());
+}
+
+#[test]
+fn omits_ambient_headers_for_unauthenticated_local_requests() {
+    assert_eq!(
+        ambient_policy_for_request(false, false),
+        AmbientHeaderPolicy::omit_all()
+    );
+}
+
+#[test]
+fn local_override_requests_do_not_require_user_auth() {
+    assert!(!should_send_authenticated_request(Some(
+        "http://127.0.0.1:8787"
+    )));
 }
 
 #[test]

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Grants existing WarpOss generic-password keychain items to the Team ID used
+# Grants existing Slipstream generic-password keychain items to the Team ID used
 # by the currently signed app. This is a one-time migration after switching
 # from the self-signed local certificate to an Apple-issued signing identity.
 
@@ -9,8 +9,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
 cd "${REPO_ROOT}"
 
-APP_PATH="${WARP_APP_PATH:-target/release-lto/bundle/osx/WarpOss.app}"
-SERVICE="${WARP_KEYCHAIN_SERVICE:-dev.warp.WarpOss}"
+APP_PATH="${WARP_APP_PATH:-target/release-lto/bundle/osx/Slipstream.app}"
+SERVICE="${WARP_KEYCHAIN_SERVICE:-com.slipstream.app}"
 KEYCHAIN="${WARP_KEYCHAIN:-$(security login-keychain | sed 's/[[:space:]"]//g')}"
 
 if [ ! -d "$APP_PATH" ]; then

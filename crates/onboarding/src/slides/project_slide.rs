@@ -1,4 +1,6 @@
+use crate::final_cta_label;
 use ui_components::{button, keyboard_shortcut, Component as _, Options as _};
+use warp_core::channel::ChannelState;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::color::coloru_with_opacity;
@@ -135,7 +137,10 @@ impl ProjectSlide {
 
         let subtitle = appearance
             .ui_builder()
-            .paragraph("Set up a project to optimize it for coding in Warp.")
+            .paragraph(format!(
+                "Set up a project to optimize it for coding in {}.",
+                ChannelState::product_name()
+            ))
             .with_style(UiComponentStyles {
                 font_size: Some(20.),
                 font_weight: Some(Weight::Normal),
@@ -299,7 +304,7 @@ impl ProjectSlide {
                 if theme_picker_last {
                     "Next"
                 } else {
-                    "Get Warping"
+                    final_cta_label()
                 },
                 Keystroke::parse("enter").unwrap_or_default(),
                 ProjectSlideAction::NextClicked,
