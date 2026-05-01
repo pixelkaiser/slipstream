@@ -20,10 +20,10 @@ use pathfinder_geometry::vector::Vector2F;
 use privacy_page::{PrivacyPageView, PrivacyPageViewEvent};
 use referrals_page::{ReferralsPageEvent, ReferralsPageView};
 use scripting_page::ScriptingSettingsPageView;
-use settings_file_footer::{SettingsFooterKind, SettingsFooterMouseStates, render_footer};
+use settings_file_footer::{render_footer, SettingsFooterKind, SettingsFooterMouseStates};
 use settings_page::{
-    HEADER_PADDING, MatchData, SettingsPage, SettingsPageEvent, SettingsPageMeta,
-    SettingsPageViewHandle,
+    MatchData, SettingsPage, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
+    HEADER_PADDING,
 };
 use show_blocks_view::{ShowBlocksEvent, ShowBlocksView};
 use teams_page::{TeamsPageView, TeamsPageViewEvent};
@@ -127,8 +127,8 @@ pub use features_page::FeaturesPageAction;
 pub use main_page::handle_experiment_change;
 pub use privacy_page::PrivacyPageAction;
 pub use settings_page::{
-    AdditionalInfo, InputListItem, LocalOnlyIconState, ToggleState, render_body_item_label,
-    render_info_icon, render_input_list, render_separator,
+    render_body_item_label, render_info_icon, render_input_list, render_separator, AdditionalInfo,
+    InputListItem, LocalOnlyIconState, ToggleState,
 };
 pub use teams_page::{OpenTeamsSettingsModalArgs, TeamsInviteOption};
 
@@ -390,6 +390,19 @@ impl SettingsSection {
             Self::CloudSharing,
             Self::OzCloudAPIKeys,
         ]
+    }
+
+    /// Sections intentionally omitted from this project's Settings UI.
+    pub fn is_hidden_in_settings(&self) -> bool {
+        matches!(self, Self::Referrals | Self::WarpDrive)
+    }
+
+    fn visible_or_default(self) -> Self {
+        if self.is_hidden_in_settings() {
+            Self::default()
+        } else {
+            self
+        }
     }
 }
 
@@ -1275,7 +1288,6 @@ impl SettingsView {
             None
         };
 
-        // Warp Drive page
         let warp_drive_page_handle =
             ctx.add_typed_action_view(warp_drive_page::WarpDriveSettingsPageView::new);
         ctx.subscribe_to_view(&warp_drive_page_handle, |me, _, event, ctx| {
@@ -1335,9 +1347,7 @@ impl SettingsView {
             SettingsPage::new(platform_page_handle),
             SettingsPage::new(cloud_sharing_page_handle),
             SettingsPage::new(warpify_page_handle),
-            SettingsPage::new(referrals_page_handle),
             SettingsPage::new(show_blocks_view_handle),
-            SettingsPage::new(warp_drive_page_handle),
         ];
 
         if let Some(scripting_page_handle) = scripting_page_handle {
@@ -1376,9 +1386,7 @@ impl SettingsView {
             SettingsNavItem::Page(SettingsSection::Features),
             SettingsNavItem::Page(SettingsSection::Keybindings),
             SettingsNavItem::Page(SettingsSection::Warpify),
-            SettingsNavItem::Page(SettingsSection::Referrals),
             SettingsNavItem::Page(SettingsSection::SharedBlocks),
-            SettingsNavItem::Page(SettingsSection::WarpDrive),
             SettingsNavItem::Page(SettingsSection::Privacy),
             SettingsNavItem::Page(SettingsSection::About),
         ];
@@ -1403,8 +1411,8 @@ impl SettingsView {
             Some(SettingsSection::Scripting) if !FeatureFlag::WarpControlCli.is_enabled() => {
                 SettingsSection::Account
             }
-            Some(section) if section.is_subpage() => section,
-            other => other.unwrap_or_default(),
+            Some(section) if section.is_subpage() => section.visible_or_default(),
+            other => other.unwrap_or_default().visible_or_default(),
         };
 
         // Auto-expand the umbrella if the initial page is one of its subpages.
@@ -2047,7 +2055,7 @@ impl SettingsView {
         let section = match section {
             SettingsSection::AI => SettingsSection::WarpAgent,
             SettingsSection::Code => SettingsSection::CodeIndexing,
-            other => other,
+            other => other.visible_or_default(),
         };
 
         // For AI subpages, the backing page is the AI page. Check it exists.
