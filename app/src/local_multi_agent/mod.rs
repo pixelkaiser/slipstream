@@ -488,6 +488,26 @@ impl LocalMultiAgentManager {
         }
         ctx.emit(LocalMultiAgentManagerEvent::ConfigChanged);
         ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
+        self.refresh_llm_preferences(ctx);
+        self.schedule_restart(ctx);
+        Ok(())
+    }
+
+    pub fn set_openai_model(
+        &mut self,
+        model: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), LocalMultiAgentConfigError> {
+        let mut config = self.config.clone();
+        config.openai_model = model.and_then(non_empty);
+        config.validate()?;
+        if self.config.openai_model == config.openai_model {
+            return Ok(());
+        }
+        self.config = config;
+        save_config(&self.config, ctx);
+        ctx.emit(LocalMultiAgentManagerEvent::ConfigChanged);
+        self.refresh_llm_preferences(ctx);
         self.schedule_restart(ctx);
         Ok(())
     }
@@ -595,6 +615,7 @@ impl LocalMultiAgentManager {
                             }
                         }
                         manager.test_status = LocalMultiAgentTestStatus::Passed { model_count };
+                        manager.refresh_llm_preferences(ctx);
                     }
                     Err(error) => {
                         manager.test_status = LocalMultiAgentTestStatus::Failed {
@@ -683,8 +704,14 @@ impl LocalMultiAgentManager {
             pid,
             config_hash,
         };
+        self.refresh_llm_preferences(ctx);
+    }
+
+    fn refresh_llm_preferences(&self, ctx: &mut ModelContext<Self>) {
+        let config = self.config.clone();
+        let discovered_models = self.discovered_models.clone();
         LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-            prefs.refresh_available_models(ctx);
+            prefs.update_local_multi_agent_models(&config, &discovered_models, ctx);
         });
     }
 
