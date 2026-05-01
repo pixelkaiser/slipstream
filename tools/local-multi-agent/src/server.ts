@@ -59,6 +59,44 @@ function nonEmpty(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function warpUrlScheme(): string {
+  const scheme = nonEmpty(process.env.WARP_URL_SCHEME) ?? "warp";
+  return /^[a-z][a-z0-9+.-]*$/i.test(scheme) ? scheme : "warp";
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function sharedSessionIntentUrl(url: URL): string | undefined {
+  const match =
+    /^\/session\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(
+      url.pathname,
+    );
+  if (!match) {
+    return undefined;
+  }
+
+  const intentUrl = new URL(`${warpUrlScheme()}://shared_session/${match[1]}`);
+  intentUrl.search = url.search;
+  return intentUrl.toString();
+}
+
+function sendRedirect(response: http.ServerResponse, location: string): void {
+  response.writeHead(302, {
+    location,
+    "content-type": "text/html; charset=utf-8",
+  });
+  const escapedLocation = escapeHtml(location);
+  response.end(
+    `<!doctype html><html><head><meta http-equiv="refresh" content="0;url=${escapedLocation}"></head><body><a href="${escapedLocation}">Open shared session in Warp</a></body></html>`,
+  );
+}
+
 function sendJson(response: http.ServerResponse, status: number, payload: unknown): void {
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
@@ -1632,6 +1670,20 @@ const server = http.createServer((request, response) => {
         durationMs: Date.now() - startedAt,
       });
       return;
+    }
+
+    if (method === "GET") {
+      const sharedSessionUrl = sharedSessionIntentUrl(url);
+      if (sharedSessionUrl) {
+        sendRedirect(response, sharedSessionUrl);
+        log("info", "http_response", {
+          method,
+          path: url.pathname,
+          statusCode: response.statusCode,
+          durationMs: Date.now() - startedAt,
+        });
+        return;
+      }
     }
 
     if (method === "POST" && url.pathname === "/ai/multi-agent") {

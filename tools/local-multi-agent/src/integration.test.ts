@@ -158,6 +158,42 @@ function sseResponseEvent(event: string) {
   return fromBinary(ResponseEventSchema, sseEventBytes(event));
 }
 
+test("redirects shared session web links to Warp URL scheme", { timeout: 10_000 }, async () => {
+  const serviceProbe = http.createServer((_request, response) => response.end("reserved"));
+  const servicePort = await listenOnLoopback(serviceProbe);
+  await closeServer(serviceProbe);
+
+  const dir = mkdtempSync(join(tmpdir(), "warp-local-session-link-service-"));
+  const child = spawn(process.execPath, ["dist/server.js"], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      PORT: String(servicePort),
+      LOG_LEVEL: "error",
+      WARP_URL_SCHEME: "warplocal",
+      LOCAL_GRAPHQL_DB_PATH: join(dir, "local.sqlite"),
+    },
+  });
+
+  try {
+    await waitForHealth(servicePort, child);
+    const sessionId = "00000000-0000-0000-0000-000000000000";
+    const response = await fetch(
+      `http://127.0.0.1:${servicePort}/session/${sessionId}?pwd=secret&preview=true`,
+      { redirect: "manual" },
+    );
+
+    assert.equal(response.status, 302);
+    assert.equal(
+      response.headers.get("location"),
+      `warplocal://shared_session/${sessionId}?pwd=secret&preview=true`,
+    );
+  } finally {
+    stopChild(child);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function maybeHandleProviderModelsRequest(request: http.IncomingMessage, response: http.ServerResponse): boolean {
   if (request.method !== "GET" || request.url !== "/v1/models") {
     return false;

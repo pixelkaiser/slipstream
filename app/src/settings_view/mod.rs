@@ -7,6 +7,7 @@ use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AIS
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
 use billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use billing_and_usage_page::BillingAndUsagePageEvent;
+use cloud_sharing_page::CloudSharingPageView;
 use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent, CodeSubpage};
 use environments_page::EnvironmentsPageView;
 use features_page::{FeaturesPageView, FeaturesSettingsPageEvent};
@@ -81,6 +82,7 @@ mod billing_and_usage;
 mod billing_and_usage_dispatch;
 mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
+mod cloud_sharing_page;
 mod code_page;
 pub(crate) mod custom_inference_modal;
 mod custom_router_view;
@@ -280,6 +282,7 @@ pub enum SettingsSection {
     EditorAndCodeReview,
     // ── Cloud platform umbrella subpages ──
     CloudEnvironments,
+    CloudSharing,
     OzCloudAPIKeys,
 }
 
@@ -304,6 +307,7 @@ impl Display for SettingsSection {
             SettingsSection::CodeIndexing => write!(f, "Indexing and projects"),
             SettingsSection::EditorAndCodeReview => write!(f, "Editor and Code Review"),
             SettingsSection::CloudEnvironments => write!(f, "Environments"),
+            SettingsSection::CloudSharing => write!(f, "Sharing"),
             SettingsSection::OzCloudAPIKeys => write!(f, "Oz Cloud API Keys"),
             _ => write!(f, "{self:?}"),
         }
@@ -335,7 +339,10 @@ impl SettingsSection {
 
     /// Returns true if this section is a subpage under the "Cloud platform" umbrella.
     pub fn is_cloud_platform_subpage(&self) -> bool {
-        matches!(self, Self::CloudEnvironments | Self::OzCloudAPIKeys)
+        matches!(
+            self,
+            Self::CloudEnvironments | Self::CloudSharing | Self::OzCloudAPIKeys
+        )
     }
 
     /// Maps subpage sections back to their parent page section for page lookup.
@@ -348,8 +355,8 @@ impl SettingsSection {
             s if s.is_ai_subpage() => Self::AI,
             // Code subpages render within the Code page.
             s if s.is_code_subpage() => Self::Code,
-            // CloudEnvironments and OzCloudAPIKeys ARE their own backing pages
-            // (1:1 mapping), so they return themselves.
+            // Cloud platform subpages are their own backing pages (1:1 mapping),
+            // so they return themselves.
             other => *other,
         }
     }
@@ -372,7 +379,11 @@ impl SettingsSection {
 
     /// The ordered list of Cloud platform subpage sections.
     pub fn cloud_platform_subpages() -> &'static [Self] {
-        &[Self::CloudEnvironments, Self::OzCloudAPIKeys]
+        &[
+            Self::CloudEnvironments,
+            Self::CloudSharing,
+            Self::OzCloudAPIKeys,
+        ]
     }
 }
 
@@ -406,6 +417,7 @@ impl FromStr for SettingsSection {
             "Indexing and projects" | "CodeIndexing" => Ok(Self::CodeIndexing),
             "Editor and Code Review" | "EditorAndCodeReview" => Ok(Self::EditorAndCodeReview),
             "CloudEnvironments" => Ok(Self::CloudEnvironments),
+            "Sharing" | "CloudSharing" => Ok(Self::CloudSharing),
             "Oz Cloud API Keys" | "OzCloudAPIKeys" => Ok(Self::OzCloudAPIKeys),
             _ => Err(()),
         }
@@ -1097,6 +1109,7 @@ macro_rules! update_page {
             SettingsPageViewHandle::Keybindings(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Teams(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Warpify(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::CloudSharing(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::OzCloudAPIKeys(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Privacy(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Referrals(handle) => $ctx.update_view(handle, $update),
@@ -1267,6 +1280,8 @@ impl SettingsView {
             me.handle_platform_page_event(event, ctx);
         });
 
+        let cloud_sharing_page_handle = ctx.add_typed_action_view(CloudSharingPageView::new);
+
         // MCP Servers page
         let mcp_servers_page_handle = ctx.add_typed_action_view(MCPServersSettingsPageView::new);
         ctx.subscribe_to_view(&mcp_servers_page_handle, |me, _, event, ctx| {
@@ -1311,6 +1326,7 @@ impl SettingsView {
             SettingsPage::new(features_page_handle),
             SettingsPage::new(keybindings_handle),
             SettingsPage::new(platform_page_handle),
+            SettingsPage::new(cloud_sharing_page_handle),
             SettingsPage::new(warpify_page_handle),
             SettingsPage::new(referrals_page_handle),
             SettingsPage::new(show_blocks_view_handle),
@@ -1346,10 +1362,7 @@ impl SettingsView {
             )),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
                 "Cloud platform",
-                vec![
-                    SettingsSection::CloudEnvironments,
-                    SettingsSection::OzCloudAPIKeys,
-                ],
+                SettingsSection::cloud_platform_subpages().to_vec(),
             )),
             SettingsNavItem::Page(SettingsSection::Teams),
             SettingsNavItem::Page(SettingsSection::Appearance),
@@ -2129,6 +2142,7 @@ impl SettingsView {
             SettingsPageViewHandle::Appearance(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::BillingAndUsage(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::About(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::CloudSharing(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::OzCloudAPIKeys(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Privacy(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Warpify(v) => v.as_ref(app).should_render(app),
