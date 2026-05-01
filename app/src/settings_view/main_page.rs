@@ -278,7 +278,9 @@ impl MainSettingsPageView {
 
         widgets.push(Box::new(SettingsSyncWidget::default()));
 
-        widgets.push(Box::new(EarnRewardsWidget::default()));
+        if !SettingsSection::Referrals.is_hidden_in_settings() {
+            widgets.push(Box::new(EarnRewardsWidget::default()));
+        }
 
         #[cfg(not(target_family = "wasm"))]
         if IapManager::as_ref(ctx).is_enabled() {

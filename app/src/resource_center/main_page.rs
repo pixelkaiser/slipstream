@@ -32,6 +32,7 @@ use crate::resource_center::skip_tips_and_write_to_user_defaults;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::settings::Settings;
+use crate::settings_view::SettingsSection;
 use crate::themes::theme::{Blend, Fill as FillTheme};
 use crate::workspace::WorkspaceAction;
 
@@ -503,17 +504,17 @@ impl View for ResourceCenterMainView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let body = self.render_body(appearance);
-        let invite_button = self.render_invite_button(appearance);
         let skip_tips = self.render_skip_tips_button(appearance);
 
         let mut main_page = Flex::column();
 
-        if !AuthStateProvider::as_ref(app)
-            .get()
-            .is_anonymous_or_logged_out()
+        if !SettingsSection::Referrals.is_hidden_in_settings()
+            && !AuthStateProvider::as_ref(app)
+                .get()
+                .is_anonymous_or_logged_out()
             && !FeatureFlag::AvatarInTabBar.is_enabled()
         {
-            main_page = main_page.with_child(invite_button);
+            main_page = main_page.with_child(self.render_invite_button(appearance));
         }
 
         if !self.tips_completed.as_ref(app).skipped_or_completed
