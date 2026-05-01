@@ -2,6 +2,7 @@ mod frame;
 mod glyph;
 mod image;
 mod rect;
+mod trail;
 mod util;
 
 use frame::Frame;
@@ -12,10 +13,10 @@ use wgpu::wgc::device::DeviceError;
 use wgpu::wgc::present::SurfaceError;
 
 pub use super::resources::{GetSurfaceTextureError, SurfaceConfigureError};
+use crate::Scene;
 use crate::r#async::block_on;
 use crate::rendering::wgpu::Resources;
 use crate::rendering::{GlyphConfig, GlyphRasterBoundsFn, RasterizeGlyphFn};
-use crate::Scene;
 
 const ENCODER_DESCRIPTOR: wgpu::CommandEncoderDescriptor = wgpu::CommandEncoderDescriptor {
     label: Some("Command encoder"),
@@ -25,6 +26,7 @@ pub struct Renderer {
     rect_pipeline: rect::Pipeline,
     glyph_pipeline: glyph::Pipeline,
     image_pipeline: image::Pipeline,
+    trail_pipeline: trail::Pipeline,
 }
 
 impl Renderer {
@@ -51,13 +53,20 @@ impl Renderer {
             glyph_config,
         );
 
-        let image_pipeline =
-            image::Pipeline::new(resources.uniform_bind_group_layout(), device, color_target);
+        let image_pipeline = image::Pipeline::new(
+            resources.uniform_bind_group_layout(),
+            device,
+            color_target.clone(),
+        );
+
+        let trail_pipeline =
+            trail::Pipeline::new(resources.uniform_bind_group_layout(), device, color_target);
 
         Self {
             rect_pipeline,
             glyph_pipeline,
             image_pipeline,
+            trail_pipeline,
         }
     }
 
@@ -93,6 +102,7 @@ impl Renderer {
                 &self.rect_pipeline,
                 &mut self.glyph_pipeline,
                 &mut self.image_pipeline,
+                &self.trail_pipeline,
             )
         }) {
             (_, Some(error)) => return Err(error),

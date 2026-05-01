@@ -49,4 +49,13 @@ typedef struct {
   int is_emoji;
 } PerGlyphUniforms;
 
+typedef struct {
+  vector_float2 top_left;
+  vector_float2 top_right;
+  vector_float2 bottom_right;
+  vector_float2 bottom_left;
+  vector_float4 cursor_bounds;
+  vector_float4 color;
+} PerCursorTrailUniforms;
+
 #endif // shader_types_h

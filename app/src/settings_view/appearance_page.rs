@@ -67,11 +67,12 @@ use crate::settings::{
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::blockgrid_element::BlockGridElement;
 use crate::terminal::ligature_settings::{LigatureRenderingEnabled, LigatureSettings};
-use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::model::ObfuscateSecrets;
+use crate::terminal::model::blockgrid::BlockGrid;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::settings::{
-    AltScreenPadding, AltScreenPaddingMode, Spacing, SpacingMode, TerminalSettings,
+    AltScreenPadding, AltScreenPaddingMode, CursorTrailEnabled, Spacing, SpacingMode,
+    TerminalSettings,
 };
 use crate::terminal::{
     BlockListSettings, ShowBlockDividers, ShowJumpToBottomOfBlockButton, SizeInfo,
@@ -88,6 +89,7 @@ use crate::window_settings::{
     BackgroundBlurRadius, BackgroundBlurTexture, BackgroundOpacity, LeftPanelVisibilityAcrossTabs,
     OpenWindowsAtCustomSize, WindowSettings, WindowSettingsChangedEvent, ZoomLevel,
 };
+use crate::workspace::WorkspaceAction;
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
 use crate::workspace::tab_settings::{
     DirectoryTabColor, PreserveActiveTabColor, ShowCodeReviewButton, ShowIndicatorsButton,
@@ -166,6 +168,22 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 
     toggle_binding_pairs.push(
         ToggleSettingActionPair::new(
+            "cursor trail",
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::ToggleCursorTrail,
+            )),
+            context,
+            flags::CURSOR_TRAIL_CONTEXT_FLAG,
+        )
+        .is_supported_on_current_platform(
+            TerminalSettings::as_ref(app)
+                .cursor_trail_enabled
+                .is_supported_on_current_platform(),
+        ),
+    );
+
+    toggle_binding_pairs.push(
+        ToggleSettingActionPair::new(
             "jump to bottom of block button",
             builder(SettingsAction::AppearancePageToggle(
                 AppearancePageAction::ToggleJumpToBottomOfBlockButton,
@@ -205,29 +223,33 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         flags::DIM_INACTIVE_PANES_FLAG,
     ));
 
-    app.register_fixed_bindings(vec![FixedBinding::empty(
-        "Start Input at the Top".to_string(),
-        builder(SettingsAction::AppearancePageToggle(
-            AppearancePageAction::SetInputMode {
-                new_mode: InputMode::Waterfall,
-                from_binding: true,
-            },
-        )),
-        context.to_owned(),
-    )
-    .with_group(bindings::BindingGroup::Settings.as_str())]);
+    app.register_fixed_bindings(vec![
+        FixedBinding::empty(
+            "Start Input at the Top".to_string(),
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::SetInputMode {
+                    new_mode: InputMode::Waterfall,
+                    from_binding: true,
+                },
+            )),
+            context.to_owned(),
+        )
+        .with_group(bindings::BindingGroup::Settings.as_str()),
+    ]);
 
-    app.register_fixed_bindings(vec![FixedBinding::empty(
-        "Pin Input to the Top".to_string(),
-        builder(SettingsAction::AppearancePageToggle(
-            AppearancePageAction::SetInputMode {
-                new_mode: InputMode::PinnedToTop,
-                from_binding: true,
-            },
-        )),
-        context.to_owned(),
-    )
-    .with_group(bindings::BindingGroup::Settings.as_str())]);
+    app.register_fixed_bindings(vec![
+        FixedBinding::empty(
+            "Pin Input to the Top".to_string(),
+            builder(SettingsAction::AppearancePageToggle(
+                AppearancePageAction::SetInputMode {
+                    new_mode: InputMode::PinnedToTop,
+                    from_binding: true,
+                },
+            )),
+            context.to_owned(),
+        )
+        .with_group(bindings::BindingGroup::Settings.as_str()),
+    ]);
 
     app.register_fixed_bindings(vec![FixedBinding::empty(
         "Pin Input to the Bottom".to_string(),
@@ -507,6 +529,7 @@ pub enum AppearancePageAction {
     ToggleShowBlockDividers,
     ToggleCompactMode,
     ToggleCursorBlink,
+    ToggleCursorTrail,
     ToggleRespectSystemTheme,
     ToggleOpenWindowsAtCustomSize,
     ToggleDimInactivePanes,
@@ -600,9 +623,11 @@ impl TypedActionView for AppearanceSettingsPageView {
             SetFontWeight(value) => self.set_font_weight(*value, ctx),
             ToggleMatchNotebookToMonospaceFontSize => {
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-                    report_if_error!(font_settings
-                        .match_notebook_to_monospace_font_size
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        font_settings
+                            .match_notebook_to_monospace_font_size
+                            .toggle_and_save_value(ctx)
+                    );
                 });
             }
             ToggleMatchAIToTerminalFontFamily => self.toggle_match_ai_font_to_terminal_font(ctx),
@@ -614,17 +639,21 @@ impl TypedActionView for AppearanceSettingsPageView {
             SetAIFontFamily(name) => {
                 self.set_ai_font_family(name, ctx);
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-                    report_if_error!(font_settings
-                        .match_ai_font_to_terminal_font
-                        .set_value(false, ctx));
+                    report_if_error!(
+                        font_settings
+                            .match_ai_font_to_terminal_font
+                            .set_value(false, ctx)
+                    );
                 });
             }
             SetThinStrokes(value) => self.set_thin_strokes(value, ctx),
             SetEnforceMinimumContrast(value) => {
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-                    report_if_error!(font_settings
-                        .enforce_minimum_contrast
-                        .set_value(*value, ctx,));
+                    report_if_error!(
+                        font_settings
+                            .enforce_minimum_contrast
+                            .set_value(*value, ctx,)
+                    );
                 });
             }
             SetWorkspaceDecorationVisibility(value) => {
@@ -635,6 +664,7 @@ impl TypedActionView for AppearanceSettingsPageView {
             ToggleShowBlockDividers => self.toggle_show_block_dividers(ctx),
             ToggleCompactMode => self.toggle_compact_mode(ctx),
             ToggleCursorBlink => self.toggle_cursor_blink(ctx),
+            ToggleCursorTrail => self.toggle_cursor_trail(ctx),
             ToggleOpenWindowsAtCustomSize => self.toggle_open_windows_at_custom_size(ctx),
             ToggleRespectSystemTheme => self.toggle_respect_system_theme(ctx),
             ToggleAllAvailableFonts => self.toggle_all_available_fonts(ctx),
@@ -701,9 +731,11 @@ impl TypedActionView for AppearanceSettingsPageView {
             }
             UpdateAltScreenPaddingMode(new_mode) => {
                 TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
-                    report_if_error!(terminal_settings
-                        .alt_screen_padding
-                        .set_value(*new_mode, ctx));
+                    report_if_error!(
+                        terminal_settings
+                            .alt_screen_padding
+                            .set_value(*new_mode, ctx)
+                    );
                 });
                 self.set_alt_screen_padding_editor_text(ctx);
                 send_telemetry_from_ctx!(
@@ -1435,6 +1467,7 @@ impl AppearanceSettingsPageView {
             vec![
                 Box::new(CursorTypeWidget::default()),
                 Box::new(BlinkingCursorWidget::default()),
+                Box::new(CursorTrailWidget::default()),
             ],
         ));
 
@@ -1668,9 +1701,11 @@ impl AppearanceSettingsPageView {
                             let new_mode = AltScreenPaddingMode::Custom {
                                 uniform_padding: padding.into_pixels(),
                             };
-                            report_if_error!(terminal_settings
-                                .alt_screen_padding
-                                .set_value(new_mode, ctx));
+                            report_if_error!(
+                                terminal_settings
+                                    .alt_screen_padding
+                                    .set_value(new_mode, ctx)
+                            );
                             send_telemetry_from_ctx!(
                                 TelemetryEvent::UpdateAltScreenPaddingMode { new_mode },
                                 ctx
@@ -1794,9 +1829,11 @@ impl AppearanceSettingsPageView {
         if let Ok(num) = user_input.parse::<usize>() {
             if (MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&num) {
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-                    report_if_error!(font_settings
-                        .monospace_font_size
-                        .set_value(num as f32, ctx,));
+                    report_if_error!(
+                        font_settings
+                            .monospace_font_size
+                            .set_value(num as f32, ctx,)
+                    );
                 });
             }
         }
@@ -1834,9 +1871,11 @@ impl AppearanceSettingsPageView {
             );
         }
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .background_opacity
-                .set_value(opacity_value as u8, ctx));
+            report_if_error!(
+                window_settings
+                    .background_opacity
+                    .set_value(opacity_value as u8, ctx)
+            );
         });
         ctx.notify();
     }
@@ -1860,9 +1899,11 @@ impl AppearanceSettingsPageView {
             .set_all_windows_background_blur_radius(blur_value as u8);
 
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .background_blur_radius
-                .set_value(blur_value as u8, ctx));
+            report_if_error!(
+                window_settings
+                    .background_blur_radius
+                    .set_value(blur_value as u8, ctx)
+            );
         });
         ctx.notify()
     }
@@ -1880,9 +1921,11 @@ impl AppearanceSettingsPageView {
         );
 
         FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-            report_if_error!(font_settings
-                .line_height_ratio
-                .set_value(DEFAULT_UI_LINE_HEIGHT_RATIO, ctx));
+            report_if_error!(
+                font_settings
+                    .line_height_ratio
+                    .set_value(DEFAULT_UI_LINE_HEIGHT_RATIO, ctx)
+            );
         });
     }
 
@@ -1905,9 +1948,11 @@ impl AppearanceSettingsPageView {
 
             if (MIN_LINE_SPACING..=MAX_LINE_SPACING).contains(&new_line_height) {
                 FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-                    report_if_error!(font_settings
-                        .line_height_ratio
-                        .set_value(new_line_height, ctx));
+                    report_if_error!(
+                        font_settings
+                            .line_height_ratio
+                            .set_value(new_line_height, ctx)
+                    );
                 });
             }
         }
@@ -1921,9 +1966,11 @@ impl AppearanceSettingsPageView {
                 TelemetryEvent::ToggleNewWindowsAtCustomSize { enabled: new_val },
                 ctx
             );
-            report_if_error!(window_settings
-                .open_windows_at_custom_size
-                .set_value(new_val, ctx));
+            report_if_error!(
+                window_settings
+                    .open_windows_at_custom_size
+                    .set_value(new_val, ctx)
+            );
         });
         ctx.notify();
     }
@@ -1931,9 +1978,11 @@ impl AppearanceSettingsPageView {
     fn set_new_windows_num_columns(&mut self, columns: u16, ctx: &mut ViewContext<Self>) {
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
             send_telemetry_from_ctx!(TelemetryEvent::SetNewWindowsAtCustomSize, ctx);
-            report_if_error!(window_settings
-                .new_windows_num_columns
-                .set_value(columns, ctx));
+            report_if_error!(
+                window_settings
+                    .new_windows_num_columns
+                    .set_value(columns, ctx)
+            );
         });
     }
 
@@ -2111,9 +2160,11 @@ impl AppearanceSettingsPageView {
 
     pub fn set_font_family(&mut self, name: &str, ctx: &mut ViewContext<Self>) {
         FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-            report_if_error!(font_settings
-                .monospace_font_name
-                .set_value(name.to_string(), ctx));
+            report_if_error!(
+                font_settings
+                    .monospace_font_name
+                    .set_value(name.to_string(), ctx)
+            );
             if *font_settings.match_ai_font_to_terminal_font.value() {
                 report_if_error!(font_settings.ai_font_name.set_value(name.to_string(), ctx))
             }
@@ -2122,9 +2173,11 @@ impl AppearanceSettingsPageView {
 
     pub fn toggle_match_ai_font_to_terminal_font(&mut self, ctx: &mut ViewContext<Self>) {
         FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-            report_if_error!(font_settings
-                .match_ai_font_to_terminal_font
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                font_settings
+                    .match_ai_font_to_terminal_font
+                    .toggle_and_save_value(ctx)
+            );
             if *font_settings.match_ai_font_to_terminal_font.value() {
                 let font_name = font_settings.monospace_font_name.value().clone();
                 self.ai_font_family_dropdown.update(ctx, |dropdown, ctx| {
@@ -2170,9 +2223,11 @@ impl AppearanceSettingsPageView {
             ctx
         );
         ctx.update_model(&block_list_settings, move |block_list_settings, ctx| {
-            report_if_error!(block_list_settings
-                .show_jump_to_bottom_of_block_button
-                .set_value(new_value, ctx));
+            report_if_error!(
+                block_list_settings
+                    .show_jump_to_bottom_of_block_button
+                    .set_value(new_value, ctx)
+            );
         });
     }
 
@@ -2184,18 +2239,22 @@ impl AppearanceSettingsPageView {
             ctx
         );
         ctx.update_model(&block_list_settings, move |block_list_settings, ctx| {
-            report_if_error!(block_list_settings
-                .show_block_dividers
-                .set_value(new_value, ctx));
+            report_if_error!(
+                block_list_settings
+                    .show_block_dividers
+                    .set_value(new_value, ctx)
+            );
         });
     }
 
     pub fn toggle_compact_mode(&mut self, ctx: &mut ViewContext<Self>) {
         TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
             let current_value = *terminal_settings.spacing_mode.value();
-            report_if_error!(terminal_settings
-                .spacing_mode
-                .set_value(current_value.other_mode(), ctx));
+            report_if_error!(
+                terminal_settings
+                    .spacing_mode
+                    .set_value(current_value.other_mode(), ctx)
+            );
         });
     }
 
@@ -2203,6 +2262,23 @@ impl AppearanceSettingsPageView {
         AppEditorSettings::handle(ctx).update(ctx, |me, ctx| {
             me.toggle_cursor_blink(ctx);
         })
+    }
+
+    pub fn toggle_cursor_trail(&mut self, ctx: &mut ViewContext<Self>) {
+        TerminalSettings::handle(ctx).update(ctx, |terminal_settings, ctx| {
+            report_if_error!(
+                terminal_settings
+                    .cursor_trail_enabled
+                    .toggle_and_save_value(ctx)
+            );
+            send_telemetry_from_ctx!(
+                TelemetryEvent::FeaturesPageAction {
+                    action: "ToggleCursorTrail".to_string(),
+                    value: terminal_settings.cursor_trail_enabled.value().to_string(),
+                },
+                ctx
+            );
+        });
     }
 
     pub fn toggle_respect_system_theme(&mut self, ctx: &mut ViewContext<Self>) {
@@ -2238,18 +2314,22 @@ impl AppearanceSettingsPageView {
         ctx.windows()
             .set_all_windows_background_blur_texture(!blur_enabled);
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .background_blur_texture
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                window_settings
+                    .background_blur_texture
+                    .toggle_and_save_value(ctx)
+            );
         });
         ctx.notify();
     }
 
     pub fn toggle_left_panel_visibility(&mut self, ctx: &mut ViewContext<Self>) {
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(window_settings
-                .left_panel_visibility_across_tabs
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                window_settings
+                    .left_panel_visibility_across_tabs
+                    .toggle_and_save_value(ctx)
+            );
         });
         ctx.notify();
     }
@@ -2301,9 +2381,11 @@ impl AppearanceSettingsPageView {
             // Selecting classic mode must also enable honor_ps1 so the mode takes
             // effect immediately (input_type() requires honor_ps1 to return classic).
             SessionSettings::handle(ctx).update(ctx, |session_settings, ctx| {
-                report_if_error!(session_settings
-                    .honor_ps1
-                    .set_value(new_type == InputBoxType::Classic, ctx));
+                report_if_error!(
+                    session_settings
+                        .honor_ps1
+                        .set_value(new_type == InputBoxType::Classic, ctx)
+                );
             });
 
             ctx.notify();
@@ -2324,9 +2406,11 @@ impl AppearanceSettingsPageView {
 
     fn set_cursor_type(&mut self, new_cursor_type: CursorDisplayType, ctx: &mut ViewContext<Self>) {
         AppEditorSettings::handle(ctx).update(ctx, |app_editor_settings, ctx| {
-            report_if_error!(app_editor_settings
-                .cursor_display_type
-                .set_value(new_cursor_type, ctx));
+            report_if_error!(
+                app_editor_settings
+                    .cursor_display_type
+                    .set_value(new_cursor_type, ctx)
+            );
             send_telemetry_from_ctx!(
                 TelemetryEvent::CursorDisplayType {
                     cursor: new_cursor_type.to_string(),
@@ -2360,9 +2444,11 @@ impl AppearanceSettingsPageView {
         let new_value = !*tab_settings.as_ref(ctx).show_code_review_button.value();
 
         ctx.update_model(&tab_settings, move |tab_settings, ctx| {
-            report_if_error!(tab_settings
-                .show_code_review_button
-                .set_value(new_value, ctx));
+            report_if_error!(
+                tab_settings
+                    .show_code_review_button
+                    .set_value(new_value, ctx)
+            );
         });
     }
 
@@ -2371,9 +2457,11 @@ impl AppearanceSettingsPageView {
         let new_value = !*tab_settings.as_ref(ctx).preserve_active_tab_color.value();
 
         ctx.update_model(&tab_settings, move |tab_settings, ctx| {
-            report_if_error!(tab_settings
-                .preserve_active_tab_color
-                .set_value(new_value, ctx));
+            report_if_error!(
+                tab_settings
+                    .preserve_active_tab_color
+                    .set_value(new_value, ctx)
+            );
         });
 
         send_telemetry_from_ctx!(
@@ -2393,9 +2481,11 @@ impl AppearanceSettingsPageView {
 
     fn toggle_show_vertical_tab_panel_in_restored_windows(&mut self, ctx: &mut ViewContext<Self>) {
         TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .show_vertical_tab_panel_in_restored_windows
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                settings
+                    .show_vertical_tab_panel_in_restored_windows
+                    .toggle_and_save_value(ctx)
+            );
         });
     }
 
@@ -2404,9 +2494,11 @@ impl AppearanceSettingsPageView {
         ctx: &mut ViewContext<Self>,
     ) {
         TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .use_latest_user_prompt_as_conversation_title_in_tab_names
-                .toggle_and_save_value(ctx));
+            report_if_error!(
+                settings
+                    .use_latest_user_prompt_as_conversation_title_in_tab_names
+                    .toggle_and_save_value(ctx)
+            );
         });
     }
 
@@ -2418,9 +2510,11 @@ impl AppearanceSettingsPageView {
     ) {
         let previous_value = TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
             let prev_value = *tab_settings.workspace_decoration_visibility.value();
-            report_if_error!(tab_settings
-                .workspace_decoration_visibility
-                .set_value(new_value, ctx));
+            report_if_error!(
+                tab_settings
+                    .workspace_decoration_visibility
+                    .set_value(new_value, ctx)
+            );
             prev_value
         });
         send_telemetry_from_ctx!(
@@ -2438,9 +2532,11 @@ impl AppearanceSettingsPageView {
             TabSettings::handle(ctx).update(ctx, |tab_settings, ctx| {
                 let previous_value = *tab_settings.workspace_decoration_visibility.value();
                 let new_value = previous_value.toggled();
-                report_if_error!(tab_settings
-                    .workspace_decoration_visibility
-                    .set_value(new_value, ctx));
+                report_if_error!(
+                    tab_settings
+                        .workspace_decoration_visibility
+                        .set_value(new_value, ctx)
+                );
                 (new_value, previous_value)
             });
         send_telemetry_from_ctx!(
@@ -2580,9 +2676,11 @@ impl AppearanceSettingsPageView {
                 .value();
 
             ligature_settings.update(ctx, |settings, ctx| {
-                report_if_error!(settings
-                    .ligature_rendering_enabled
-                    .set_value(new_value, ctx));
+                report_if_error!(
+                    settings
+                        .ligature_rendering_enabled
+                        .set_value(new_value, ctx)
+                );
             });
 
             send_telemetry_from_ctx!(
@@ -4454,6 +4552,50 @@ impl SettingsWidget for BlinkingCursorWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(AppearancePageAction::ToggleCursorBlink);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct CursorTrailWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for CursorTrailWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "cursor trail terminal cursor effect experimental"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let terminal_settings = TerminalSettings::as_ref(app);
+        render_body_item::<AppearancePageAction>(
+            "Cursor trail (experimental)".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                CursorTrailEnabled::storage_key(),
+                CursorTrailEnabled::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*terminal_settings.cursor_trail_enabled.value())
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleCursorTrail);
                 })
                 .finish(),
             None,
