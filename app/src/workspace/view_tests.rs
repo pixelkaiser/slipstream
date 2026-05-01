@@ -700,6 +700,33 @@ fn reopen_closed_session_menu_item(
 }
 
 #[test]
+fn test_user_menu_hides_promotional_entries() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::local_multi_agent::LocalMultiAgentManager::new);
+
+        let workspace = mock_workspace(&mut app);
+
+        workspace.read(&app, |workspace, ctx| {
+            let items = workspace.user_menu_items(ctx);
+            let labels = items
+                .iter()
+                .filter_map(|item| match item {
+                    MenuItem::Item(fields) => Some(fields.label().to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            assert!(!labels.iter().any(|label| label == "Sign up"));
+            assert!(!labels.iter().any(|label| label == "Upgrade"));
+            assert!(!labels.iter().any(|label| label == "Invite a friend"));
+            assert!(!matches!(items.last(), Some(MenuItem::Separator)));
+        });
+    });
+}
+
+#[test]
 fn test_reward_modal_no_overlap() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
