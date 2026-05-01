@@ -221,10 +221,10 @@ pub enum SettingsViewEvent {
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
     About,
-    #[default]
     Account,
     MCPServers,
     BillingAndUsage,
+    #[default]
     Appearance,
     Features,
     Keybindings,
@@ -366,7 +366,7 @@ impl SettingsSection {
 
     /// Sections intentionally omitted from this project's Settings UI.
     pub fn is_hidden_in_settings(&self) -> bool {
-        matches!(self, Self::Referrals | Self::WarpDrive)
+        matches!(self, Self::Account | Self::Referrals | Self::WarpDrive)
     }
 
     fn visible_or_default(self) -> Self {
@@ -1254,7 +1254,6 @@ impl SettingsView {
         // Build sidebar nav items. AI page is presented as an "Agents" umbrella
         // with subpages; the actual AI SettingsPage is hidden from direct sidebar listing.
         let mut nav_items = vec![
-            SettingsNavItem::Page(SettingsSection::Account),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
                 "Agents",
                 SettingsSection::ai_subpages().to_vec(),
@@ -2014,6 +2013,10 @@ impl SettingsView {
     }
 
     fn should_render_page(&self, settings_page: &SettingsPage, app: &AppContext) -> bool {
+        if settings_page.section.is_hidden_in_settings() {
+            return false;
+        }
+
         match &settings_page.view_handle {
             SettingsPageViewHandle::Main(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Teams(v) => v.as_ref(app).should_render(app),
