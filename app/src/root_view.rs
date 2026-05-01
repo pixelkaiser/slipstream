@@ -47,6 +47,7 @@ use crate::settings_view::SettingsSection;
 use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::keys_settings::KeysSettings;
+use crate::terminal::shared_session::SharedSessionJoinArgs;
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::{cell_size_and_padding, TerminalAction};
 use crate::themes::onboarding_theme_picker_themes;
@@ -86,7 +87,6 @@ use parking_lot::Mutex;
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::{vec2f, Vector2F};
 use serde::{Deserialize, Serialize};
-use session_sharing_protocol::common::SessionId;
 use settings::Setting as _;
 use std::path::Path;
 use std::sync::mpsc::SyncSender;
@@ -873,10 +873,10 @@ pub(crate) fn open_new_from_path(
 }
 
 /// Opens a new window and tries to join session identified by the session ID.
-fn open_shared_session_as_viewer(session_id: &SessionId, ctx: &mut AppContext) {
+fn open_shared_session_as_viewer(join_args: &SharedSessionJoinArgs, ctx: &mut AppContext) {
     open_new_with_workspace_source(
         NewWorkspaceSource::SharedSessionAsViewer {
-            session_id: *session_id,
+            join_args: join_args.clone(),
         },
         ctx,
     );
@@ -1491,7 +1491,7 @@ pub enum NewWorkspaceSource {
         options: Box<NewTerminalOptions>,
     },
     SharedSessionAsViewer {
-        session_id: SessionId,
+        join_args: SharedSessionJoinArgs,
     },
     FromCloudConversationId {
         conversation_id: ServerConversationToken,
@@ -2638,12 +2638,12 @@ impl RootView {
 
     pub fn join_shared_session_in_existing_window(
         &mut self,
-        session_id: &SessionId,
+        join_args: &SharedSessionJoinArgs,
         ctx: &mut ViewContext<Self>,
     ) -> bool {
         if let AuthOnboardingState::Terminal(handle) = &self.auth_onboarding_state {
             handle.update(ctx, |workspace, ctx| {
-                workspace.add_tab_for_joining_shared_session(*session_id, ctx);
+                workspace.add_tab_for_joining_shared_session(join_args.clone(), ctx);
             });
             let window_id = ctx.window_id();
             ctx.windows().show_window_and_focus_app(window_id);

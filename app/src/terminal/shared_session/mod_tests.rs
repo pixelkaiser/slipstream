@@ -1,4 +1,6 @@
-use super::{decode_scrollback, SharedSessionScrollbackType};
+use super::{
+    decode_scrollback, join_link_with_secret, SharedSessionJoinArgs, SharedSessionScrollbackType,
+};
 
 use crate::ai::blocklist::agent_view::AgentViewState;
 use crate::assert_lines_approx_eq;
@@ -12,13 +14,32 @@ use crate::terminal::TerminalModel;
 use crate::terminal::{event_listener::ChannelEventListener, model::block::SerializedBlock};
 use crate::themes::default_themes::dark_theme;
 use serde_json::Value;
-use session_sharing_protocol::common::{Scrollback, ScrollbackBlock};
+use session_sharing_protocol::common::{Scrollback, ScrollbackBlock, SessionId, SessionSecret};
+use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 use warpui::r#async::executor::Background;
 use warpui::units::Lines;
 
 pub const MAX_BYTES_SHAREABLE: usize = 5000;
+
+#[test]
+fn shared_session_links_include_secret_when_present() {
+    let session_id = SessionId::from_str("00000000-0000-0000-0000-000000000000").unwrap();
+    let session_secret = SessionSecret::from_str("secret").unwrap();
+
+    assert_eq!(
+        join_link_with_secret(&session_id, Some(&session_secret)),
+        format!(
+            "{}://shared_session/00000000-0000-0000-0000-000000000000?pwd=secret",
+            ChannelState::url_scheme()
+        )
+    );
+    assert_eq!(
+        SharedSessionJoinArgs::new(session_id, Some(session_secret)).join_route(),
+        "/sessions/join/00000000-0000-0000-0000-000000000000?pwd=secret"
+    );
+}
 
 #[test]
 fn maybe_rewrite_web_url_to_shared_session_intent_rewrites_matching_web_url() {

@@ -1,7 +1,9 @@
 use byte_unit::Byte;
 use instant::Duration;
 use serde::{Deserialize, Serialize};
-use session_sharing_protocol::common::{Role, Scrollback, ScrollbackBlock, SessionId};
+use session_sharing_protocol::common::{
+    JoinSessionLinkArgs, Role, Scrollback, ScrollbackBlock, SessionId, SessionSecret,
+};
 use session_sharing_protocol::sharer::SessionSourceType;
 use warpui::{id, keymap::ContextPredicate, AppContext};
 
@@ -289,18 +291,82 @@ pub enum SharedSessionActionSource {
     FooterChip,
 }
 
+/// The arguments needed to open or reconnect to a shared session link.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SharedSessionJoinArgs {
+    pub session_id: SessionId,
+    #[serde(default)]
+    pub session_secret: Option<SessionSecret>,
+}
+
+impl SharedSessionJoinArgs {
+    pub fn new(session_id: SessionId, session_secret: Option<SessionSecret>) -> Self {
+        Self {
+            session_id,
+            session_secret,
+        }
+    }
+
+    pub fn join_route(&self) -> String {
+        if let Some(session_secret) = self.session_secret.clone() {
+            JoinSessionLinkArgs {
+                session_id: self.session_id,
+                session_secret,
+            }
+            .to_join_route()
+        } else {
+            format!("/sessions/join/{}", self.session_id)
+        }
+    }
+}
+
+impl From<SessionId> for SharedSessionJoinArgs {
+    fn from(session_id: SessionId) -> Self {
+        Self::new(session_id, None)
+    }
+}
+
 /// Returns the native intent URL to join a shared session.
 /// This should be used when opening the session from within Warp.
 pub fn join_native_intent(session_id: &SessionId) -> String {
+    join_native_intent_with_secret(session_id, None)
+}
+
+pub fn join_native_intent_with_secret(
+    session_id: &SessionId,
+    session_secret: Option<&SessionSecret>,
+) -> String {
     format!(
-        "{}://shared_session/{}",
+        "{}://shared_session/{}{}",
         ChannelState::url_scheme(),
-        session_id
+        session_id,
+        session_secret
+            .map(|secret| {
+                let args = JoinSessionLinkArgs {
+                    session_id: *session_id,
+                    session_secret: secret.clone(),
+                };
+                format!("?pwd={}", args.secret_to_string())
+            })
+            .unwrap_or_default()
     )
 }
 
 /// Returns the link to join a shared session.
 pub fn join_link(session_id: &SessionId) -> String {
+    join_link_with_secret(session_id, None)
+}
+
+pub fn join_link_with_secret(
+    session_id: &SessionId,
+    session_secret: Option<&SessionSecret>,
+) -> String {
+    if crate::server::server_api::no_cloud_mode_enabled() {
+        let mut link = join_native_intent_with_secret(session_id, session_secret);
+        append_preview_query_param(&mut link);
+        return link;
+    }
+
     // For non-bundled builds against the staging server, use the native app intent
     // because the staging web URL won't resolve to a local build.
     let use_web_url = !ChannelState::uses_staging_server() || cfg!(feature = "release_bundle");
@@ -311,12 +377,27 @@ pub fn join_link(session_id: &SessionId) -> String {
         join_native_intent(session_id)
     };
 
-    // If this is a preview build, route the sharing link to the preview server.
-    if matches!(ChannelState::channel(), Channel::Preview) {
-        link.push_str("?preview=true");
+    if let Some(session_secret) = session_secret {
+        let args = JoinSessionLinkArgs {
+            session_id: *session_id,
+            session_secret: session_secret.clone(),
+        };
+        link.push_str(&format!("?pwd={}", args.secret_to_string()));
     }
 
+    append_preview_query_param(&mut link);
     link
+}
+
+fn append_preview_query_param(link: &mut String) {
+    // If this is a preview build, route the sharing link to the preview server.
+    if matches!(ChannelState::channel(), Channel::Preview) {
+        if link.contains('?') {
+            link.push_str("&preview=true");
+        } else {
+            link.push_str("?preview=true");
+        }
+    }
 }
 
 /// Returns the full session sharing URL given a path.

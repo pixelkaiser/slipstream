@@ -28,6 +28,7 @@ fn code_subpages_are_identified() {
 #[test]
 fn cloud_platform_subpages_are_identified() {
     assert!(SettingsSection::CloudEnvironments.is_cloud_platform_subpage());
+    assert!(SettingsSection::CloudSharing.is_cloud_platform_subpage());
     assert!(SettingsSection::OzCloudAPIKeys.is_cloud_platform_subpage());
 
     assert!(!SettingsSection::Account.is_cloud_platform_subpage());
@@ -43,6 +44,7 @@ fn is_subpage_covers_all_umbrella_types() {
     assert!(SettingsSection::CodeIndexing.is_subpage());
     assert!(SettingsSection::EditorAndCodeReview.is_subpage());
     assert!(SettingsSection::CloudEnvironments.is_subpage());
+    assert!(SettingsSection::CloudSharing.is_subpage());
     assert!(SettingsSection::OzCloudAPIKeys.is_subpage());
 
     // Top-level pages should not be subpages.
@@ -100,6 +102,10 @@ fn cloud_platform_subpages_map_to_their_backing_pages() {
     assert_eq!(
         SettingsSection::CloudEnvironments.parent_page_section(),
         SettingsSection::CloudEnvironments
+    );
+    assert_eq!(
+        SettingsSection::CloudSharing.parent_page_section(),
+        SettingsSection::CloudSharing
     );
     assert_eq!(
         SettingsSection::OzCloudAPIKeys.parent_page_section(),
@@ -190,6 +196,7 @@ fn subpage_display_names_are_correct() {
         SettingsSection::CloudEnvironments.to_string(),
         "Environments"
     );
+    assert_eq!(SettingsSection::CloudSharing.to_string(), "Sharing");
     assert_eq!(
         SettingsSection::OzCloudAPIKeys.to_string(),
         "Oz Cloud API Keys"
@@ -225,6 +232,10 @@ fn subpage_from_str_parses_display_names() {
     assert_eq!(
         SettingsSection::from_str("Editor and Code Review"),
         Ok(SettingsSection::EditorAndCodeReview)
+    );
+    assert_eq!(
+        SettingsSection::from_str("Sharing"),
+        Ok(SettingsSection::CloudSharing)
     );
     assert_eq!(
         SettingsSection::from_str("Oz Cloud API Keys"),

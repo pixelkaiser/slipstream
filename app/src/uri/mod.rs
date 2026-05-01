@@ -32,7 +32,7 @@ use crate::{
 };
 use anyhow::{anyhow, ensure, Result};
 use itertools::Itertools;
-use session_sharing_protocol::common::SessionId;
+use session_sharing_protocol::common::{SessionId, SessionSecret};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -207,6 +207,15 @@ impl UriHost {
                     .last()
                     .and_then(|id| SessionId::from_str(id).ok());
                 if let Some(session_id) = session_id {
+                    let session_secret = url.query_pairs().find_map(|(key, value)| {
+                        (key == "pwd")
+                            .then(|| SessionSecret::from_str(value.as_ref()).ok())
+                            .flatten()
+                    });
+                    let join_args = crate::terminal::shared_session::SharedSessionJoinArgs::new(
+                        session_id,
+                        session_secret,
+                    );
                     // If there's an existing window, join the session inc a new tab. Otherwise, open a new window.
                     match primary_window_id.and_then(|window_id| {
                         ctx.root_view_id(window_id)
@@ -217,12 +226,12 @@ impl UriHost {
                                 primary_window_id,
                                 &[root_view_id],
                                 "root_view:join_shared_session_in_existing_window",
-                                &session_id,
+                                &join_args,
                                 log::Level::Info,
                             );
                         }
                         None => {
-                            ctx.dispatch_global_action("root_view:join_shared_session", &session_id)
+                            ctx.dispatch_global_action("root_view:join_shared_session", &join_args)
                         }
                     }
                 } else {

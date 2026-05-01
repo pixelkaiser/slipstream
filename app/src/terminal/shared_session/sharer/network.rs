@@ -19,9 +19,9 @@ use session_sharing_protocol::common::{
     ControlActionFailureReason, ControlActionRequestId, FeatureSupport, InputOperationId,
     InputOperationSeqNo, InputUpdate, OrderedTerminalEvent, OrderedTerminalEventType,
     ParticipantId, ParticipantList, ParticipantPresenceUpdate, Role, RoleRequestId,
-    RoleRequestResponse, Selection, SelectionUpdate, SessionId, UniversalDeveloperInputContext,
-    UniversalDeveloperInputContextUpdate, UserID, WindowSize, WriteToPtyFailureReason,
-    WriteToPtyRequestId,
+    RoleRequestResponse, Selection, SelectionUpdate, SessionId, SessionSecret,
+    UniversalDeveloperInputContext, UniversalDeveloperInputContextUpdate, UserID, WindowSize,
+    WriteToPtyFailureReason, WriteToPtyRequestId,
 };
 use session_sharing_protocol::sharer::{
     AddGuestsResponse, DownstreamMessage, FailedToAddGuestsReason, LinkAccessLevelUpdateResponse,
@@ -137,6 +137,7 @@ pub struct Network {
 
     // These fields are Some once we successfully connect and create the shared session.
     session_id: Option<SessionId>,
+    session_secret: Option<SessionSecret>,
     reconnect_token: Option<ReconnectToken>,
     sharer_id: Option<ParticipantId>,
 
@@ -188,6 +189,7 @@ impl Network {
             },
             stage: Stage::BeforeStarted,
             session_id: None,
+            session_secret: None,
             reconnect_token: None,
             sharer_id: None,
             unacked_terminal_events: HashMap::new(),
@@ -196,6 +198,7 @@ impl Network {
         let sharer_firebase_uid = UserUid::new("mock_firebase_uid");
         ctx.emit(NetworkEvent::SharedSessionCreatedSuccessfully {
             session_id,
+            session_secret: None,
             sharer_id: ParticipantId::new(),
             sharer_firebase_uid,
         });
@@ -260,6 +263,7 @@ impl Network {
             },
             stage: Stage::BeforeStarted,
             session_id: None,
+            session_secret: None,
             reconnect_token: None,
             sharer_id: None,
             unacked_terminal_events: HashMap::new(),
@@ -594,6 +598,7 @@ impl Network {
     ) {
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let anonymous_id = AuthStateProvider::as_ref(ctx).get().anonymous_id();
+        let no_cloud_mode = crate::server::server_api::no_cloud_mode_enabled();
 
         // Get the selected model before spawning the async task
         let llm_prefs = crate::ai::llms::LLMPreferences::as_ref(ctx);
@@ -610,11 +615,15 @@ impl Network {
                 };
                 let user_id = UserID {
                     anonymous_id,
-                    access_token: auth_client
-                        .get_or_refresh_access_token()
-                        .await
-                        .ok()
-                        .and_then(|token| token.bearer_token()),
+                    access_token: if no_cloud_mode {
+                        None
+                    } else {
+                        auth_client
+                            .get_or_refresh_access_token()
+                            .await
+                            .ok()
+                            .and_then(|token| token.bearer_token())
+                    },
                 };
                 let socket = WebSocket::connect(create_endpoint, None).await?;
                 anyhow::Ok((socket.split().await, user_id))
@@ -675,11 +684,13 @@ impl Network {
             return;
         }
 
-        let (Some(session_id), Some(reconnect_token)) =
-            (self.session_id, self.reconnect_token.clone())
-        else {
+        let (Some(session_id), Some(session_secret), Some(reconnect_token)) = (
+            self.session_id,
+            self.session_secret.clone(),
+            self.reconnect_token.clone(),
+        ) else {
             log::error!(
-                "Cannot reconnect to session as sharer without session_id, and reconnect_token"
+                "Cannot reconnect to session as sharer without session_id, session_secret, and reconnect_token"
             );
             return;
         };
@@ -691,6 +702,7 @@ impl Network {
 
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
+        let no_cloud_mode = crate::server::server_api::no_cloud_mode_enabled();
         let abort_handle = ctx
             .spawn_with_retry_on_error(
                 move || {
@@ -702,11 +714,15 @@ impl Network {
                         let socket = WebSocket::connect(reconnect_endpoint, None).await?;
                         let user_id = UserID {
                             anonymous_id: auth_state.anonymous_id(),
-                            access_token: auth_client
-                                .get_or_refresh_access_token()
-                                .await
-                                .ok()
-                                .and_then(|token| token.bearer_token()),
+                            access_token: if no_cloud_mode {
+                                None
+                            } else {
+                                auth_client
+                                    .get_or_refresh_access_token()
+                                    .await
+                                    .ok()
+                                    .and_then(|token| token.bearer_token())
+                            },
                         };
                         anyhow::Ok((socket.split().await, user_id))
                     }
@@ -723,7 +739,7 @@ impl Network {
                         // We don't use the `send_message_to_server` API here
                         // because we don't want to buffer this message.
                         let message = UpstreamMessage::Reconnect(ReconnectPayload {
-                            session_secret: Default::default(),
+                            session_secret: session_secret.clone(),
                             reconnect_token: reconnect_token.clone(),
                             user_id,
                             latest_block_id: latest_block_id.into(),
@@ -845,10 +861,10 @@ impl Network {
         match downstream_message {
             DownstreamMessage::SessionInitialized {
                 session_id,
+                session_secret,
                 reconnect_token,
                 sharer_id,
                 sharer_firebase_uid,
-                ..
             } => {
                 if !matches!(self.stage, Stage::BeforeStarted) {
                     log::warn!("Received unexpected SessionInitialized message when we weren't in BeforeStarted stage");
@@ -857,6 +873,7 @@ impl Network {
                 log::info!("Successfully created shared session.");
 
                 self.session_id = Some(session_id);
+                self.session_secret = Some(session_secret.clone());
                 self.reconnect_token = Some(reconnect_token);
                 self.sharer_id = Some(sharer_id.clone());
 
@@ -869,6 +886,7 @@ impl Network {
 
                 ctx.emit(NetworkEvent::SharedSessionCreatedSuccessfully {
                     session_id,
+                    session_secret: Some(session_secret),
                     sharer_id,
                     sharer_firebase_uid: UserUid::new(sharer_firebase_uid.as_str()),
                 });
@@ -1293,6 +1311,7 @@ pub fn failed_to_add_guests_user_error(reason: &FailedToAddGuestsReason) -> Stri
 pub enum NetworkEvent {
     SharedSessionCreatedSuccessfully {
         session_id: SessionId,
+        session_secret: Option<SessionSecret>,
         sharer_id: ParticipantId,
         sharer_firebase_uid: UserUid,
     },
