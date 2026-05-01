@@ -210,6 +210,53 @@ impl RectData {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(super) struct CursorTrailData {
+    top_left: Vector2F,
+    top_right: Vector2F,
+    bottom_right: Vector2F,
+    bottom_left: Vector2F,
+    cursor_bounds: Vector4F,
+    color: ColorF,
+}
+
+impl CursorTrailData {
+    const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+        1 => Float32x2,
+        2 => Float32x2,
+        3 => Float32x2,
+        4 => Float32x2,
+        5 => Float32x4,
+        6 => Float32x4,
+    ];
+
+    pub(super) fn new(
+        corners: [pathfinder_geometry::vector::Vector2F; 4],
+        cursor_bounds: RectF,
+        color: ColorU,
+    ) -> Self {
+        Self {
+            top_left: corners[0].into(),
+            top_right: corners[1].into(),
+            bottom_right: corners[2].into(),
+            bottom_left: corners[3].into(),
+            cursor_bounds: cursor_bounds.into(),
+            color: color.into(),
+        }
+    }
+
+    pub(super) fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
 // Uniform buffer objects need to be 16-byte aligned in WGSL, so enforce
 // that constraint here.
 //
