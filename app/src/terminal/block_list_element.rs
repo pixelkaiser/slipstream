@@ -1,5 +1,5 @@
-use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
-use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
+use crate::ai::blocklist::agent_view::{AgentViewState, agent_view_bg_fill};
+use crate::ai::blocklist::{ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, ai_brand_color};
 use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
 use crate::appearance::Appearance;
 use crate::drive::settings::WarpDriveSettings;
@@ -19,7 +19,7 @@ use crate::terminal::model::index::Point as IndexPoint;
 use crate::terminal::model::selection::{SelectAction, SelectionPoint};
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
 use crate::terminal::view::TerminalAction;
-use crate::terminal::{grid_renderer, SizeInfo};
+use crate::terminal::{SizeInfo, grid_renderer};
 use crate::themes::theme::{Fill, WarpTheme};
 use crate::ui_components::{self, icons as UIIcon};
 use crate::util::color::Opacity;
@@ -52,23 +52,26 @@ use warpui::elements::{
 use warpui::event::{KeyState, ModifiersState};
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{vec2f, Vector2F};
+use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::platform::keyboard::KeyCode;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
-use warpui::{elements::Icon, ClipBounds};
 use warpui::{
-    elements::SavePosition, event::DispatchedEvent, AfterLayoutContext, AppContext, Element, Event,
-    EventContext, LayoutContext, PaintContext, SizeConstraint,
+    AfterLayoutContext, AppContext, Element, Event, EventContext, LayoutContext, PaintContext,
+    SizeConstraint, elements::SavePosition, event::DispatchedEvent,
 };
+use warpui::{ClipBounds, elements::Icon};
 use warpui::{EntityId, ModelHandle, SingletonEntity as _};
 
 use super::block_list_viewport::{ClampingMode, InputMode, ScrollPosition, ViewportState};
 use super::blockgrid_renderer::GridRenderParams;
+use super::cursor_trail::{CursorTrailStateHandle, CursorTrailSurface};
 use super::find::{BlockListFindRun, BlockListMatch, TerminalFindModel};
 use super::grid_renderer::CellGlyphCache;
 
+use super::TerminalModel;
 use super::meta_shortcuts::handle_keystroke_despite_composing;
+use super::model::SecretHandle;
 use super::model::block::BlockId;
 use super::model::blocks::{RichContentItem, SelectionRange};
 use super::model::grid::grid_handler::{Link, TermMode};
@@ -76,24 +79,22 @@ use super::model::image_map::StoredImageMetadata;
 use super::model::mouse::{MouseAction, MouseButton, MouseState};
 use super::model::session::SessionId;
 use super::model::terminal_model::{SelectedBlocks, WithinBlock, WithinModel};
-use super::model::SecretHandle;
 use super::shared_session::presence_manager::{
-    text_selection_color, PresenceManager, MUTED_PARTICIPANT_COLOR,
+    MUTED_PARTICIPANT_COLOR, PresenceManager, text_selection_color,
 };
 use super::shared_session::render_util::SHARED_SESSION_AVATAR_DIAMETER;
 use super::view::{
-    BlocklistAIRenderContext, InlineBannerId, RichContentMetadata, SeparatorId,
-    SharedSessionBanners, TerminalEditor, TerminalViewRenderContext, BLOCK_BANNER_HEIGHT,
+    BLOCK_BANNER_HEIGHT, BlocklistAIRenderContext, InlineBannerId, RichContentMetadata,
+    SeparatorId, SharedSessionBanners, TerminalEditor, TerminalViewRenderContext,
 };
 use super::warpify::render::{draw_flag_pole, render_subshell_flag};
-use super::TerminalModel;
-use super::{heights_approx_eq, HEIGHT_FUDGE_FACTOR_LINES};
+use super::{HEIGHT_FUDGE_FACTOR_LINES, heights_approx_eq};
 use crate::terminal::blockgrid_renderer::BlockGridParams;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::terminal::warpify::SubshellSource;
 
 use crate::terminal::model::escape_sequences::{
-    maybe_kitty_keyboard_escape_sequence, KeystrokeWithDetails, ToEscapeSequence,
+    KeystrokeWithDetails, ToEscapeSequence, maybe_kitty_keyboard_escape_sequence,
 };
 
 /// The number of pixels at the bottom of padding where selection scrolling is performed.
@@ -743,6 +744,9 @@ pub struct BlockListElement {
     /// If `Some()`, lays out and renders the element next to the cursor.
     cursor_hint_text_element: Option<Box<dyn Element>>,
 
+    cursor_trail_state: CursorTrailStateHandle,
+    cursor_trail_enabled: bool,
+
     /// Voice input toggle key code for CLI agent footer integration.
     #[cfg(feature = "voice_input")]
     voice_input_toggle_key_code: Option<KeyCode>,
@@ -893,6 +897,8 @@ impl BlockListElement {
         input_size_at_last_frame: Vector2F,
         inline_menu_positioner: ModelHandle<InlineMenuPositioner>,
         cursor_hint_text_element: Option<Box<dyn Element>>,
+        cursor_trail_state: CursorTrailStateHandle,
+        cursor_trail_enabled: bool,
     ) -> Self {
         let highlighted_url = terminal_view_render_context
             .highlighted_url
@@ -974,6 +980,8 @@ impl BlockListElement {
             input_size_at_last_frame,
             block_footer_elements: HashMap::new(),
             cursor_hint_text_element,
+            cursor_trail_state,
+            cursor_trail_enabled,
             cli_subagent_views,
             inline_menu_positioner,
             #[cfg(feature = "voice_input")]
@@ -2485,7 +2493,8 @@ impl BlockListElement {
         agent_view_state: &AgentViewState,
         ctx: &mut PaintContext,
         app: &AppContext,
-    ) {
+    ) -> bool {
+        let mut cursor_was_drawn = false;
         Self::draw_block_background(
             block_grid_params.grid_render_params.cell_size,
             *grid_origin,
@@ -2613,7 +2622,7 @@ impl BlockListElement {
             // Check if the "hide cursor" escape sequence is present.
             && block.is_mode_set(TermMode::SHOW_CURSOR)
         {
-            block.prompt_and_command_grid().draw_cursor(
+            cursor_was_drawn |= block.prompt_and_command_grid().draw_cursor(
                 command_origin,
                 &block_grid_params.grid_render_params,
                 ctx,
@@ -2713,7 +2722,7 @@ impl BlockListElement {
             // rely on Warp's cursor, so we suppress it here too.
             && !block_grid_params.grid_render_params.hide_cursor_cell
             {
-                block.output_grid().draw_cursor(
+                cursor_was_drawn |= block.output_grid().draw_cursor(
                     *grid_origin,
                     &block_grid_params.grid_render_params,
                     ctx,
@@ -2781,6 +2790,8 @@ impl BlockListElement {
             // End the clipping of the area under the snackbar header rect
             ctx.scene.stop_layer();
         }
+
+        cursor_was_drawn
     }
 
     /// Returns the location where the snackbar toggle button should be drawn, or None if it should
@@ -3569,7 +3580,8 @@ impl Element for BlockListElement {
 
                     let total_lines = grid_storage_lines + flat_storage_lines;
                     let total_bytes = grid_storage_bytes + flat_storage_bytes;
-                    let text = format!("\
+                    let text = format!(
+                        "\
                             Lines: {total_lines} (grid: {grid_storage_lines}, flat: {flat_storage_lines}); \
                             Size: {:#.1} (grid: {:#.1}, flat: {:#.1})\
                         ",
@@ -3739,6 +3751,9 @@ impl Element for BlockListElement {
             size_info: self.size_info,
             cell_size,
             use_ligature_rendering: self.use_ligature_rendering,
+            cursor_trail_state: Some(self.cursor_trail_state.clone()),
+            cursor_trail_surface: CursorTrailSurface::BlockList,
+            cursor_trail_enabled: self.cursor_trail_enabled,
             hide_cursor_cell: self.hide_cursor_cell,
         };
         let block_grid_params = BlockGridParams {
@@ -3783,6 +3798,7 @@ impl Element for BlockListElement {
         }
 
         let mut cli_subagent_views_to_paint = vec![];
+        let mut cursor_was_drawn = false;
         let agent_view_state = model.block_list().agent_view_state();
 
         let items = self
@@ -3977,7 +3993,9 @@ impl Element for BlockListElement {
                                     - SPACE_BETWEEN_SELECTED_BLOCK_AVATARS,
                             );
                         } else {
-                            log::warn!("Should show avatar for shared session participant at selected block but avatar element was not found")
+                            log::warn!(
+                                "Should show avatar for shared session participant at selected block but avatar element was not found"
+                            )
                         }
                     }
 
@@ -4030,7 +4048,7 @@ impl Element for BlockListElement {
                         grid_origin += vec2f(0., banner.banner_height());
                     }
 
-                    Self::draw_block(
+                    cursor_was_drawn |= Self::draw_block(
                         block,
                         &mut grid_origin,
                         origin,
@@ -4351,6 +4369,10 @@ impl Element for BlockListElement {
                     grid_origin += vec2f(0., *height_px);
                 }
             }
+        }
+
+        if !cursor_was_drawn {
+            self.cursor_trail_state.reset();
         }
 
         let block_list = model.block_list();

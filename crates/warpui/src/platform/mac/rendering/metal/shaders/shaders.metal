@@ -53,6 +53,14 @@ struct GlyphFragmentData
     bool is_emoji;
 };
 
+struct CursorTrailFragmentData
+{
+    float4 position [[position]];
+    float2 pixel_position;
+    float4 cursor_bounds;
+    float4 color;
+};
+
 
 float distance_from_rect(vector_float2 pixel_pos, vector_float2 rect_center, vector_float2 rect_corner, float corner_radius) {
     vector_float2 p = pixel_pos - rect_center;
@@ -398,5 +406,45 @@ fragment float4 glyph_fragment_shader(
     color.a *= max(color_sample.r, float(in.is_emoji));
     // Apply the fade.
     color.a *= saturate(in.fade_alpha);
+    return color;
+}
+
+vertex CursorTrailFragmentData
+cursor_trail_vertex_shader(
+        uint vertex_id [[vertex_id]],
+        uint instance_id [[instance_id]],
+        constant vector_float2 *vertices [[buffer(0)]],
+        const device PerCursorTrailUniforms *trail_uniforms [[buffer(1)]],
+        constant Uniforms *uniforms [[buffer(2)]])
+{
+    const device PerCursorTrailUniforms *trail = &trail_uniforms[instance_id];
+
+    vector_float2 top = mix(trail->top_left, trail->top_right, vertices[vertex_id].x);
+    vector_float2 bottom = mix(trail->bottom_left, trail->bottom_right, vertices[vertex_id].x);
+    vector_float2 pixel_position = mix(top, bottom, vertices[vertex_id].y);
+    vector_float2 device_pos = pixel_position / uniforms->viewport_size * vector_float2(2.0, -2.0) + vector_float2(-1.0, 1.0);
+
+    CursorTrailFragmentData out;
+    out.position = vector_float4(device_pos, 0.0, 1.0);
+    out.pixel_position = pixel_position;
+    out.cursor_bounds = trail->cursor_bounds;
+    out.color = trail->color;
+    return out;
+}
+
+fragment float4 cursor_trail_fragment_shader(CursorTrailFragmentData in [[stage_in]])
+{
+    vector_float2 cursor_min = in.cursor_bounds.xy;
+    vector_float2 cursor_max = in.cursor_bounds.xy + in.cursor_bounds.zw;
+    bool inside_cursor =
+        in.pixel_position.x >= cursor_min.x &&
+        in.pixel_position.x <= cursor_max.x &&
+        in.pixel_position.y >= cursor_min.y &&
+        in.pixel_position.y <= cursor_max.y;
+
+    float4 color = in.color;
+    if (inside_cursor) {
+        color.a = 0.0;
+    }
     return color;
 }

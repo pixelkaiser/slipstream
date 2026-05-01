@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::settings::{AISettings, InputSettings, TerminalSpacing};
 use settings::{
-    macros::define_settings_group, RespectUserSyncSetting, SupportedPlatforms, SyncToCloud,
+    RespectUserSyncSetting, SupportedPlatforms, SyncToCloud, macros::define_settings_group,
 };
-use warpui::{units::Pixels, AppContext, SingletonEntity};
+use warpui::{AppContext, SingletonEntity, units::Pixels};
 
 #[derive(
     Clone,
@@ -111,6 +111,15 @@ define_settings_group!(TerminalSettings, settings: [
         private: false,
         toml_path: "terminal.maximum_grid_size",
         description: "The maximum number of rows in the terminal grid.",
+    },
+    cursor_trail_enabled: CursorTrailEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "terminal.effects.cursor_trail",
+        description: "Whether to show an animated trail behind the terminal cursor.",
     },
     alt_screen_padding: AltScreenPadding {
         type: AltScreenPaddingMode,
