@@ -1,9 +1,10 @@
 use self::telemetry::SettingsTelemetryEvent;
+use crate::TelemetryEvent;
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::server::telemetry::MCPServerCollectionPaneEntrypoint;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::TelemetryEvent;
 use crate::{
+    GlobalResourceHandlesProvider,
     ai::execution_profiles::profiles::ClientProfileId,
     appearance::Appearance,
     editor::{
@@ -12,17 +13,16 @@ use crate::{
     },
     menu::{self, Menu, MenuItem, MenuItemFields},
     pane_group::{
-        pane::view, BackingView, Direction, PaneConfiguration, PaneEvent, SplitPaneState,
+        BackingView, Direction, PaneConfiguration, PaneEvent, SplitPaneState, pane::view,
     },
     server::server_api::ServerApiProvider,
     settings::{AISettings, BlockVisibilitySettings, SettingsFileError},
     settings_view::mcp_servers_page::MCPServersSettingsPageEvent,
-    terminal::{model::blockgrid::BlockGrid, SizeInfo},
+    terminal::{SizeInfo, model::blockgrid::BlockGrid},
     ui_components::icons,
-    util::bindings::{keybinding_name_to_display_string, BindingGroup, CustomAction},
+    util::bindings::{BindingGroup, CustomAction, keybinding_name_to_display_string},
     view_components::ToastFlavor,
     workspace::WorkspaceAction,
-    GlobalResourceHandlesProvider,
 };
 use about_page::AboutPageView;
 use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AISubpage};
@@ -42,10 +42,10 @@ use nav::{SettingsNavItem, SettingsUmbrella};
 use pathfinder_geometry::vector::Vector2F;
 use privacy_page::{PrivacyPageView, PrivacyPageViewEvent};
 use referrals_page::{ReferralsPageEvent, ReferralsPageView};
-use settings_file_footer::{render_footer, SettingsFooterKind, SettingsFooterMouseStates};
+use settings_file_footer::{SettingsFooterKind, SettingsFooterMouseStates, render_footer};
 use settings_page::{
-    MatchData, SettingsPage, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
-    HEADER_PADDING,
+    HEADER_PADDING, MatchData, SettingsPage, SettingsPageEvent, SettingsPageMeta,
+    SettingsPageViewHandle,
 };
 use show_blocks_view::{ShowBlocksEvent, ShowBlocksView};
 use std::collections::HashMap;
@@ -61,6 +61,8 @@ use warp_editor::editor::NavigationKey;
 use warpify_page::{WarpifyPageAction, WarpifyPageView};
 use warpui::Element;
 use warpui::{
+    Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView as _,
+    View, ViewContext, ViewHandle,
     elements::{
         Align, Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle,
         ClippedScrollable, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
@@ -71,8 +73,6 @@ use warpui::{
     fonts::{Properties, Weight},
     id,
     keymap::{ContextPredicate, EnabledPredicate, FixedBinding},
-    Action, AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, UpdateView as _,
-    View, ViewContext, ViewHandle,
 };
 
 mod about_page;
@@ -124,8 +124,8 @@ pub use features_page::FeaturesPageAction;
 pub use main_page::handle_experiment_change;
 pub use privacy_page::PrivacyPageAction;
 pub use settings_page::{
-    render_body_item_label, render_info_icon, render_input_list, render_separator, AdditionalInfo,
-    InputListItem, LocalOnlyIconState, ToggleState,
+    AdditionalInfo, InputListItem, LocalOnlyIconState, ToggleState, render_body_item_label,
+    render_info_icon, render_input_list, render_separator,
 };
 pub use teams_page::{OpenTeamsSettingsModalArgs, TeamsInviteOption};
 
@@ -446,6 +446,7 @@ pub mod flags {
     pub const LINK_TOOLTIP_CONTEXT_FLAG: &str = "Link_Tooltip";
     pub const COMPACT_MODE_CONTEXT_FLAG: &str = "Compact_Mode_Enabled";
     pub const CURSOR_BLINK_CONTEXT_FLAG: &str = "Cursor_Blink_Enabled";
+    pub const CURSOR_TRAIL_CONTEXT_FLAG: &str = "Cursor_Trail_Enabled";
     pub const VIM_MODE_CONTEXT_FLAG: &str = "Vim_Mode_Enabled";
     pub const VIM_UNNAMED_SYSTEM_CLIPBOARD: &str = "Vim_Unnamed_System_Clipboard";
     pub const VIM_SHOW_STATUS_BAR: &str = "Vim_Show_Status_Bar";
