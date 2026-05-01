@@ -2,11 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { defaultModel, resolveProviderModel } from "./model.js";
 
-test("uses OPENAI_MODEL as a global provider model override", () => {
+test("uses OPENAI_MODEL as the fallback when no concrete model is requested", () => {
   assert.equal(
     resolveProviderModel({
       openAiModel: "provider-model",
-      warpModel: "auto-efficient",
+    }),
+    "provider-model",
+  );
+  assert.equal(
+    resolveProviderModel({
+      openAiModel: "provider-model",
+      warpModel: "auto-unknown",
     }),
     "provider-model",
   );
@@ -31,5 +37,11 @@ test("uses LOCAL_MODEL_ALIASES to override built-in model mappings", () => {
 
 test("passes through provider-native model IDs", () => {
   assert.equal(resolveProviderModel({ warpModel: "Qwen/Qwen3.6-27B-FP8" }), defaultModel);
-  assert.equal(resolveProviderModel({ warpModel: "provider-native-model" }), "provider-native-model");
+  assert.equal(
+    resolveProviderModel({
+      openAiModel: "fallback-model",
+      warpModel: "provider-native-model",
+    }),
+    "provider-native-model",
+  );
 });

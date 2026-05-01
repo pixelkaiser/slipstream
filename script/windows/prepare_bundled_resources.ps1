@@ -92,10 +92,25 @@ function Build-AndCopyLocalMultiAgent {
     Copy-Item -Path (Join-Path $LocalAgentSource 'scripts') -Destination (Join-Path $LocalAgentStage 'scripts') -Recurse -Force
 
     Push-Location $LocalAgentStage
+    $PreviousNpmTarget = $env:npm_config_target
+    $PreviousNpmRuntime = $env:npm_config_runtime
+    $PreviousNpmDistUrl = $env:npm_config_disturl
     try {
+        if ($env:LOCAL_AGENT_NODE_TARGET_VERSION) {
+            $env:npm_config_target = $env:LOCAL_AGENT_NODE_TARGET_VERSION
+        } else {
+            $env:npm_config_target = '22.12.0'
+        }
+        $env:npm_config_runtime = 'node'
+        $env:npm_config_disturl = 'https://nodejs.org/dist'
         & npm ci
         if (-Not $?) {
             Write-Error 'Failed to install local multi-agent dependencies'
+            exit 1
+        }
+        & npm rebuild better-sqlite3 --build-from-source
+        if (-Not $?) {
+            Write-Error 'Failed to rebuild local multi-agent native dependencies'
             exit 1
         }
         & npm run build
@@ -110,6 +125,9 @@ function Build-AndCopyLocalMultiAgent {
         }
     } finally {
         Pop-Location
+        $env:npm_config_target = $PreviousNpmTarget
+        $env:npm_config_runtime = $PreviousNpmRuntime
+        $env:npm_config_disturl = $PreviousNpmDistUrl
     }
 
     if (Test-Path $LocalAgentDestination -PathType Container) {

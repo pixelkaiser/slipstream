@@ -573,7 +573,7 @@ test("populates local model choices from the configured v1/models endpoint", asy
     await withEnv({
       OPENAI_API_KEY: "sk-local-test",
       OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`,
-      OPENAI_MODEL: undefined,
+      OPENAI_MODEL: "local-coder",
       LOCAL_MODEL_LIST: undefined,
     }, async () => {
       await withStore(async (store) => {
@@ -594,7 +594,7 @@ test("populates local model choices from the configured v1/models endpoint", asy
           };
         };
         const agentMode = user.user?.workspaces?.[0]?.featureModelChoice?.agentMode;
-        assert.equal(agentMode?.defaultId, "local-qwen");
+        assert.equal(agentMode?.defaultId, "local-coder");
         assert.deepEqual(agentMode?.choices?.map((choice) => choice.id), ["local-qwen", "local-coder"]);
         assert.equal(agentMode?.choices?.[0]?.provider, "UNKNOWN");
         assert.equal(agentMode?.choices?.[0]?.hostConfigs?.[0]?.modelRoutingHost, "DIRECT_API");
