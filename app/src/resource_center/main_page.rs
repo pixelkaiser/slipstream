@@ -26,7 +26,7 @@ use warpui::{
     ViewHandle, WindowId,
 };
 
-use crate::{appearance::Appearance, workspace::WorkspaceAction};
+use crate::{appearance::Appearance, settings_view::SettingsSection, workspace::WorkspaceAction};
 
 use super::{
     section_views::{
@@ -507,17 +507,17 @@ impl View for ResourceCenterMainView {
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let body = self.render_body(appearance);
-        let invite_button = self.render_invite_button(appearance);
         let skip_tips = self.render_skip_tips_button(appearance);
 
         let mut main_page = Flex::column();
 
-        if !AuthStateProvider::as_ref(app)
-            .get()
-            .is_anonymous_or_logged_out()
+        if !SettingsSection::Referrals.is_hidden_in_settings()
+            && !AuthStateProvider::as_ref(app)
+                .get()
+                .is_anonymous_or_logged_out()
             && !FeatureFlag::AvatarInTabBar.is_enabled()
         {
-            main_page = main_page.with_child(invite_button);
+            main_page = main_page.with_child(self.render_invite_button(appearance));
         }
 
         if !self.tips_completed.as_ref(app).skipped_or_completed

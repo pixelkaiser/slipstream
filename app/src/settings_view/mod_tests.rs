@@ -129,6 +129,24 @@ fn non_subpage_sections_map_to_themselves() {
     );
 }
 
+#[test]
+fn hidden_settings_sections_fall_back_to_account() {
+    assert!(SettingsSection::Referrals.is_hidden_in_settings());
+    assert!(SettingsSection::WarpDrive.is_hidden_in_settings());
+    assert_eq!(
+        SettingsSection::Referrals.visible_or_default(),
+        SettingsSection::Account
+    );
+    assert_eq!(
+        SettingsSection::WarpDrive.visible_or_default(),
+        SettingsSection::Account
+    );
+    assert_eq!(
+        SettingsSection::Appearance.visible_or_default(),
+        SettingsSection::Appearance
+    );
+}
+
 // ── ai_subpages list ────────────────────────────────────────────────────────
 
 #[test]
