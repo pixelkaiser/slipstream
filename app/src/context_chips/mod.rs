@@ -164,6 +164,7 @@ pub enum ContextChipKind {
     Date,
     Time12,
     Time24,
+    LastCommandRuntime,
     VirtualEnvironment,
     CondaEnvironment,
     NodeVersion,
@@ -281,6 +282,11 @@ impl ContextChipKind {
                 "Time (24-hour format)",
                 builtins::time24,
                 TIME_REFRESH_CONFIG,
+            )),
+            Self::LastCommandRuntime => Some(ContextChip::builtin(
+                "Last Command Runtime",
+                |_| None,
+                RefreshConfig::OnDemandOnly,
             )),
             Self::Custom { title } => {
                 log::warn!("Tried to use custom chip {title}");
@@ -400,6 +406,7 @@ impl ContextChipKind {
             Self::Date => ChipValue::Text("July 12, 2023".to_string()),
             Self::Time12 => ChipValue::Text("03:48 pm".to_string()),
             Self::Time24 => ChipValue::Text("15:48".to_string()),
+            Self::LastCommandRuntime => ChipValue::Text("2m12s".to_string()),
             Self::Custom { .. } => ChipValue::Text("custom chip".to_string()),
             Self::KubernetesContext => ChipValue::Text("kube-context".to_string()),
             Self::SvnBranch => ChipValue::Text("svn-feature-branch".to_string()),
@@ -433,6 +440,7 @@ impl ContextChipKind {
             Self::Date => prompt_colors.input_prompt_date,
             Self::Time12 => prompt_colors.input_prompt_time,
             Self::Time24 => prompt_colors.input_prompt_time,
+            Self::LastCommandRuntime => prompt_colors.input_prompt_time,
             Self::KubernetesContext => prompt_colors.input_prompt_kubernetes,
             Self::SvnBranch => prompt_colors.input_prompt_branch,
             Self::SvnDirtyItems => prompt_colors.input_prompt_svn,
@@ -522,7 +530,7 @@ impl ContextChipKind {
             Self::Username | Self::Ssh => Some(Icon::User),
             Self::Hostname => Some(Icon::Laptop),
             Self::Date => Some(Icon::CalendarDate),
-            Self::Time12 | Self::Time24 => Some(Icon::Clock),
+            Self::Time12 | Self::Time24 | Self::LastCommandRuntime => Some(Icon::Clock),
             Self::VirtualEnvironment | Self::CondaEnvironment | Self::Subshell => {
                 Some(Icon::Terminal)
             }
@@ -561,6 +569,7 @@ pub fn available_chips() -> Vec<ContextChipKind> {
         ContextChipKind::Date,
         ContextChipKind::Time12,
         ContextChipKind::Time24,
+        ContextChipKind::LastCommandRuntime,
         ContextChipKind::VirtualEnvironment,
         ContextChipKind::CondaEnvironment,
         ContextChipKind::NodeVersion,
