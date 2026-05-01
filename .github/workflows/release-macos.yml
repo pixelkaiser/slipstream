@@ -103,7 +103,7 @@ jobs:
 
   build_arch:
     name: Build macOS ${{ matrix.arch }}
-    runs-on: macos-26-xlarge
+    runs-on: ${{ matrix.runner }}
     needs:
       - release_metadata
       - validate_signing_secrets
@@ -113,9 +113,11 @@ jobs:
       matrix:
         include:
           - arch: aarch64
+            runner: macos-26
             rust_target: aarch64-apple-darwin
             dmg_name_suffix: arm64
           - arch: x86_64
+            runner: macos-26-intel
             rust_target: x86_64-apple-darwin
             dmg_name_suffix: x86_64
     steps:
@@ -200,7 +202,7 @@ jobs:
 
   package_universal:
     name: Package notarized universal DMG
-    runs-on: macos-26-xlarge
+    runs-on: macos-26
     needs:
       - release_metadata
       - validate_signing_secrets
