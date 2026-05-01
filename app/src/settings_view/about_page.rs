@@ -45,6 +45,8 @@ impl View for AboutPageView {
 #[derive(Default)]
 struct AboutPageWidget {
     copy_version_button_mouse_state: MouseStateHandle,
+    warp_link_mouse_state: MouseStateHandle,
+    warp_dev_link_mouse_state: MouseStateHandle,
 }
 
 impl SettingsWidget for AboutPageWidget {
@@ -103,6 +105,52 @@ impl SettingsWidget for AboutPageWidget {
                     .finish(),
             ]);
 
+        let copyright_notice = ui_builder
+            .span(format!(
+                "Copyright 2026 {} contributors",
+                ChannelState::product_name()
+            ))
+            .with_soft_wrap()
+            .build()
+            .with_margin_top(16.)
+            .finish();
+
+        let upstream_notice = Wrap::row()
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_children([
+                ui_builder
+                    .span("Portions copyright ".to_string())
+                    .with_soft_wrap()
+                    .build()
+                    .finish(),
+                ui_builder
+                    .link(
+                        "Warp.dev".to_string(),
+                        Some("https://www.warp.dev".to_string()),
+                        None,
+                        self.warp_dev_link_mouse_state.clone(),
+                    )
+                    .soft_wrap(false)
+                    .build()
+                    .finish(),
+                ui_builder
+                    .span(" - based on ".to_string())
+                    .with_soft_wrap()
+                    .build()
+                    .finish(),
+                ui_builder
+                    .link(
+                        "Warp".to_string(),
+                        Some("https://www.warp.dev".to_string()),
+                        None,
+                        self.warp_link_mouse_state.clone(),
+                    )
+                    .soft_wrap(false)
+                    .build()
+                    .finish(),
+            ])
+            .finish();
+
         Align::new(
             Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -119,13 +167,8 @@ impl SettingsWidget for AboutPageWidget {
                     .finish(),
                 )
                 .with_child(version_row.finish())
-                .with_child(
-                    ui_builder
-                        .span(format!("Copyright 2026 {}", ChannelState::product_name()))
-                        .build()
-                        .with_margin_top(16.)
-                        .finish(),
-                )
+                .with_child(copyright_notice)
+                .with_child(Container::new(upstream_notice).with_margin_top(6.).finish())
                 .finish(),
         )
         .finish()
