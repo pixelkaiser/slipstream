@@ -7407,6 +7407,34 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d873d7c67ce09b42110d801813efbc9364414e356be9935700d368351657487"
 
 [[package]]
+name = "local_multi_agent_service"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "diesel",
+ "futures",
+ "futures-util",
+ "http 1.1.0",
+ "log",
+ "prost 0.14.3",
+ "prost-types",
+ "reqwest",
+ "rustls 0.23.39",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tower",
+ "uuid",
+ "warp_multi_agent_api",
+]
+
+[[package]]
 name = "locale_config"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14388,7 +14416,6 @@ dependencies = [
  "mockito",
  "natural_language_detection",
  "nix 0.26.4",
- "node_runtime",
  "notify-debouncer-full",
  "num-traits",
  "num_cpus",
