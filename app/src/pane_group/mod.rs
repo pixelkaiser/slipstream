@@ -138,7 +138,9 @@ use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeModal, RoleChangeModalEvent,
 };
 use crate::terminal::shared_session::share_modal::{ShareSessionModal, ShareSessionModalEvent};
-use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionActionSource};
+use crate::terminal::shared_session::{
+    self, IsSharedSessionCreator, SharedSessionActionSource, SharedSessionJoinArgs,
+};
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::terminal::view::{
     BlockNotification, ConversationRestorationInNewPaneType, ExecuteCommandEvent,
@@ -1818,7 +1820,12 @@ impl PaneGroup {
                 let mut pending_task: Option<AmbientAgentTaskId> = None;
                 let (terminal_view, terminal_manager) = match restore_kind {
                     AmbientRestoreKind::SharedSession { session_id } => {
-                        Self::create_shared_session_viewer(session_id, resources, view_size, ctx)
+                        Self::create_shared_session_viewer(
+                            session_id.into(),
+                            resources,
+                            view_size,
+                            ctx,
+                        )
                     }
                     AmbientRestoreKind::PendingRestoration { task_id } => {
                         let (view, manager) = Self::create_loading_terminal_manager_and_view(
@@ -2434,9 +2441,12 @@ impl PaneGroup {
             return;
         };
 
+        let no_cloud_relay_mode = crate::server::server_api::no_cloud_mode_enabled()
+            && ChannelState::session_sharing_server_url().is_some();
         if AuthStateProvider::as_ref(ctx)
             .get()
             .is_anonymous_or_logged_out()
+            && !no_cloud_relay_mode
         {
             AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
                 auth_manager.attempt_login_gated_feature(
@@ -3247,7 +3257,7 @@ impl PaneGroup {
                     task_id: _,
                 }) => {
                     let (view, terminal_manager) = Self::create_shared_session_viewer(
-                        session_id,
+                        session_id.into(),
                         resources.clone(),
                         view_size,
                         ctx,
@@ -3558,7 +3568,7 @@ impl PaneGroup {
     }
 
     pub fn new_for_shared_session_viewer(
-        session_id: SessionId,
+        join_args: SharedSessionJoinArgs,
         tips_completed: ModelHandle<TipsCompleted>,
         user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
         server_api: Arc<ServerApi>,
@@ -3572,7 +3582,7 @@ impl PaneGroup {
                                    view_bounds: RectF,
                                    ctx: &mut ViewContext<Self>| {
             let (view, terminal_manager) = PaneGroup::create_shared_session_viewer(
-                session_id,
+                join_args.clone(),
                 resources,
                 view_bounds.size(),
                 ctx,
@@ -5480,7 +5490,7 @@ impl PaneGroup {
 
     #[allow(clippy::too_many_arguments)]
     fn create_shared_session_viewer(
-        session_id: SessionId,
+        join_args: SharedSessionJoinArgs,
         resources: TerminalViewResources,
         initial_size: Vector2F,
         ctx: &mut ViewContext<Self>,
@@ -5492,7 +5502,7 @@ impl PaneGroup {
         let terminal_manager = ctx.add_model(|ctx| {
             let terminal_manager: Box<dyn TerminalManager> =
                 Box::new(shared_session::viewer::TerminalManager::new(
-                    session_id,
+                    join_args,
                     resources,
                     initial_size,
                     window_id,

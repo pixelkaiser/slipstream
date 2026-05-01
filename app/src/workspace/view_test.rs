@@ -601,7 +601,9 @@ fn mock_workspace_viewing_shared_session(app: &mut App) -> ViewHandle<Workspace>
         Workspace::new(
             global_resource_handles,
             None,
-            NewWorkspaceSource::SharedSessionAsViewer { session_id },
+            NewWorkspaceSource::SharedSessionAsViewer {
+                join_args: session_id.into(),
+            },
             ctx,
         )
     });
