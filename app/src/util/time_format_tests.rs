@@ -47,6 +47,31 @@ fn test_human_readable_precise_duration() {
 }
 
 #[test]
+fn test_format_compact_duration_hms() {
+    assert_eq!(
+        format_compact_duration_hms(Duration::milliseconds(999)),
+        Some("0s".to_string())
+    );
+    assert_eq!(
+        format_compact_duration_hms(Duration::seconds(12)),
+        Some("12s".to_string())
+    );
+    assert_eq!(
+        format_compact_duration_hms(Duration::seconds(132)),
+        Some("2m12s".to_string())
+    );
+    assert_eq!(
+        format_compact_duration_hms(Duration::seconds(125)),
+        Some("2m05s".to_string())
+    );
+    assert_eq!(
+        format_compact_duration_hms(Duration::seconds(3785)),
+        Some("1h03m05s".to_string())
+    );
+    assert_eq!(format_compact_duration_hms(Duration::seconds(-1)), None);
+}
+
+#[test]
 fn test_human_readable_approx_duration() {
     assert_eq!(
         human_readable_approx_duration(Duration::milliseconds(2), false),

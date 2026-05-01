@@ -3,6 +3,7 @@ use warpui::{App, SingletonEntity};
 
 use super::Prompt;
 use crate::auth::AuthStateProvider;
+use crate::context_chips::available_chips;
 use crate::context_chips::prompt::{PromptConfiguration, PromptSelection};
 use crate::context_chips::ContextChipKind;
 use crate::settings::WarpPromptSeparator;
@@ -64,6 +65,14 @@ fn test_prompt_config_after_nomalization() {
         normalized.chip_kinds(),
         vec![ContextChipKind::ShellGitBranch]
     );
+}
+
+#[test]
+fn test_last_command_runtime_chip_is_available_but_not_default() {
+    assert!(available_chips().contains(&ContextChipKind::LastCommandRuntime));
+    assert!(!PromptConfiguration::default_prompt()
+        .chip_kinds()
+        .contains(&ContextChipKind::LastCommandRuntime));
 }
 
 #[test]
