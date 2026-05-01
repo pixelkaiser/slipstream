@@ -15,6 +15,8 @@ export type WarpRequestSummary = {
   rootTaskId: string;
   shouldCreateRootTask: boolean;
   prompt: string;
+  isSummarizationRequest?: boolean;
+  summarizationPrompt?: string;
   contextText?: string;
   contextImages?: Array<{ data: string; mimeType: string }>;
   toolResults: WarpToolResult[];
@@ -369,6 +371,22 @@ function decodeInputPrompt(requestFields: ProtoField[]): string | undefined {
     formatStartFromAmbientRunPrompt(startFromAmbientRunPrompt),
     stringValue(field(invokeSkillUserQuery, 1)),
   );
+}
+
+function decodeSummarizationInput(requestFields: ProtoField[]): {
+  isSummarizationRequest: boolean;
+  summarizationPrompt?: string;
+} {
+  const input = message(field(requestFields, 2));
+  const summarizeConversation = field(input, 13);
+  if (!summarizeConversation) {
+    return { isSummarizationRequest: false };
+  }
+
+  return {
+    isSummarizationRequest: true,
+    summarizationPrompt: stringValue(field(message(summarizeConversation), 1)),
+  };
 }
 
 function formatReceivedMessages(messagesReceived: ProtoField[]): string | undefined {
@@ -1139,6 +1157,7 @@ export function decodeWarpRequest(bytes: Uint8Array): WarpRequestSummary {
   const toolResults = decodeToolResults(requestFields);
   const attachedContext = decodeAttachedContext(requestFields);
   const mcpContext = decodeMcpContext(requestFields);
+  const summarizationInput = decodeSummarizationInput(requestFields);
   const contextSections = [
     attachedContext.contextText,
     ...decodeReferencedAttachments(requestFields),
@@ -1152,6 +1171,14 @@ export function decodeWarpRequest(bytes: Uint8Array): WarpRequestSummary {
     rootTaskId: decodedRootTaskId ?? randomUUID(),
     shouldCreateRootTask: decodedRootTaskId == null,
     prompt: decodeInputPrompt(requestFields) ?? formatToolResultsPrompt(toolResults),
+    ...(summarizationInput.isSummarizationRequest
+      ? {
+          isSummarizationRequest: true,
+          ...(summarizationInput.summarizationPrompt
+            ? { summarizationPrompt: summarizationInput.summarizationPrompt }
+            : {}),
+        }
+      : {}),
     ...(contextText ? { contextText } : {}),
     ...(attachedContext.contextImages ? { contextImages: attachedContext.contextImages } : {}),
     toolResults,
@@ -1227,6 +1254,28 @@ function encodeAgentOutputMessage(params: {
   ]);
 }
 
+function encodeConversationSummaryMessage(params: {
+  messageId: string;
+  taskId: string;
+  requestId: string;
+  text: string;
+  tokenCount?: number;
+}): Uint8Array {
+  const conversationSummary = concat([
+    stringField(1, params.text),
+    int64Field(2, params.tokenCount ?? 0),
+  ]);
+  const summarization = messageField(1, conversationSummary);
+
+  return concat([
+    stringField(1, params.messageId),
+    messageField(16, summarization),
+    stringField(11, params.taskId),
+    stringField(13, params.requestId),
+    messageField(14, encodeTimestamp(new Date())),
+  ]);
+}
+
 export function encodeAddAgentOutput(params: {
   messageId: string;
   taskId: string;
@@ -1237,6 +1286,24 @@ export function encodeAddAgentOutput(params: {
   const addMessagesToTask = concat([
     stringField(1, params.taskId),
     messageField(2, outputMessage),
+  ]);
+  const clientAction = messageField(3, addMessagesToTask);
+  const clientActions = messageField(1, clientAction);
+
+  return messageField(2, clientActions);
+}
+
+export function encodeAddConversationSummary(params: {
+  messageId: string;
+  taskId: string;
+  requestId: string;
+  text: string;
+  tokenCount?: number;
+}): Uint8Array {
+  const summaryMessage = encodeConversationSummaryMessage(params);
+  const addMessagesToTask = concat([
+    stringField(1, params.taskId),
+    messageField(2, summaryMessage),
   ]);
   const clientAction = messageField(3, addMessagesToTask);
   const clientActions = messageField(1, clientAction);

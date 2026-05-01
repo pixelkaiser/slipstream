@@ -6,6 +6,7 @@ import {
   encodeAddAgentOutput,
   encodeAddToolCall,
   encodeAppendAgentOutput,
+  encodeAddConversationSummary,
   encodeCreateTask,
   decodeWarpRequest,
   encodeStreamFinishedDone,
@@ -131,6 +132,7 @@ type ProviderResponse = {
   content: string;
   toolCalls: ProviderToolCall[];
   contextWindowUsage?: number;
+  contextWindowTokens?: number;
 };
 
 type FinishReason = "invalid_api_key" | "llm_unavailable" | "context_window_exceeded" | "quota_limit" | "internal_error";
@@ -993,6 +995,25 @@ function formatUserContentForProvider(warpRequest: ReturnType<typeof decodeWarpR
   ];
 }
 
+function formatSummarizationRequestForProvider(warpRequest: ReturnType<typeof decodeWarpRequest>): string {
+  return [
+    "Summarize the conversation so far into a compact handoff for continuing the same task.",
+    "Preserve current goals, decisions, constraints, important file paths, commands, errors, and outstanding next steps.",
+    "Omit repetitive transcript detail and keep the summary dense.",
+    warpRequest.summarizationPrompt
+      ? `Additional user instruction:\n${warpRequest.summarizationPrompt}`
+      : undefined,
+  ].filter((line): line is string => line != null).join("\n\n");
+}
+
+function formatCompactedConversationSummary(summary: string): string {
+  return [
+    "The conversation before this point was compacted.",
+    "Summary:",
+    summary.trim(),
+  ].join("\n");
+}
+
 function providerMessageContentLength(content: ProviderChatMessage["content"]): number {
   if (typeof content === "string") {
     return content.length;
@@ -1001,6 +1022,46 @@ function providerMessageContentLength(content: ProviderChatMessage["content"]): 
     return content.reduce((sum, part) => sum + (part.type === "text" ? part.text.length : part.image_url.url.length), 0);
   }
   return 0;
+}
+
+function providerSystemContent(content: ProviderChatMessage["content"]): string | undefined {
+  if (typeof content === "string") {
+    return nonEmpty(content);
+  }
+  if (Array.isArray(content)) {
+    return nonEmpty(content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("\n"));
+  }
+  return undefined;
+}
+
+function buildProviderMessages(
+  systemPromptContents: Array<string | undefined>,
+  conversationMessages: ProviderChatMessage[],
+): ProviderChatMessage[] {
+  const systemContents = [...systemPromptContents];
+  const nonSystemMessages: ProviderChatMessage[] = [];
+
+  for (const message of conversationMessages) {
+    if (message.role === "system") {
+      systemContents.push(providerSystemContent(message.content));
+    } else {
+      nonSystemMessages.push(message);
+    }
+  }
+
+  const systemContent = systemContents
+    .map((content) => nonEmpty(content))
+    .filter((content): content is string => content != null)
+    .join("\n\n");
+
+  // Some OpenAI-compatible providers reject multiple system messages, even
+  // when every system message is at the beginning of the request.
+  return systemContent
+    ? [{ role: "system", content: systemContent }, ...nonSystemMessages]
+    : nonSystemMessages;
 }
 
 function approximateTokenCount(chars: number): number {
@@ -1158,7 +1219,12 @@ function stateForConversation(conversationId: string): { messages: ProviderChatM
 function pendingProviderMessages(warpRequest: ReturnType<typeof decodeWarpRequest>): ProviderChatMessage[] {
   const pendingMessages: ProviderChatMessage[] = [];
 
-  if (warpRequest.toolResults.length > 0) {
+  if (warpRequest.isSummarizationRequest) {
+    pendingMessages.push({
+      role: "user",
+      content: formatSummarizationRequestForProvider(warpRequest),
+    });
+  } else if (warpRequest.toolResults.length > 0) {
     for (const result of warpRequest.toolResults) {
       pendingMessages.push({
         role: "tool",
@@ -1207,12 +1273,25 @@ function rememberProviderResponse(
   persistConversationState(conversationId);
 }
 
+function rememberProviderSummarization(
+  conversationId: string,
+  providerResponse: ProviderResponse,
+): void {
+  const state = stateForConversation(conversationId);
+  state.messages = [{
+    role: "system",
+    content: formatCompactedConversationSummary(providerResponse.content),
+  }];
+  persistConversationState(conversationId);
+}
+
 async function streamChatCompletion(params: {
   messages: ProviderChatMessage[];
   apiKey?: string;
   baseUrl?: string;
   model?: string;
   mcpTools?: McpToolSummary[];
+  enableTools?: boolean;
   onContentChunk?: (chunk: string) => void;
 }): Promise<ProviderResponse> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
@@ -1241,16 +1320,11 @@ async function streamChatCompletion(params: {
     baseUrlSource: nonEmpty(params.baseUrl) ? "request_header" : nonEmpty(process.env.OPENAI_BASE_URL) ? "env" : "default",
   });
 
-  const tools = shouldEnableTools() ? localToolSchemas() : undefined;
-  const systemMessages = [
+  const tools = params.enableTools !== false && shouldEnableTools() ? localToolSchemas() : undefined;
+  const messages = buildProviderMessages([
     tools ? localToolUseSystemPrompt(params.mcpTools ?? []) : undefined,
     process.env.LOCAL_MULTI_AGENT_SYSTEM_PROMPT,
-  ].filter((content): content is string => Boolean(content?.trim()))
-    .map((content): ProviderChatMessage => ({ role: "system", content }));
-  const messages: ProviderChatMessage[] = [
-    ...systemMessages,
-    ...params.messages,
-  ];
+  ], params.messages);
 
   const requestBody = {
     model,
@@ -1316,6 +1390,7 @@ async function streamChatCompletion(params: {
         return {
           content,
           toolCalls: [...toolCalls.values()].filter((toolCall) => toolCall.id && toolCall.name),
+          contextWindowTokens,
           contextWindowUsage: estimateContextWindowUsage({
             messages,
             tools,
@@ -1341,6 +1416,7 @@ async function streamChatCompletion(params: {
   return {
     content,
     toolCalls: [...toolCalls.values()].filter((toolCall) => toolCall.id && toolCall.name),
+    contextWindowTokens,
     contextWindowUsage: estimateContextWindowUsage({
       messages,
       tools,
@@ -1398,6 +1474,7 @@ async function handleMultiAgent(
   sendEvent("stream_init", encodeStreamInit(warpRequest.conversationId, warpRequest.requestId));
 
   let providerResponseForUsage: ProviderResponse | undefined;
+  let summarizedConversation = false;
   try {
     if (!passiveSuggestions) {
       if (warpRequest.shouldCreateRootTask) {
@@ -1421,7 +1498,8 @@ async function handleMultiAgent(
         baseUrl: requestOpenAiBaseUrl,
         model: warpRequest.model,
         mcpTools: warpRequest.mcpTools,
-        onContentChunk: (chunk) => {
+        enableTools: !warpRequest.isSummarizationRequest,
+        onContentChunk: warpRequest.isSummarizationRequest ? undefined : (chunk) => {
           if (!streamedAgentOutput) {
             streamedAgentOutput = true;
             sendEvent(
@@ -1453,9 +1531,32 @@ async function handleMultiAgent(
       }
 
       providerResponseForUsage = providerResponse;
-      rememberProviderResponse(warpRequest.conversationId, providerMessages.pendingMessages, providerResponse);
+      if (warpRequest.isSummarizationRequest) {
+        summarizedConversation = true;
+        rememberProviderSummarization(warpRequest.conversationId, providerResponse);
+        providerResponseForUsage = {
+          ...providerResponse,
+          contextWindowUsage: estimateContextWindowUsage({
+            messages: stateForConversation(warpRequest.conversationId).messages,
+            contextWindowTokens: providerResponse.contextWindowTokens,
+          }),
+        };
+      } else {
+        rememberProviderResponse(warpRequest.conversationId, providerMessages.pendingMessages, providerResponse);
+      }
 
-      if (providerResponse.content && !streamedAgentOutput) {
+      if (warpRequest.isSummarizationRequest) {
+        sendEvent(
+          "add_conversation_summary",
+          encodeAddConversationSummary({
+            messageId: assistantMessageId,
+            taskId: warpRequest.rootTaskId,
+            requestId: warpRequest.requestId,
+            text: providerResponse.content,
+            tokenCount: approximateTokenCount(providerResponse.content.length),
+          }),
+        );
+      } else if (providerResponse.content && !streamedAgentOutput) {
         sendEvent(
           "add_agent_output",
           encodeAddAgentOutput({
@@ -1487,6 +1588,7 @@ async function handleMultiAgent(
 
     sendEvent("stream_finished_done", encodeStreamFinishedDone({
       contextWindowUsage: providerResponseForUsage?.contextWindowUsage,
+      summarized: summarizedConversation,
     }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
