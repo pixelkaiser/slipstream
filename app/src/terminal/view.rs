@@ -2318,6 +2318,7 @@ struct TerminalViewMouseStates {
     jump_to_bottom_of_block_button: MouseStateHandle,
 
     parent_conversation_header_link: MouseStateHandle,
+    share_session_header_button: MouseStateHandle,
     /// Persistent horizontal scroll state for the orchestration breadcrumb
     /// row. Lives here (rather than as a `MouseStateHandle`) so the user's
     /// scroll position survives across renders — in narrow split-off panes

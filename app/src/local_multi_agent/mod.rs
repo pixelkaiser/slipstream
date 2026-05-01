@@ -256,6 +256,10 @@ impl LocalMultiAgentConfig {
         env.insert("HOST".to_string(), self.host.trim().to_string());
         env.insert("PORT".to_string(), self.port.to_string());
         env.insert(
+            "WARP_URL_SCHEME".to_string(),
+            ChannelState::url_scheme().to_string(),
+        );
+        env.insert(
             "LOCAL_ENABLE_TOOLS".to_string(),
             self.local_enable_tools.to_string(),
         );
@@ -1227,6 +1231,10 @@ mod tests {
         let env = config.env(Some("sk-test"));
         assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
         assert_eq!(env.get("PORT").map(String::as_str), Some("8787"));
+        assert_eq!(
+            env.get("WARP_URL_SCHEME").map(String::as_str),
+            Some(ChannelState::url_scheme())
+        );
         assert_eq!(
             env.get("OPENAI_API_KEY").map(String::as_str),
             Some("sk-test")

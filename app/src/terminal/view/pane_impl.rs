@@ -38,7 +38,8 @@ use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::ui_components::icons;
 use crate::workspace::tab_settings::TabSettings;
 use settings::Setting as _;
-use warp_core::context_flag::ContextFlag;
+use warp_core::ui::Icon as WarpIcon;
+use warp_core::{channel::ChannelState, context_flag::ContextFlag};
 use warpui::elements::{
     ConstrainedBox, CrossAxisAlignment, Empty, Flex, MainAxisAlignment, MainAxisSize,
     ParentElement, Shrinkable,
@@ -58,6 +59,13 @@ use warpui::{AppContext, Element, ModelHandle, SingletonEntity, TypedActionView,
 const PANE_HEADER_AGENT_SIZE: f32 = 26.;
 
 impl TerminalView {
+    fn no_cloud_relay_session_sharing_enabled() -> bool {
+        crate::server::server_api::no_cloud_mode_enabled()
+            && ChannelState::session_sharing_server_url().is_some()
+            && FeatureFlag::CreatingSharedSessions.is_enabled()
+            && ContextFlag::CreateSharedSession.is_enabled()
+    }
+
     /// Returns a reference to the focus handle if one has been set.
     pub fn focus_handle(&self) -> Option<&PaneFocusHandle> {
         self.focus_handle.as_ref()
@@ -153,18 +161,23 @@ impl TerminalView {
 
     /// Returns the shareable object for the active agent view conversation, if any.
     fn agent_view_shareable_object(&self, ctx: &ViewContext<Self>) -> Option<ShareableObject> {
-        // Only set shareable object if CloudConversations feature is enabled
-        if !FeatureFlag::CloudConversations.is_enabled() {
-            return None;
-        }
-
         // If we're in a shared session, prioritize this to share.
         if let Some(shared_session) = &self.shared_session {
             return Some(ShareableObject::Session {
                 handle: ctx.handle(),
                 session_id: *shared_session.session_id(),
+                session_secret: shared_session.session_secret().cloned(),
                 started_at: *shared_session.started_at(),
             });
+        }
+
+        if crate::server::server_api::no_cloud_mode_enabled() {
+            return None;
+        }
+
+        // Only set shareable object if CloudConversations feature is enabled
+        if !FeatureFlag::CloudConversations.is_enabled() {
+            return None;
         }
 
         // Check if agent view is active
@@ -437,6 +450,17 @@ impl TerminalView {
         };
 
         if let Some(button) = button_element {
+            icon_button_count += 1;
+            if let Some(existing) = left_of_overflow {
+                left_of_overflow =
+                    Some(Flex::row().with_child(existing).with_child(button).finish());
+            } else {
+                left_of_overflow = Some(button);
+            }
+        }
+
+        if self.should_render_no_cloud_share_session_button() {
+            let button = self.render_no_cloud_share_session_button(app);
             icon_button_count += 1;
             if let Some(existing) = left_of_overflow {
                 left_of_overflow =
@@ -772,6 +796,44 @@ impl TerminalView {
         .on_click(|ctx, _, _| {
             ctx.dispatch_typed_action::<PaneHeaderAction<TerminalAction, TerminalAction>>(
                 PaneHeaderAction::CustomAction(TerminalAction::CancelAmbientAgentTask),
+            );
+        })
+        .finish()
+    }
+
+    fn should_render_no_cloud_share_session_button(&self) -> bool {
+        Self::no_cloud_relay_session_sharing_enabled()
+            && !self
+                .model
+                .lock()
+                .shared_session_status()
+                .is_sharer_or_viewer()
+    }
+
+    fn render_no_cloud_share_session_button(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let ui_builder = appearance.ui_builder().clone();
+
+        icon_button_with_color(
+            appearance,
+            icons::Icon::Share,
+            false,
+            self.mouse_states.share_session_header_button.clone(),
+            blended_colors::text_sub(theme, theme.background()).into(),
+        )
+        .with_tooltip(move || {
+            ui_builder
+                .tool_tip("Share session".to_string())
+                .build()
+                .finish()
+        })
+        .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action::<PaneHeaderAction<TerminalAction, TerminalAction>>(
+                PaneHeaderAction::CustomAction(TerminalAction::OpenShareSessionModal {
+                    source: SharedSessionActionSource::PaneHeader,
+                }),
             );
         })
         .finish()

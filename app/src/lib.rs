@@ -605,9 +605,19 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // Release channels still ignore websocket and session-sharing overrides so shipped builds
-    // can't be redirected away from their baked-in server URLs. See
-    // `Channel::allows_server_url_overrides`.
+    if crate::server::server_api::no_cloud_mode_enabled() {
+        if let Some(url) = args.session_sharing_server_url() {
+            if let Err(e) = ChannelState::override_session_sharing_server_url(url.to_owned()) {
+                eprintln!("Error: Invalid session sharing server URL: {e:#}");
+            }
+        } else {
+            ChannelState::clear_session_sharing_server_url();
+        }
+    }
+
+    // Release channels still ignore websocket overrides so shipped builds can't be redirected
+    // away from their baked-in server URLs. Session-sharing overrides are also ignored outside
+    // no-cloud mode on channels that do not opt into server URL overrides.
     if channel_allows_server_url_overrides {
         if let Some(url) = args.ws_server_url() {
             if let Err(e) = ChannelState::override_ws_server_url(url.to_owned()) {
@@ -615,9 +625,11 @@ pub fn run() -> Result<()> {
             }
         }
 
-        if let Some(url) = args.session_sharing_server_url() {
-            if let Err(e) = ChannelState::override_session_sharing_server_url(url.to_owned()) {
-                eprintln!("Error: Invalid session sharing server URL: {e:#}");
+        if !crate::server::server_api::no_cloud_mode_enabled() {
+            if let Some(url) = args.session_sharing_server_url() {
+                if let Err(e) = ChannelState::override_session_sharing_server_url(url.to_owned()) {
+                    eprintln!("Error: Invalid session sharing server URL: {e:#}");
+                }
             }
         }
     }
@@ -1105,6 +1117,9 @@ pub(crate) fn initialize_app(
     ctx.add_singleton_model(|_ctx| SettingsManager::default());
 
     let user_defaults_on_startup = settings::init(startup_toml_parse_error, ctx);
+    crate::terminal::shared_session::settings::apply_session_sharing_server_url_setting_on_startup(
+        ctx,
+    );
     timer.mark_interval_end("READ_USER_DEFAULTS_AND_INITIALIZE_SETTINGS");
 
     if FeatureFlag::UIZoom.is_enabled() {

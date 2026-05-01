@@ -86,6 +86,15 @@ impl<P: BackingView> PaneHeader<P> {
 
     pub fn is_sharing_dialog_enabled<C: warpui::ViewAsRef>(&self, ctx: &C) -> bool {
         let sharing_enabled = self.has_shareable_object(ctx);
+        if crate::server::server_api::no_cloud_mode_enabled()
+            && self
+                .sharing_dialog()
+                .as_ref(ctx)
+                .has_ai_conversation_target()
+        {
+            return false;
+        }
+
         if self.has_shareable_shared_session(ctx) {
             sharing_enabled && FeatureFlag::SessionSharingAcls.is_enabled()
         } else {
