@@ -158,6 +158,10 @@ fn should_send_authenticated_graphql_context() -> bool {
     !no_cloud_mode_enabled()
 }
 
+fn should_send_authenticated_multi_agent_request(server_root_url_override: Option<&str>) -> bool {
+    server_root_url_override.is_none() && !no_cloud_mode_enabled()
+}
+
 /// IDs in the staging database that were created specifically for evals.
 /// These users have a clean state where they haven't been referred nor have referred anyone (which causes a popup in the client).
 /// DO NOT REMOVE OR CHANGE THESE USERS!
@@ -1214,12 +1218,6 @@ impl ServerApi {
         openai_base_url: Option<&str>,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
-        let auth_token = self
-            .get_or_refresh_access_token()
-            .await
-            .map_err(Into::into)
-            .map_err(Arc::new)?;
-
         let is_passive = request.input.as_ref().is_some_and(|input| {
             matches!(
                 input.r#type,
@@ -1228,6 +1226,18 @@ impl ServerApi {
         });
         let is_evals = cfg!(feature = "agent_mode_evals");
         let url = multi_agent_output_url(is_passive, is_evals, server_root_url_override);
+
+        let auth_token = if should_send_authenticated_multi_agent_request(server_root_url_override)
+        {
+            Some(
+                self.get_or_refresh_access_token()
+                    .await
+                    .map_err(Into::into)
+                    .map_err(Arc::new)?,
+            )
+        } else {
+            None
+        };
 
         let ambient_workload_token = self
             .get_or_create_ambient_workload_token()
@@ -1240,7 +1250,10 @@ impl ServerApi {
             .post(url)
             .proto(request)
             .prevent_sleep("Agent Mode request in-progress");
-        if let Some(token) = auth_token.as_bearer_token() {
+        if let Some(token) = auth_token
+            .as_ref()
+            .and_then(|token| token.as_bearer_token())
+        {
             request_builder = request_builder.bearer_auth(token);
         }
 
@@ -1546,8 +1559,8 @@ mod tests {
     use super::{
         apply_local_no_cloud_env_defaults, multi_agent_output_url, no_cloud_mode_enabled,
         server_root_url_for_local_no_cloud, server_root_url_override_for_startup,
-        should_send_authenticated_graphql_context, LOCAL_NO_CLOUD_SERVER_ROOT_URL,
-        WARP_NO_CLOUD_ENV,
+        should_send_authenticated_graphql_context, should_send_authenticated_multi_agent_request,
+        LOCAL_NO_CLOUD_SERVER_ROOT_URL, WARP_NO_CLOUD_ENV,
     };
 
     fn restore_env_var(name: &str, previous: Option<std::ffi::OsString>) {
@@ -1601,6 +1614,29 @@ mod tests {
             assert!(!no_cloud_mode_enabled());
             assert!(should_send_authenticated_graphql_context());
         }
+
+        restore_env_var(WARP_NO_CLOUD_ENV, previous);
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn local_multi_agent_requests_do_not_require_user_auth() {
+        let previous = std::env::var_os(WARP_NO_CLOUD_ENV);
+
+        std::env::set_var(WARP_NO_CLOUD_ENV, "0");
+        assert!(should_send_authenticated_multi_agent_request(None));
+        assert!(!should_send_authenticated_multi_agent_request(Some(
+            "http://127.0.0.1:8787"
+        )));
+
+        std::env::set_var(WARP_NO_CLOUD_ENV, "1");
+        assert!(!should_send_authenticated_multi_agent_request(None));
+        assert!(!should_send_authenticated_multi_agent_request(Some(
+            "http://127.0.0.1:8787"
+        )));
+
+        std::env::remove_var(WARP_NO_CLOUD_ENV);
+        assert!(!should_send_authenticated_multi_agent_request(None));
 
         restore_env_var(WARP_NO_CLOUD_ENV, previous);
     }

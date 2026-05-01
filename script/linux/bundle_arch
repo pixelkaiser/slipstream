@@ -22,13 +22,19 @@ else
   CHANNEL_SUFFIX="${BINARY_NAME#warp}"
 fi
 
+if [ "$RELEASE_CHANNEL" = "oss" ]; then
+  CHANNEL_SUFFIX=""
+fi
+
 # On Linux, we keep the `-stable` suffix for stable to avoid package conflicts.
 # The binary name is still `oz`, and the repo name is still `warpdotdev`.
 if [ "$ARTIFACT" = "cli" -a "$RELEASE_CHANNEL" = "stable" ]; then
   CHANNEL_SUFFIX="-stable"
 fi
 
-if [ "$ARTIFACT" = "app" ]; then
+if [ "$RELEASE_CHANNEL" = "oss" ]; then
+  PACKAGE_NAME="slipstream"
+elif [ "$ARTIFACT" = "app" ]; then
   PACKAGE_NAME="warp-terminal$CHANNEL_SUFFIX"
 elif [ "$ARTIFACT" = "cli" ]; then
   PACKAGE_NAME="oz$CHANNEL_SUFFIX"
@@ -63,24 +69,84 @@ mkdir -p "$PKGDIR"
 
 # Bundle the base filesystem into an archive to be unpacked by makepkg.
 mkdir "$PKGDIR/stage"
-OPT_DIR="/opt/warpdotdev/$PACKAGE_NAME"
+if [ "$RELEASE_CHANNEL" = "oss" ]; then
+  OPT_DIR="/opt/slipstream"
+else
+  OPT_DIR="/opt/warpdotdev/$PACKAGE_NAME"
+fi
 source "$WORKSPACE_ROOT_DIR/script/linux/bundle_install" "$PKGDIR/stage"
 tar cvf "$PKGDIR/data.tar" -C "$PKGDIR/stage" .
 
 # Move the Arch-specific package metadata into the package directory.
-VERSION="$GIT_RELEASE_TAG"
+VERSION="$(echo "$GIT_RELEASE_TAG" | sed -E "s/^v//; s/([a-z]+)_/\1./")"
 RELEASE=1
-sed \
-    "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; s#@@VERSION@@#$VERSION#g; s#@@RELEASE@@#$RELEASE#g; s#@@ARCH@@#$ARCH#g; s#@@OUTDIR@@#$OUT_DIR#g; s#@@BINARY_NAME@@#$BINARY_NAME#g" \
-    < "$WORKSPACE_ROOT_DIR/resources/linux/arch/$ARTIFACT/PKGBUILD.template" \
-    > "$PKGDIR/PKGBUILD"
+if [ "$RELEASE_CHANNEL" = "oss" ]; then
+  cat > "$PKGDIR/PKGBUILD" << EOF
+pkgname=slipstream
+pkgver=$VERSION
+pkgrel=$RELEASE
+pkgdesc="Slipstream, the local-first OSS terminal"
+arch=('$ARCH')
+url="https://github.com/pixelkaiser/slipstream"
+license=('custom')
+depends=(
+	'curl'
+	'default-cursors'
+	'fontconfig'
+	'libegl'
+	'libx11'
+	'libxcb'
+	'libxcursor'
+	'libxi'
+	'libxkbcommon-x11'
+	'opengl-driver'
+	'xdg-utils'
+	'zlib'
+)
+optdepends=(
+	'adwaita-cursors: for if there is no default cursor installed'
+	'zenity: for file dialogs in Gnome'
+	'kdialog: for file dialogs in KDE'
+	'org.freedesktop.secrets: for securely storing passwords'
+)
+options=('!strip')
+source=(
+	'data.tar'
+	"\$pkgname.sh"
+)
 
-# Only create wrapper script for app artifact
-if [ "$ARTIFACT" = "app" ]; then
+package() {
+	bsdtar -xf data.tar -C "\$pkgdir/"
+	install -Dm755 \$pkgname.sh "\$pkgdir"/usr/bin/slipstream
+}
+EOF
+else
   sed \
-      "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; s#@@BINARY_NAME@@#$BINARY_NAME#g" \
-      < "$WORKSPACE_ROOT_DIR/resources/linux/arch/$ARTIFACT/warp.sh.template" \
-      > "$PKGDIR/$PACKAGE_NAME.sh"
+      "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; s#@@VERSION@@#$VERSION#g; s#@@RELEASE@@#$RELEASE#g; s#@@ARCH@@#$ARCH#g; s#@@OUTDIR@@#$OUT_DIR#g; s#@@BINARY_NAME@@#$BINARY_NAME#g" \
+      < "$WORKSPACE_ROOT_DIR/resources/linux/arch/$ARTIFACT/PKGBUILD.template" \
+      > "$PKGDIR/PKGBUILD"
+fi
+
+# Only create wrapper script for app artifact, plus the OSS package whose public command is slipstream.
+if [ "$ARTIFACT" = "app" ] || [ "$RELEASE_CHANNEL" = "oss" ]; then
+  if [ "$RELEASE_CHANNEL" = "oss" ]; then
+    cat > "$PKGDIR/$PACKAGE_NAME.sh" << EOF
+#!/bin/bash
+
+XDG_CONFIG_HOME=\${XDG_CONFIG_HOME:-~/.config}
+
+if [[ -f \$XDG_CONFIG_HOME/slipstream-flags.conf ]]; then
+    WARP_USER_FLAGS="\$(grep -v '^#' \$XDG_CONFIG_HOME/slipstream-flags.conf)"
+fi
+
+exec /opt/slipstream/$BINARY_NAME \$WARP_USER_FLAGS "\$@"
+EOF
+  else
+    sed \
+        "s#@@CHANNEL_SUFFIX@@#$CHANNEL_SUFFIX#g; s#@@BINARY_NAME@@#$BINARY_NAME#g" \
+        < "$WORKSPACE_ROOT_DIR/resources/linux/arch/$ARTIFACT/warp.sh.template" \
+        > "$PKGDIR/$PACKAGE_NAME.sh"
+  fi
 fi
 
 # Build the actual package.

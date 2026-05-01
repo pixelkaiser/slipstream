@@ -59,6 +59,7 @@ use std::cmp::Ordering;
 use std::{collections::HashMap, path::PathBuf};
 use strum::IntoEnumIterator;
 use uuid::Uuid;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::{appearance::AppearanceEvent, theme::color::internal_colors, Icon};
@@ -75,7 +76,20 @@ use warpui::{
     AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
-const DESCRIPTION_TEXT: &str = "Add MCP servers to extend the Warp Agent's capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ";
+fn agent_display_name() -> &'static str {
+    if ChannelState::product_name() == "Slipstream" {
+        "Agent"
+    } else {
+        "Warp Agent"
+    }
+}
+
+fn description_text() -> String {
+    format!(
+        "Add MCP servers to extend the {}'s capabilities. MCP servers expose data sources or tools to agents through a standardized interface, essentially acting like plugins. Add a custom server, or use the presets to get started with popular servers. You can also find team servers that have been shared with you here. ",
+        agent_display_name()
+    )
+}
 
 #[derive(Debug, Clone)]
 pub enum MCPServersListPageViewEvent {
@@ -1182,7 +1196,7 @@ impl MCPServersListPageView {
 
     fn render_page_body(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
         let description_fragments = vec![
-            FormattedTextFragment::plain_text(DESCRIPTION_TEXT),
+            FormattedTextFragment::plain_text(description_text()),
             FormattedTextFragment::hyperlink(
                 "Learn more.",
                 "https://docs.warp.dev/agent-platform/capabilities/mcp",

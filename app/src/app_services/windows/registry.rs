@@ -26,7 +26,7 @@ pub(super) fn register_uri_handler() {
     match classes_key.create(uri_scheme) {
         Ok(parent_key) => {
             // The empty string represents the "(Default)" value for a registry key.
-            if let Err(err) = parent_key.set_string("", ChannelState::app_id().application_name()) {
+            if let Err(err) = parent_key.set_string("", ChannelState::app_display_name()) {
                 log::error!("Could not set URI Scheme display name: {err:?}");
                 return;
             }

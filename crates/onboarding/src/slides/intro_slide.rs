@@ -1,24 +1,25 @@
-use crate::model::OnboardingStateModel;
 use crate::OnboardingEvent;
+use crate::model::OnboardingStateModel;
 
 use super::OnboardingSlide;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use ui_components::{button, Component as _, Options as _};
+use ui_components::{Component as _, Options as _, button};
+use warp_core::channel::ChannelState;
 use warp_core::send_telemetry_from_ctx;
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors, Icon};
+use warp_core::ui::{Icon, appearance::Appearance, theme::color::internal_colors};
 use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
+    ViewContext,
     elements::{
-        shimmering_text::{ShimmerConfig, ShimmeringTextElement, ShimmeringTextStateHandle},
         Align, ChildAnchor, ConstrainedBox, Container, CrossAxisAlignment, Flex,
         FormattedTextElement, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning,
         ParentAnchor, ParentElement, ParentOffsetBounds, Stack,
+        shimmering_text::{ShimmerConfig, ShimmeringTextElement, ShimmeringTextStateHandle},
     },
     keymap::Keystroke,
     text_layout::TextAlignment,
     ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
 };
 
 #[derive(Clone, Debug)]
@@ -66,6 +67,10 @@ impl View for IntroSlide {
         let constrained = ConstrainedBox::new(content).with_max_width(421.).finish();
         // Background is rendered by the parent onboarding view (including background images).
         let centered = Container::new(Align::new(constrained).finish()).finish();
+
+        if ChannelState::product_name() == "Slipstream" {
+            return centered;
+        }
 
         let sub_text_color = internal_colors::text_sub(theme, theme.background().into_solid());
         let ui_builder = appearance.ui_builder();
@@ -147,7 +152,7 @@ impl IntroSlide {
         let base_color: ColorU = internal_colors::fg_overlay_4(theme).into();
         let shimmer_color: ColorU = theme.foreground().into();
         let title = ShimmeringTextElement::new(
-            "Welcome to Warp",
+            format!("Welcome to {}", ChannelState::product_name()),
             appearance.ui_font_family(),
             32.,
             base_color,

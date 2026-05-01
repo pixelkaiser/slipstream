@@ -6,14 +6,21 @@ use crate::auth::auth_view_shared_helpers::{
 };
 use crate::auth::login_failure_notification::{self, LoginFailureReason};
 use crate::editor::{EditorView, SingleLineEditorOptions, TextColors, TextOptions};
+#[cfg(not(target_family = "wasm"))]
+use crate::local_multi_agent::{
+    LocalMultiAgentManager, LocalMultiAgentManagerEvent, LocalMultiAgentTestStatus,
+};
 use crate::server::telemetry::{LoginEventSource, TelemetryEvent};
 use crate::settings::PrivacySettings;
 use crate::themes::theme::Fill as ThemeFill;
 use crate::util::bindings::CustomAction;
-use crate::{send_telemetry_from_ctx, send_telemetry_sync_from_ctx};
+use crate::view_components::{DropdownItem, FilterableDropdown};
+use crate::{send_telemetry_from_ctx, send_telemetry_sync_from_ctx, ChannelState};
+#[cfg(not(target_family = "wasm"))]
+use ::ai::api_keys::ApiKeyManager;
 
 use onboarding::slides::{layout, slide_content};
-use onboarding::{OnboardingIntention, AI_FEATURES, WARP_DRIVE_FEATURES};
+use onboarding::{ai_features, drive_features, drive_name, OnboardingIntention};
 use pathfinder_color::ColorU;
 use ui_components::{button, Component as _, Options as _};
 use warp_core::features::FeatureFlag;
@@ -21,10 +28,10 @@ use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Align, Border, CacheOption, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, Dismiss, Fill, Flex, FormattedTextElement, HighlightedHyperlink, Image,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement, Radius,
-    Shrinkable, Stack,
+    Align, Border, CacheOption, ChildView, ClippedScrollStateHandle, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, Dismiss, Fill, Flex, FormattedTextElement,
+    HighlightedHyperlink, Image, MainAxisAlignment, MainAxisSize, MouseStateHandle,
+    OffsetPositioning, ParentElement, Radius, Shrinkable, Stack,
 };
 use warpui::fonts::Weight;
 use warpui::keymap::{FixedBinding, Keystroke};
@@ -90,7 +97,7 @@ pub fn init(app: &mut AppContext) {
 // Actions & Events
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LoginSlideAction {
     Enter,
     ShowSkipDialog,
@@ -108,6 +115,8 @@ pub enum LoginSlideAction {
     ToggleCloudConversationStorage,
     DismissNotification,
     PasteAuthUrl,
+    TestProviderConnection,
+    SetProviderDefaultModel(String),
 }
 
 #[derive(Clone, Debug)]
@@ -177,11 +186,19 @@ pub struct LoginSlideView {
     // Auth token input (browser-open step)
     auth_token_input: ViewHandle<EditorView>,
     show_auth_token_input: bool,
+    #[cfg(not(target_family = "wasm"))]
+    openai_base_url_input: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    openai_api_key_input: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    provider_model_dropdown: ViewHandle<FilterableDropdown<LoginSlideAction>>,
+    provider_setup_error: Option<String>,
 
     // Buttons
     back_button: button::Button,
     skip_button: button::Button,
     login_button: button::Button,
+    test_connection_button: button::Button,
     browser_back_button: button::Button,
     done_button: button::Button,
     dialog_login_button: button::Button,
@@ -260,6 +277,20 @@ impl LoginSlideView {
         matches!(self.step, LoginStep::BrowserOpen) && self.show_auth_token_input
     }
 
+    pub fn should_allow_text_input_focus(&self) -> bool {
+        self.is_auth_token_input_visible()
+            || (matches!(self.step, LoginStep::SelectAuthPathway) && {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    self.should_render_provider_setup()
+                }
+                #[cfg(target_family = "wasm")]
+                {
+                    false
+                }
+            })
+    }
+
     pub fn new(
         ai_enabled: bool,
         theme_name: &str,
@@ -309,6 +340,117 @@ impl LoginSlideView {
             ctx.notify();
         });
 
+        #[cfg(not(target_family = "wasm"))]
+        let openai_base_url_input = {
+            let initial_value = LocalMultiAgentManager::as_ref(ctx)
+                .config()
+                .openai_base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            ctx.add_typed_action_view(move |ctx| {
+                let appearance = Appearance::as_ref(ctx);
+                let options = SingleLineEditorOptions {
+                    text: TextOptions {
+                        font_size_override: Some(appearance.ui_font_size()),
+                        font_family_override: Some(appearance.monospace_font_family()),
+                        text_colors_override: Some(TextColors {
+                            default_color: appearance.theme().active_ui_text_color(),
+                            disabled_color: appearance.theme().disabled_ui_text_color(),
+                            hint_color: appearance.theme().disabled_ui_text_color(),
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let mut editor = EditorView::single_line(options, ctx);
+                editor.set_placeholder_text("https://api.openai.com/v1", ctx);
+                editor.set_buffer_text(&initial_value, ctx);
+                editor
+            })
+        };
+
+        #[cfg(not(target_family = "wasm"))]
+        let openai_api_key_input = {
+            let initial_value = ApiKeyManager::as_ref(ctx)
+                .keys()
+                .openai
+                .clone()
+                .unwrap_or_default();
+            ctx.add_typed_action_view(move |ctx| {
+                let appearance = Appearance::as_ref(ctx);
+                let options = SingleLineEditorOptions {
+                    is_password: true,
+                    text: TextOptions {
+                        font_size_override: Some(appearance.ui_font_size()),
+                        font_family_override: Some(appearance.monospace_font_family()),
+                        text_colors_override: Some(TextColors {
+                            default_color: appearance.theme().active_ui_text_color(),
+                            disabled_color: appearance.theme().disabled_ui_text_color(),
+                            hint_color: appearance.theme().disabled_ui_text_color(),
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let mut editor = EditorView::single_line(options, ctx);
+                editor.set_placeholder_text("sk-...", ctx);
+                if !initial_value.is_empty() {
+                    editor.set_buffer_text(&initial_value, ctx);
+                }
+                editor
+            })
+        };
+
+        #[cfg(not(target_family = "wasm"))]
+        let provider_model_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_top_bar_max_width(420.);
+            dropdown.set_menu_width(420., ctx);
+            dropdown.set_disabled(ctx);
+            dropdown
+        });
+
+        #[cfg(not(target_family = "wasm"))]
+        {
+            Self::refresh_provider_model_dropdown(&provider_model_dropdown, ctx);
+            let provider_model_dropdown = provider_model_dropdown.clone();
+            ctx.subscribe_to_model(
+                &LocalMultiAgentManager::handle(ctx),
+                move |me, _model, event, ctx| {
+                    if matches!(
+                        event,
+                        LocalMultiAgentManagerEvent::StatusChanged
+                            | LocalMultiAgentManagerEvent::TestStatusChanged
+                    ) {
+                        me.provider_setup_error = None;
+                        Self::refresh_provider_model_dropdown(&provider_model_dropdown, ctx);
+                        ctx.notify();
+                    }
+                },
+            );
+
+            ctx.subscribe_to_view(&openai_base_url_input, |me, _, event, ctx| {
+                use crate::editor::Event::{Edited, Paste};
+                match event {
+                    Edited(_) | Paste => {
+                        me.provider_setup_error = None;
+                        ctx.notify();
+                    }
+                    _ => {}
+                }
+            });
+            ctx.subscribe_to_view(&openai_api_key_input, |me, _, event, ctx| {
+                use crate::editor::Event::{Edited, Paste};
+                match event {
+                    Edited(_) | Paste => {
+                        me.provider_setup_error = None;
+                        ctx.notify();
+                    }
+                    _ => {}
+                }
+            });
+        }
+
         Self {
             ai_enabled,
             intention,
@@ -325,9 +467,17 @@ impl LoginSlideView {
             source,
             auth_token_input,
             show_auth_token_input: false,
+            #[cfg(not(target_family = "wasm"))]
+            openai_base_url_input,
+            #[cfg(not(target_family = "wasm"))]
+            openai_api_key_input,
+            #[cfg(not(target_family = "wasm"))]
+            provider_model_dropdown,
+            provider_setup_error: None,
             back_button: button::Button::default(),
             skip_button: button::Button::default(),
             login_button: button::Button::default(),
+            test_connection_button: button::Button::default(),
             browser_back_button: button::Button::default(),
             done_button: button::Button::default(),
             dialog_login_button: button::Button::default(),
@@ -411,6 +561,144 @@ impl LoginSlideView {
         ctx.emit(LoginSlideEvent::LoginLaterConfirmed);
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn should_render_provider_setup(&self) -> bool {
+        self.ai_enabled && matches!(self.source, LoginSlideSource::OnboardingFlow)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn provider_setup_values(&self, ctx: &AppContext) -> (Option<String>, Option<String>) {
+        let base_url = self
+            .openai_base_url_input
+            .as_ref(ctx)
+            .buffer_text(ctx)
+            .trim()
+            .trim_end_matches('/')
+            .to_string();
+        let api_key = self
+            .openai_api_key_input
+            .as_ref(ctx)
+            .buffer_text(ctx)
+            .trim()
+            .to_string();
+
+        (
+            (!base_url.is_empty()).then_some(base_url),
+            (!api_key.is_empty()).then_some(api_key),
+        )
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn refresh_provider_model_dropdown(
+        dropdown: &ViewHandle<FilterableDropdown<LoginSlideAction>>,
+        ctx: &mut AppContext,
+    ) {
+        let manager = LocalMultiAgentManager::as_ref(ctx);
+        let config = manager.config();
+        let choices = config.model_choices(manager.discovered_models());
+        let selected = config
+            .openai_model
+            .as_ref()
+            .filter(|model| choices.iter().any(|choice| choice == *model))
+            .or_else(|| choices.first())
+            .cloned();
+        let is_enabled = matches!(
+            manager.test_status(),
+            LocalMultiAgentTestStatus::Passed { .. }
+        ) && !choices.is_empty();
+
+        dropdown.update(ctx, |dropdown, ctx| {
+            if is_enabled {
+                dropdown.set_enabled(ctx);
+            } else {
+                dropdown.set_disabled(ctx);
+            }
+            dropdown.set_items(
+                choices
+                    .into_iter()
+                    .map(|model| {
+                        DropdownItem::new(
+                            model.clone(),
+                            LoginSlideAction::SetProviderDefaultModel(model),
+                        )
+                    })
+                    .collect(),
+                ctx,
+            );
+            if let Some(selected) = selected {
+                dropdown.set_selected_by_action(
+                    LoginSlideAction::SetProviderDefaultModel(selected),
+                    ctx,
+                );
+            }
+        });
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn persist_provider_setup(
+        &mut self,
+        require_api_key: bool,
+        ctx: &mut ViewContext<Self>,
+    ) -> Result<(), String> {
+        let (base_url, api_key) = self.provider_setup_values(ctx);
+
+        let Some(base_url) = base_url else {
+            self.provider_setup_error = Some("OpenAI Base URL is required.".to_string());
+            return Err("OpenAI Base URL is required.".to_string());
+        };
+        if require_api_key && api_key.is_none() {
+            self.provider_setup_error = Some("OpenAI API key is required.".to_string());
+            return Err("OpenAI API key is required.".to_string());
+        }
+
+        ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.set_openai_key(api_key.clone(), ctx);
+            manager.set_openai_base_url(Some(base_url.clone()), ctx);
+        });
+
+        LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.update_provider_config(api_key, ctx);
+            let mut config = manager.config().clone();
+            config.openai_base_url = Some(base_url);
+            manager
+                .set_config(config, ctx)
+                .map_err(|error| error.to_string())
+        })?;
+
+        self.provider_setup_error = None;
+        Ok(())
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn is_provider_connection_verified(&self, app: &AppContext) -> bool {
+        if !self.should_render_provider_setup()
+            || !matches!(
+                LocalMultiAgentManager::as_ref(app).test_status(),
+                LocalMultiAgentTestStatus::Passed { .. }
+            )
+        {
+            return false;
+        }
+
+        let (base_url, api_key) = self.provider_setup_values(app);
+        let manager = LocalMultiAgentManager::as_ref(app);
+        let stored_base_url = manager
+            .config()
+            .openai_base_url
+            .as_deref()
+            .map(|url| url.trim().trim_end_matches('/'));
+        let stored_api_key = ApiKeyManager::as_ref(app).keys().openai.as_deref();
+        let has_selected_model = manager
+            .config()
+            .openai_model
+            .as_deref()
+            .is_some_and(|model| !model.trim().is_empty());
+
+        has_selected_model
+            && base_url.as_deref() == stored_base_url
+            && api_key.as_deref() == stored_api_key
+    }
+
     // ------------------------------------------------------------------
     // Rendering — main layout
     // ------------------------------------------------------------------
@@ -423,8 +711,8 @@ impl LoginSlideView {
     ) -> Box<dyn Element> {
         match self.step {
             LoginStep::SelectAuthPathway => {
-                let children = self.render_select_auth_content(appearance);
-                let bottom_nav = self.render_select_auth_bottom_nav(appearance);
+                let children = self.render_select_auth_content(appearance, app, editor_rendered);
+                let bottom_nav = self.render_select_auth_bottom_nav(appearance, app);
                 slide_content::onboarding_slide_content(
                     children,
                     bottom_nav,
@@ -470,16 +758,29 @@ impl LoginSlideView {
         }
     }
 
-    fn render_select_auth_content(&self, appearance: &Appearance) -> Vec<Box<dyn Element>> {
+    fn render_select_auth_content(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+        editor_rendered: &Cell<bool>,
+    ) -> Vec<Box<dyn Element>> {
         let theme = appearance.theme();
         let sub_text_color = internal_colors::text_sub(theme, theme.background().into_solid());
         let ui_builder = appearance.ui_builder();
 
         let is_terminal = matches!(self.intention, OnboardingIntention::Terminal);
-        let title_text = if is_terminal {
-            "Get started with Warp Drive"
+        #[cfg(not(target_family = "wasm"))]
+        let provider_setup = self.should_render_provider_setup();
+        #[cfg(target_family = "wasm")]
+        let provider_setup = false;
+
+        let product_name = ChannelState::product_name();
+        let title_text = if provider_setup {
+            "Connect your AI provider".to_string()
+        } else if is_terminal {
+            format!("Get started with {product_name} Drive")
         } else {
-            "Get started with AI"
+            "Get started with AI".to_string()
         };
         let title = FormattedTextElement::from_str(title_text, appearance.ui_font_family(), 36.)
             .with_color(internal_colors::text_main(
@@ -490,10 +791,16 @@ impl LoginSlideView {
             .with_alignment(TextAlignment::Left)
             .finish();
 
-        let subtitle_text = if is_terminal {
+        let subtitle_text = if provider_setup {
+            format!(
+                "Enter an OpenAI-compatible Base URL and API key. {product_name} uses this connection locally for AI features."
+            )
+        } else if is_terminal {
             "Connect your account to save and share notebooks, workflows, and more across devices."
+                .to_string()
         } else {
             "Connect your account to enable AI-powered planning, coding, and automation."
+                .to_string()
         };
         let subtitle =
             FormattedTextElement::from_str(subtitle_text, appearance.ui_font_family(), 16.)
@@ -510,81 +817,252 @@ impl LoginSlideView {
             ..Default::default()
         };
 
-        let tos_line = Flex::row()
-            .with_child(
-                ui_builder
-                    .span("By continuing, you agree to Warp's ")
-                    .with_style(disclaimer_styles)
-                    .build()
-                    .finish(),
-            )
-            .with_child(
-                ui_builder
-                    .link(
-                        "Terms of Service".into(),
-                        Some(TOS_URL.into()),
-                        None,
-                        self.tos_mouse_state.clone(),
-                    )
-                    .soft_wrap(false)
-                    .with_style(UiComponentStyles {
-                        font_size: Some(12.),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish(),
-            )
-            .finish();
+        let tos_line = if provider_setup {
+            ui_builder
+                .span("Your API key is stored locally and sent only to your configured provider.")
+                .with_style(disclaimer_styles)
+                .build()
+                .finish()
+        } else {
+            Flex::row()
+                .with_child(
+                    ui_builder
+                        .span(format!("By continuing, you agree to {product_name}'s "))
+                        .with_style(disclaimer_styles)
+                        .build()
+                        .finish(),
+                )
+                .with_child(
+                    ui_builder
+                        .link(
+                            "Terms of Service".into(),
+                            Some(TOS_URL.into()),
+                            None,
+                            self.tos_mouse_state.clone(),
+                        )
+                        .soft_wrap(false)
+                        .with_style(UiComponentStyles {
+                            font_size: Some(12.),
+                            ..Default::default()
+                        })
+                        .build()
+                        .finish(),
+                )
+                .finish()
+        };
 
-        let privacy_line = Flex::row()
-            .with_child(
-                ui_builder
-                    .span(self.privacy_disclaimer_prefix())
-                    .with_style(disclaimer_styles)
-                    .build()
-                    .finish(),
-            )
-            .with_child(
-                ui_builder
-                    .link(
-                        "Privacy Settings".into(),
-                        None,
-                        Some(Box::new(|ctx| {
-                            ctx.dispatch_typed_action(LoginSlideAction::ShowPrivacySettings);
-                        })),
-                        self.privacy_settings_mouse_state.clone(),
-                    )
-                    .soft_wrap(false)
-                    .with_style(UiComponentStyles {
-                        font_size: Some(12.),
-                        ..Default::default()
-                    })
-                    .build()
-                    .finish(),
-            )
-            .finish();
-
+        let show_privacy_settings_link = ChannelState::product_name() != "Slipstream";
+        let mut disclaimer_column = Flex::column();
+        if show_privacy_settings_link {
+            let privacy_line = Flex::row()
+                .with_child(
+                    ui_builder
+                        .span(self.privacy_disclaimer_prefix())
+                        .with_style(disclaimer_styles)
+                        .build()
+                        .finish(),
+                )
+                .with_child(
+                    ui_builder
+                        .link(
+                            "Privacy Settings".into(),
+                            None,
+                            Some(Box::new(|ctx| {
+                                ctx.dispatch_typed_action(LoginSlideAction::ShowPrivacySettings);
+                            })),
+                            self.privacy_settings_mouse_state.clone(),
+                        )
+                        .soft_wrap(false)
+                        .with_style(UiComponentStyles {
+                            font_size: Some(12.),
+                            ..Default::default()
+                        })
+                        .build()
+                        .finish(),
+                )
+                .finish();
+            disclaimer_column = disclaimer_column.with_child(privacy_line);
+        }
         let disclaimers = Container::new(
-            Flex::column()
-                .with_child(privacy_line)
-                .with_child(Container::new(tos_line).with_margin_top(8.).finish())
+            disclaimer_column
+                .with_child(
+                    Container::new(tos_line)
+                        .with_margin_top(if show_privacy_settings_link { 8. } else { 0. })
+                        .finish(),
+                )
                 .finish(),
         )
         .with_margin_top(24.)
         .finish();
+
+        #[cfg(not(target_family = "wasm"))]
+        let provider_form = provider_setup.then(|| {
+            let editor_style = UiComponentStyles {
+                padding: Some(Coords {
+                    top: 10.,
+                    bottom: 10.,
+                    left: 16.,
+                    right: 16.,
+                }),
+                background: Some(theme.surface_2().into()),
+                ..Default::default()
+            };
+
+            let render_real_editors = if editor_rendered.get() {
+                true
+            } else {
+                editor_rendered.set(true);
+                false
+            };
+
+            let render_input =
+                |label: &'static str, editor: ViewHandle<EditorView>| -> Box<dyn Element> {
+                    let label = ui_builder
+                        .span(label)
+                        .with_style(UiComponentStyles {
+                            font_color: Some(internal_colors::text_main(
+                                theme,
+                                theme.background().into_solid(),
+                            )),
+                            font_size: Some(12.),
+                            ..Default::default()
+                        })
+                        .build()
+                        .finish();
+
+                    let input = if render_real_editors {
+                        ui_builder
+                            .text_input(editor)
+                            .with_style(editor_style)
+                            .build()
+                            .finish()
+                    } else {
+                        ConstrainedBox::new(
+                            Container::new(warpui::elements::Empty::new().finish())
+                                .with_background(theme.surface_2())
+                                .finish(),
+                        )
+                        .with_height(40.)
+                        .finish()
+                    };
+
+                    Flex::column()
+                        .with_child(label)
+                        .with_child(Container::new(input).with_margin_top(8.).finish())
+                        .finish()
+                };
+
+            let render_model_selector = || -> Box<dyn Element> {
+                let label = ui_builder
+                    .span("Default model")
+                    .with_style(UiComponentStyles {
+                        font_color: Some(internal_colors::text_main(
+                            theme,
+                            theme.background().into_solid(),
+                        )),
+                        font_size: Some(12.),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish();
+
+                Flex::column()
+                    .with_child(label)
+                    .with_child(
+                        Container::new(ChildView::new(&self.provider_model_dropdown).finish())
+                            .with_margin_top(8.)
+                            .finish(),
+                    )
+                    .finish()
+            };
+
+            let provider_test_passed = matches!(
+                LocalMultiAgentManager::as_ref(app).test_status(),
+                LocalMultiAgentTestStatus::Passed { .. }
+            );
+
+            let status = match (
+                self.provider_setup_error.as_ref(),
+                LocalMultiAgentManager::as_ref(app).test_status(),
+            ) {
+                (Some(error), _) => Some((error.clone(), theme.ansi_fg_red())),
+                (None, LocalMultiAgentTestStatus::Testing) => {
+                    Some(("Testing connection...".to_string(), sub_text_color))
+                }
+                (None, LocalMultiAgentTestStatus::Passed { model_count }) => Some((
+                    format!("Connection verified. Found {model_count} models."),
+                    theme.ansi_fg_green(),
+                )),
+                (None, LocalMultiAgentTestStatus::Failed { message }) => {
+                    Some((format!("Connection failed: {message}"), theme.ansi_fg_red()))
+                }
+                (None, LocalMultiAgentTestStatus::NotRun) => None,
+            };
+
+            let mut form = Flex::column()
+                .with_child(render_input(
+                    "OpenAI Base URL",
+                    self.openai_base_url_input.clone(),
+                ))
+                .with_child(
+                    Container::new(render_input(
+                        "OpenAI API Key",
+                        self.openai_api_key_input.clone(),
+                    ))
+                    .with_margin_top(14.)
+                    .finish(),
+                );
+
+            if provider_test_passed {
+                form = form.with_child(
+                    Container::new(render_model_selector())
+                        .with_margin_top(14.)
+                        .finish(),
+                );
+            }
+
+            if let Some((text, color)) = status {
+                form = form.with_child(
+                    Container::new(
+                        FormattedTextElement::from_str(text, appearance.ui_font_family(), 12.)
+                            .with_color(color)
+                            .with_weight(Weight::Normal)
+                            .with_alignment(TextAlignment::Left)
+                            .with_line_height_ratio(1.2)
+                            .finish(),
+                    )
+                    .with_margin_top(12.)
+                    .finish(),
+                );
+            }
+
+            Container::new(form.finish()).with_margin_top(24.).finish()
+        });
 
         let header = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_child(title)
             .with_child(Container::new(subtitle).with_margin_top(16.).finish())
-            .with_child(disclaimers)
-            .finish();
+            .with_child(disclaimers);
+
+        #[cfg(not(target_family = "wasm"))]
+        let header = if let Some(provider_form) = provider_form {
+            header.with_child(provider_form)
+        } else {
+            header
+        };
+
+        let header = header.finish();
 
         vec![header]
     }
 
-    fn render_select_auth_bottom_nav(&self, appearance: &Appearance) -> Box<dyn Element> {
+    fn render_select_auth_bottom_nav(
+        &self,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
         let back_button = self.back_button.render(
             appearance,
             button::Params {
@@ -599,11 +1077,76 @@ impl LoginSlideView {
             },
         );
 
+        #[cfg(not(target_family = "wasm"))]
+        if self.should_render_provider_setup() {
+            let test_status = LocalMultiAgentManager::as_ref(app).test_status();
+            let is_testing = matches!(test_status, LocalMultiAgentTestStatus::Testing);
+            let (base_url, _) = self.provider_setup_values(app);
+            let has_provider_base_url = base_url.is_some();
+            let connection_verified = self.is_provider_connection_verified(app);
+
+            let test_label = match test_status {
+                LocalMultiAgentTestStatus::NotRun => "Test connection",
+                LocalMultiAgentTestStatus::Testing => "Testing...",
+                LocalMultiAgentTestStatus::Passed { .. } => "Retest connection",
+                LocalMultiAgentTestStatus::Failed { .. } => "Retry connection",
+            };
+            let test_button = self.test_connection_button.render(
+                appearance,
+                button::Params {
+                    content: button::Content::Label(test_label.into()),
+                    theme: &button::themes::Secondary,
+                    options: button::Options {
+                        disabled: is_testing || !has_provider_base_url,
+                        on_click: Some(Box::new(|ctx, _app, _pos| {
+                            ctx.dispatch_typed_action(LoginSlideAction::TestProviderConnection);
+                        })),
+                        ..button::Options::default(appearance)
+                    },
+                },
+            );
+
+            let enter = Keystroke::parse("enter").unwrap_or_default();
+            let continue_button = self.login_button.render(
+                appearance,
+                button::Params {
+                    content: button::Content::Label("Continue".into()),
+                    theme: &button::themes::Primary,
+                    options: button::Options {
+                        disabled: !connection_verified,
+                        keystroke: connection_verified.then_some(enter),
+                        on_click: Some(Box::new(|ctx, _app, _pos| {
+                            ctx.dispatch_typed_action(LoginSlideAction::Enter);
+                        })),
+                        ..button::Options::default(appearance)
+                    },
+                },
+            );
+
+            let right_buttons = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(test_button)
+                .with_child(
+                    Container::new(continue_button)
+                        .with_margin_left(8.)
+                        .finish(),
+                )
+                .finish();
+
+            return Flex::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(back_button)
+                .with_child(right_buttons)
+                .finish();
+        }
+
         let cmd_enter = Keystroke::parse("cmdorctrl-enter").unwrap_or_default();
         let skip_label = if matches!(self.intention, OnboardingIntention::Terminal) {
-            "Disable Warp Drive"
+            format!("Disable {}", drive_name())
         } else {
-            "Disable AI features"
+            "Disable AI features".to_string()
         };
         let skip_button = self.skip_button.render(
             appearance,
@@ -898,9 +1441,9 @@ impl LoginSlideView {
 
         let is_terminal = matches!(self.intention, OnboardingIntention::Terminal);
         let title_text = if is_terminal {
-            "Are you sure you want to disable Warp Drive?"
+            format!("Are you sure you want to disable {}?", drive_name())
         } else {
-            "Are you sure you want to disable AI features?"
+            "Are you sure you want to disable AI features?".to_string()
         };
         let title = FormattedTextElement::from_str(title_text, appearance.ui_font_family(), 16.)
             .with_color(internal_colors::text_main(theme, dialog_surface_solid))
@@ -934,9 +1477,15 @@ impl LoginSlideView {
             .finish();
 
         let body_text_str = if is_terminal {
-            "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:"
+            format!(
+                "{} lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:",
+                drive_name()
+            )
         } else {
-            "Warp is better with AI. By continuing, you won't have access to any of the following features:"
+            format!(
+                "{} is better with AI. By continuing, you won't have access to any of the following features:",
+                ChannelState::product_name()
+            )
         };
         let body_text =
             FormattedTextElement::from_str(body_text_str, appearance.ui_font_family(), 14.)
@@ -950,9 +1499,9 @@ impl LoginSlideView {
         let mut feature_list =
             Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         let feature_items: &[&str] = if is_terminal {
-            WARP_DRIVE_FEATURES
+            drive_features()
         } else {
-            AI_FEATURES
+            ai_features()
         };
         for &item in feature_items {
             let icon_el = ConstrainedBox::new(Icon::X.to_warpui_icon(feature_x_fill).finish())
@@ -989,9 +1538,9 @@ impl LoginSlideView {
             .finish();
 
         let cancel_label = if is_terminal {
-            "Enable Warp Drive"
+            format!("Enable {}", drive_name())
         } else {
-            "Enable AI features"
+            "Enable AI features".to_string()
         };
         let login_button = self.dialog_login_button.render(
             appearance,
@@ -1121,14 +1670,36 @@ impl View for LoginSlideView {
             );
         }
 
-        // Two-column slide layout
-        // static_left calls the left closure twice (narrow + wide). We use a
-        // Cell<bool> so the editor ChildView is only created once.
-        let editor_rendered = Cell::new(false);
-        let slide = layout::static_left(
-            || self.render_content(appearance, app, &editor_rendered),
-            || self.render_visual(),
-        );
+        #[cfg(not(target_family = "wasm"))]
+        let slide = if self.should_render_provider_setup()
+            && matches!(self.step, LoginStep::SelectAuthPathway)
+        {
+            let editor_rendered = Cell::new(true);
+            Align::new(
+                ConstrainedBox::new(self.render_content(appearance, app, &editor_rendered))
+                    .with_max_width(940.)
+                    .finish(),
+            )
+            .finish()
+        } else {
+            // static_left calls the left closure twice (narrow + wide). We use
+            // a Cell<bool> so the editor ChildView is only created once.
+            let editor_rendered = Cell::new(false);
+            layout::static_left(
+                || self.render_content(appearance, app, &editor_rendered),
+                || self.render_visual(),
+            )
+        };
+        #[cfg(target_family = "wasm")]
+        let slide = {
+            // static_left calls the left closure twice (narrow + wide). We use
+            // a Cell<bool> so the editor ChildView is only created once.
+            let editor_rendered = Cell::new(false);
+            layout::static_left(
+                || self.render_content(appearance, app, &editor_rendered),
+                || self.render_visual(),
+            )
+        };
         stack.add_child(slide);
 
         // Skip dialog overlay
@@ -1178,6 +1749,20 @@ impl TypedActionView for LoginSlideView {
                 if self.active_overlay.is_some() {
                     self.active_overlay = None;
                     self.handle_login_later(ctx);
+                    return;
+                }
+                #[cfg(not(target_family = "wasm"))]
+                if self.should_render_provider_setup() {
+                    if self.is_provider_connection_verified(ctx) {
+                        if self.persist_provider_setup(false, ctx).is_ok() {
+                            ctx.emit(LoginSlideEvent::LoginLaterConfirmed);
+                        }
+                    } else if self.persist_provider_setup(false, ctx).is_ok() {
+                        LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                            manager.test_backend(ctx);
+                        });
+                    }
+                    ctx.notify();
                     return;
                 }
                 // Otherwise Enter is log in
@@ -1284,6 +1869,9 @@ impl TypedActionView for LoginSlideView {
                 ctx.notify();
             }
             LoginSlideAction::ShowPrivacySettings => {
+                if ChannelState::product_name() == "Slipstream" {
+                    return;
+                }
                 send_telemetry_sync_from_ctx!(
                     TelemetryEvent::OpenAuthPrivacySettings {
                         source: LoginEventSource::OnboardingSlide,
@@ -1344,6 +1932,29 @@ impl TypedActionView for LoginSlideView {
                 let clipboard_content = ctx.clipboard().read();
                 if !clipboard_content.plain_text.is_empty() {
                     self.handle_pasted_auth_url(clipboard_content.plain_text, ctx);
+                }
+            }
+            LoginSlideAction::TestProviderConnection => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    if self.persist_provider_setup(false, ctx).is_ok() {
+                        LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                            manager.test_backend(ctx);
+                        });
+                    }
+                    ctx.notify();
+                }
+            }
+            LoginSlideAction::SetProviderDefaultModel(model) => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                        if let Err(error) = manager.set_openai_model(Some(model.clone()), ctx) {
+                            manager.record_config_error(error.to_string(), ctx);
+                        }
+                    });
+                    self.provider_setup_error = None;
+                    ctx.notify();
                 }
             }
         }

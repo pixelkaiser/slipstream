@@ -16,16 +16,29 @@ if [[ -z "$WARP_PLIST_PATH" ]]; then
   exit 1
 fi
 
+set_plist_string() {
+  local key="$1"
+  local value="$2"
+  plutil -replace "$key" -string "$value" "$WARP_PLIST_PATH" 2>/dev/null || \
+    plutil -insert "$key" -string "$value" "$WARP_PLIST_PATH"
+}
+
 if [[ -n "$GIT_RELEASE_TAG" ]]; then
   echo "Updating plist Warp version to $GIT_RELEASE_TAG"
-  plutil -insert WarpVersion -string "$GIT_RELEASE_TAG" "$WARP_PLIST_PATH"
+  set_plist_string WarpVersion "$GIT_RELEASE_TAG"
 
   # We convert our version format to be period-separated integers only to align better with
   # Apple's guidance on values for `CFBundleVersion` / `CFBundleShortVersionString`.
   # (They technically only allow [major].[minor].[patch], but it's not enforced.)
   # This allows IT admins to work with a more stable version of our internal versioning scheme.
   # A tag like `v0.2025.01.07.08.02.stable_02` would be converted to `0.2025.01.07.08.02.02`.
-  if [[ $GIT_RELEASE_TAG =~ ^v([0-9]+)\.([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.[a-z]+_([0-9]{2})$ ]]; then
+  if [[ $GIT_RELEASE_TAG =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+    FORMATTED_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+
+    echo "Updating plist version to $FORMATTED_VERSION"
+    set_plist_string CFBundleShortVersionString "$FORMATTED_VERSION"
+    set_plist_string CFBundleVersion "$FORMATTED_VERSION"
+  elif [[ $GIT_RELEASE_TAG =~ ^v([0-9]+)\.([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.([0-9]{2})\.[a-z]+_([0-9]{2})$ ]]; then
     MAJOR="${BASH_REMATCH[1]}"
     YEAR="${BASH_REMATCH[2]}"
     MONTH="${BASH_REMATCH[3]}"
@@ -37,10 +50,10 @@ if [[ -n "$GIT_RELEASE_TAG" ]]; then
     FORMATTED_VERSION="${MAJOR}.${YEAR}.${MONTH}.${DAY}.${HOUR}.${MINUTE}.${BUILD}"
     
     echo "Updating plist version to $FORMATTED_VERSION"
-    plutil -replace CFBundleShortVersionString -string "$FORMATTED_VERSION" "$WARP_PLIST_PATH"
-    plutil -replace CFBundleVersion -string "$FORMATTED_VERSION" "$WARP_PLIST_PATH"
+    set_plist_string CFBundleShortVersionString "$FORMATTED_VERSION"
+    set_plist_string CFBundleVersion "$FORMATTED_VERSION"
   else
-    echo "Warning: GIT_RELEASE_TAG '$GIT_RELEASE_TAG' does not match expected format vN.YYYY.MM.DD.HH.MM.channel_NN"
+    echo "Warning: GIT_RELEASE_TAG '$GIT_RELEASE_TAG' does not match expected format vN.N.N or vN.YYYY.MM.DD.HH.MM.channel_NN"
   fi
 fi
 

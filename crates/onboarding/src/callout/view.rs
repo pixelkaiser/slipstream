@@ -1,10 +1,11 @@
 use ui_components::Component;
+use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
 use warpui::{
-    elements::Empty,
-    keymap::{macros::*, FixedBinding, Keystroke},
     AppContext, Element, Entity, EventContext, ModelHandle, SingletonEntity, TypedActionView, View,
     ViewContext,
+    elements::Empty,
+    keymap::{FixedBinding, Keystroke, macros::*},
 };
 
 /// Display strings for keybindings shown in the onboarding callout.
@@ -19,12 +20,12 @@ pub struct OnboardingKeybindings {
 }
 
 use crate::{
+    OnboardingIntention,
     callout::model::{
         AgentModalityCalloutState, FinalState, OnboardingCalloutModel, OnboardingCalloutModelEvent,
         OnboardingCalloutState, OnboardingQuery, UniversalInputCalloutState,
     },
     components::onboarding_callout::{self, Button, StepStatus},
-    OnboardingIntention,
 };
 
 /// Options for rendering a callout.
@@ -51,6 +52,22 @@ struct CheckboxOptions {
     checked: bool,
 }
 
+fn product_input_title() -> &'static str {
+    if ChannelState::product_name() == "Slipstream" {
+        "Meet the Slipstream input"
+    } else {
+        "Meet the Warp input"
+    }
+}
+
+fn product_agent_experience_title() -> &'static str {
+    if ChannelState::product_name() == "Slipstream" {
+        "Introducing Slipstream's new agent experience"
+    } else {
+        "Introducing Warp's new agent experience"
+    }
+}
+
 fn get_universal_input_callout_options(
     state: UniversalInputCalloutState,
     has_project: bool,
@@ -58,7 +75,7 @@ fn get_universal_input_callout_options(
 ) -> Option<CalloutOptions> {
     match state {
         UniversalInputCalloutState::MeetInput => Some(CalloutOptions {
-            title: "Meet the Warp input",
+            title: product_input_title(),
             text: format!(
                 "Your terminal input accepts both terminal commands and agent prompts and automatically detects which you're using. Use {} to lock the input to Agent mode (natural language) or Terminal mode (commands).",
                 keybindings.toggle_input_mode
@@ -158,7 +175,8 @@ fn get_agent_modality_callout_options(
                 Some(CalloutOptions {
                     title: "Natural language support",
                     text: format!(
-                        "Natural language input is off by default. If enabled, you can type requests in plain English and Warp will autodetect queries for the agent. You can always override them using {}.",
+                        "Natural language input is off by default. If enabled, you can type requests in plain English and {} will autodetect queries for the agent. You can always override them using {}.",
+                        ChannelState::product_name(),
                         keybindings.toggle_input_mode
                     ),
                     step: StepStatus::new(1, total_steps),
@@ -176,7 +194,7 @@ fn get_agent_modality_callout_options(
             }
         }
         AgentModalityCalloutState::IntroducingAgentExperience => Some(CalloutOptions {
-            title: "Introducing Warp's new agent experience",
+            title: product_agent_experience_title(),
             text: "Agent conversations are now their own scoped view outside of your terminal. Simply hit ESC to return to the terminal at any point.".to_string(),
             step: StepStatus::new(2, total_steps),
             left_button: None,

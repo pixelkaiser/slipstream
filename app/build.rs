@@ -463,6 +463,22 @@ fn embed_resource_file(target_dir: &Path) {
     let version = env::var("GIT_RELEASE_TAG").unwrap_or("v0".to_owned());
     let app_name = env::var("WARP_APP_NAME").unwrap_or("Warp".to_owned());
     let bin_name = env::var("CARGO_BIN_NAME").unwrap_or("local".to_owned());
+    let file_version = windows_file_version(&version);
+    let company_name = if app_name == "Slipstream" {
+        "Slipstream contributors"
+    } else {
+        "Denver Technologies, Inc"
+    };
+    let product_name = if app_name == "Slipstream" {
+        "Slipstream"
+    } else {
+        "Warp"
+    };
+    let legal_copyright = if app_name == "Slipstream" {
+        "© 2026, Slipstream contributors"
+    } else {
+        "© 2025, Denver Technologies, Inc"
+    };
 
     let icon_path = Path::new("channels")
         .join(bin_name)
@@ -484,8 +500,8 @@ fn embed_resource_file(target_dir: &Path) {
 
 IDI_ICON ICON "icon.ico"
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,0,0,0
-PRODUCTVERSION  1,0,0,0
+FILEVERSION     {file_version}
+PRODUCTVERSION  {file_version}
 FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
 FILEFLAGS       0
 FILEOS          VOS__WINDOWS32
@@ -496,13 +512,13 @@ BEGIN
     BEGIN
         BLOCK "040904E4"
         BEGIN
-            VALUE "CompanyName",      "Denver Technologies, Inc\0"
+            VALUE "CompanyName",      "{company_name}\0"
             VALUE "FileDescription",  "{app_name}\0"
             VALUE "FileVersion",      "{version}\0"
-            VALUE "LegalCopyright",   "© 2025, Denver Technologies, Inc\0"
+            VALUE "LegalCopyright",   "{legal_copyright}\0"
             VALUE "InternalName",     "\0"
             VALUE "OriginalFilename", "\0"
-            VALUE "ProductName",      "Warp\0"
+            VALUE "ProductName",      "{product_name}\0"
             VALUE "ProductVersion",   "{version}\0"
         END
     END
@@ -527,4 +543,19 @@ END
     embed_resource::compile(resource_file_path, embed_resource::NONE)
         .manifest_required()
         .unwrap_or_else(|err| panic!("Unable to embed resource file: {err:#}"));
+}
+
+#[cfg(windows)]
+fn windows_file_version(version: &str) -> String {
+    let version = version.strip_prefix('v').unwrap_or(version);
+    let parts = version
+        .split('.')
+        .take(3)
+        .map(|part| part.parse::<u16>())
+        .collect::<Result<Vec<_>, _>>();
+
+    match parts {
+        Ok(parts) if parts.len() == 3 => format!("{},{},{},0", parts[0], parts[1], parts[2]),
+        _ => "1,0,0,0".to_owned(),
+    }
 }

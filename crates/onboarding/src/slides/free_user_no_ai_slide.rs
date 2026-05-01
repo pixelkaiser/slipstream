@@ -2,13 +2,16 @@ use super::OnboardingSlide;
 use crate::model::OnboardingStateModel;
 use crate::slides::{bottom_nav, layout, slide_content};
 use crate::telemetry::OnboardingEvent;
-use crate::OnboardingIntention;
-use ui_components::{button, Component as _, Options as _};
+use crate::{OnboardingIntention, drive_name, final_cta_label};
+use ui_components::{Component as _, Options as _, button};
+use warp_core::channel::ChannelState;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::theme::Fill;
-use warp_core::ui::{appearance::Appearance, theme::color::internal_colors, Icon};
+use warp_core::ui::{Icon, appearance::Appearance, theme::color::internal_colors};
 use warpui::prelude::Align;
 use warpui::{
+    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
+    ViewContext,
     elements::{
         Border, ClippedScrollStateHandle, ConstrainedBox, Container, CornerRadius,
         CrossAxisAlignment, DropShadow, Flex, FormattedTextElement, Hoverable, MainAxisAlignment,
@@ -20,8 +23,6 @@ use warpui::{
     platform::Cursor,
     text_layout::TextAlignment,
     ui_components::components::{UiComponent as _, UiComponentStyles},
-    AppContext, Element, Entity, ModelHandle, SingletonEntity as _, TypedActionView, View,
-    ViewContext,
 };
 
 const SUBSCRIBE_ITEMS: &[&str] = &[
@@ -30,7 +31,6 @@ const SUBSCRIBE_ITEMS: &[&str] = &[
     "Access to Reload credits and volume-based discounts",
     "Extended cloud agents access",
     "Highest codebase indexing limits",
-    "Unlimited Warp Drive objects and collaboration",
     "Private email support",
     "Unlimited cloud conversation storage",
 ];
@@ -121,8 +121,14 @@ impl FreeUserNoAiSlide {
             appearance,
             0,
             Icon::Code2,
-            "Agent driven development with Warp's built-in agent",
-            "Iterate, plan, and build with Oz: Warp's built-in agent. Available locally or in the cloud.",
+            format!(
+                "Agent driven development with {}'s built-in agent",
+                ChannelState::product_name()
+            ),
+            format!(
+                "Iterate, plan, and build with Oz: {}'s built-in agent. Available locally or in the cloud.",
+                ChannelState::product_name()
+            ),
             agent_price_badge.to_string(),
             true, // badge is green
             self.agent_mouse_state.clone(),
@@ -133,8 +139,8 @@ impl FreeUserNoAiSlide {
             appearance,
             1,
             Icon::Terminal,
-            "Classic terminal with third-party agents",
-            "A modern terminal that supports third-party agents (Claude Code, Codex, Gemini CLI) and classic terminal workflows.",
+            "Classic terminal with third-party agents".to_string(),
+            "A modern terminal that supports third-party agents (Claude Code, Codex, Gemini CLI) and classic terminal workflows.".to_string(),
             "Free".to_string(),
             false, // badge is gray
             self.classic_terminal_mouse_state.clone(),
@@ -190,8 +196,8 @@ impl FreeUserNoAiSlide {
         appearance: &Appearance,
         index: usize,
         icon: Icon,
-        label: &'static str,
-        description: &'static str,
+        label: String,
+        description: String,
         badge_text: String,
         badge_green: bool,
         mouse_state: MouseStateHandle,
@@ -247,7 +253,7 @@ impl FreeUserNoAiSlide {
 
             let label_el = appearance
                 .ui_builder()
-                .paragraph(label)
+                .paragraph(label.clone())
                 .with_style(UiComponentStyles {
                     font_size: Some(14.),
                     font_weight: Some(Weight::Normal),
@@ -257,12 +263,13 @@ impl FreeUserNoAiSlide {
                 .build()
                 .finish();
 
-            let description_el = FormattedTextElement::from_str(description, ui_font_family, 12.)
-                .with_color(text_color)
-                .with_weight(Weight::Normal)
-                .with_alignment(TextAlignment::Left)
-                .with_line_height_ratio(1.4)
-                .finish();
+            let description_el =
+                FormattedTextElement::from_str(description.clone(), ui_font_family, 12.)
+                    .with_color(text_color)
+                    .with_weight(Weight::Normal)
+                    .with_alignment(TextAlignment::Left)
+                    .with_line_height_ratio(1.4)
+                    .finish();
 
             let content = Flex::column()
                 .with_main_axis_size(MainAxisSize::Min)
@@ -316,7 +323,7 @@ impl FreeUserNoAiSlide {
             self.next_button.render(
                 appearance,
                 button::Params {
-                    content: button::Content::Label("Get Warping".into()),
+                    content: button::Content::Label(final_cta_label().into()),
                     theme: &button::themes::Primary,
                     options: button::Options {
                         keystroke: Some(enter),
@@ -367,23 +374,32 @@ impl FreeUserNoAiSlide {
         let text_main = internal_colors::text_main(theme, internal_colors::neutral_2(theme));
         let text_sub = internal_colors::text_sub(theme, internal_colors::neutral_2(theme));
 
-        let title = FormattedTextElement::from_str(
-            "Subscribe to access agent driven development in Warp.",
-            ui_font_family,
-            24.,
-        )
-        .with_color(text_main)
-        .with_weight(Weight::Medium)
-        .with_alignment(TextAlignment::Left)
-        .with_line_height_ratio(1.3)
-        .finish();
+        let title_text = format!(
+            "Subscribe to access agent driven development in {}.",
+            ChannelState::product_name()
+        );
+        let title = FormattedTextElement::from_str(title_text, ui_font_family, 24.)
+            .with_color(text_main)
+            .with_weight(Weight::Medium)
+            .with_alignment(TextAlignment::Left)
+            .with_line_height_ratio(1.3)
+            .finish();
 
         let mut items_col = Flex::column()
             .with_main_axis_size(MainAxisSize::Min)
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_spacing(8.);
 
-        for item_text in SUBSCRIBE_ITEMS {
+        let subscribe_items = SUBSCRIBE_ITEMS
+            .iter()
+            .map(|item| (*item).to_string())
+            .chain(std::iter::once(format!(
+                "Unlimited {} objects and collaboration",
+                drive_name()
+            )))
+            .collect::<Vec<_>>();
+
+        for item_text in subscribe_items {
             let bullet = appearance
                 .ui_builder()
                 .paragraph(format!("\u{2022} {item_text}"))

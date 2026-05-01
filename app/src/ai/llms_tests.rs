@@ -105,3 +105,33 @@ fn llm_preferences_refreshes_on_init_in_no_cloud_mode() {
 
     restore_env_var("WARP_NO_CLOUD", previous);
 }
+
+#[test]
+fn local_multi_agent_models_populate_agent_model_choices() {
+    let mut config = LocalMultiAgentConfig::default();
+    config.openai_model = Some("model-b".to_string());
+    config.local_model_list = String::new();
+    config.local_model_aliases = "{}".to_string();
+
+    let models = models_by_feature_for_local_multi_agent(
+        &config,
+        &["model-a".to_string(), "model-b".to_string()],
+    )
+    .expect("local models should build LLM choices");
+
+    assert_eq!(models.agent_mode.default_id, LLMId::from("model-b"));
+    assert_eq!(
+        models
+            .agent_mode
+            .choices
+            .iter()
+            .map(|model| model.id.to_string())
+            .collect::<Vec<_>>(),
+        vec!["model-a".to_string(), "model-b".to_string()]
+    );
+    assert_eq!(models.coding.choices, models.agent_mode.choices);
+    assert_eq!(
+        models.cli_agent.as_ref().map(|models| &models.choices),
+        Some(&models.agent_mode.choices)
+    );
+}

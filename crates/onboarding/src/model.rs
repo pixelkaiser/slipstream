@@ -78,6 +78,10 @@ pub enum SelectedSettings {
 
 impl SelectedSettings {
     pub fn is_ai_enabled(&self) -> bool {
+        if warp_core::channel::ChannelState::product_name() == "Slipstream" {
+            return true;
+        }
+
         use warp_core::features::FeatureFlag;
         match self {
             SelectedSettings::AgentDrivenDevelopment { agent_settings, .. } => {
@@ -670,7 +674,7 @@ impl OnboardingStateModel {
             match self.step {
                 OnboardingStep::Intro => None,
                 OnboardingStep::Intention => Some(OnboardingStep::Intro),
-                OnboardingStep::Customize => Some(OnboardingStep::Intention),
+                OnboardingStep::Customize => None,
                 OnboardingStep::Agent => Some(OnboardingStep::Customize),
                 OnboardingStep::ThirdParty => match self.intention {
                     OnboardingIntention::Terminal => Some(OnboardingStep::Customize),
@@ -712,7 +716,7 @@ impl OnboardingStateModel {
 
         if theme_picker_last {
             match self.step {
-                OnboardingStep::Intro => self.set_step(OnboardingStep::Intention, ctx),
+                OnboardingStep::Intro => self.set_step(OnboardingStep::Customize, ctx),
                 OnboardingStep::Intention => self.set_step(OnboardingStep::Customize, ctx),
                 OnboardingStep::Customize => match self.intention {
                     OnboardingIntention::Terminal => self.set_step(OnboardingStep::ThirdParty, ctx),
