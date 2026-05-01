@@ -271,6 +271,12 @@ impl RequestParams {
             .keys()
             .local_multi_agent_server_root_url
             .clone();
+        #[cfg(not(target_family = "wasm"))]
+        let openai_base_url = crate::local_multi_agent::LocalMultiAgentManager::as_ref(app)
+            .config()
+            .openai_base_url
+            .clone();
+        #[cfg(target_family = "wasm")]
         let openai_base_url = api_key_manager.keys().openai_base_url.clone();
         let allow_use_of_warp_credits = *AISettings::as_ref(app).can_use_warp_credits_for_fallback;
 
