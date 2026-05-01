@@ -76,49 +76,34 @@ if [ -n "$GIT_RELEASE_TAG" ]; then
 fi
 
 build_and_copy_local_multi_agent() {
-  local local_agent_src="$REPO_ROOT/tools/local-multi-agent"
+  local local_agent_src="$REPO_ROOT/crates/local_multi_agent_service"
   local local_agent_dest="$DEST_DIR/bundled/local-multi-agent"
-  local local_agent_node_target="${LOCAL_AGENT_NODE_TARGET_VERSION:-22.12.0}"
+  local local_agent_binary="warp-local-multi-agent"
 
   if [ ! -d "$local_agent_src" ]; then
     echo "Error: Local multi-agent service not found at $local_agent_src" >&2
     exit 1
   fi
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "Error: npm is required to build the local multi-agent bundle" >&2
+
+  echo "Building local multi-agent Rust service"
+  local cargo_cmd=(cargo build --manifest-path "$REPO_ROOT/Cargo.toml" -p local_multi_agent_service --bin "$local_agent_binary")
+  if [ -n "$CARGO_PROFILE" ]; then
+    cargo_cmd+=(--profile "$CARGO_PROFILE")
+  fi
+  "${cargo_cmd[@]}"
+
+  local cargo_target_dir="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
+  local cargo_profile_dir="${CARGO_PROFILE:-debug}"
+  local built_binary="$cargo_target_dir/$cargo_profile_dir/$local_agent_binary"
+  if [ ! -f "$built_binary" ]; then
+    echo "Error: Local multi-agent binary not found at $built_binary" >&2
     exit 1
   fi
 
-  local local_agent_stage
-  local_agent_stage="$(mktemp -d)"
-  echo "Building local multi-agent service bundle"
-  cp "$local_agent_src/package.json" "$local_agent_stage/package.json"
-  cp "$local_agent_src/package-lock.json" "$local_agent_stage/package-lock.json"
-  cp "$local_agent_src/tsconfig.json" "$local_agent_stage/tsconfig.json"
-  cp "$local_agent_src/config-schema.json" "$local_agent_stage/config-schema.json"
-  mkdir -p "$local_agent_stage/src" "$local_agent_stage/scripts"
-  cp -R "$local_agent_src/src/." "$local_agent_stage/src/"
-  cp -R "$local_agent_src/scripts/." "$local_agent_stage/scripts/"
-
-  (
-    cd "$local_agent_stage"
-    export npm_config_target="$local_agent_node_target"
-    export npm_config_runtime="node"
-    export npm_config_disturl="https://nodejs.org/dist"
-    npm ci
-    npm rebuild better-sqlite3 --build-from-source
-    npm run build
-    npm prune --omit=dev
-  )
-
   rm -rf "$local_agent_dest"
   mkdir -p "$local_agent_dest"
-  cp -R "$local_agent_stage/dist" "$local_agent_dest/dist"
-  cp -R "$local_agent_stage/node_modules" "$local_agent_dest/node_modules"
-  cp "$local_agent_stage/package.json" "$local_agent_dest/package.json"
-  cp "$local_agent_stage/package-lock.json" "$local_agent_dest/package-lock.json"
-  cp "$local_agent_stage/config-schema.json" "$local_agent_dest/config-schema.json"
-  rm -rf "$local_agent_stage"
+  cp "$built_binary" "$local_agent_dest/$local_agent_binary"
+  cp "$local_agent_src/config-schema.json" "$local_agent_dest/config-schema.json"
 }
 
 build_and_copy_local_multi_agent
