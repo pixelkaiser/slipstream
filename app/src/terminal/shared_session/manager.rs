@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 
 use itertools::Itertools;
-use session_sharing_protocol::common::SessionId;
+use session_sharing_protocol::common::{SessionId, SessionSecret};
 use warpui::{
     AppContext, Entity, EntityId, ModelContext, SingletonEntity, ViewHandle, WeakViewHandle,
     WindowId,
 };
 
-use super::SharedSessionActionSource;
+use super::{SharedSessionActionSource, SharedSessionJoinArgs};
 use crate::terminal::TerminalView;
 
 struct SharedSessionState {
     session_id: SessionId,
+    session_secret: Option<SessionSecret>,
     view_handle: WeakViewHandle<TerminalView>,
 }
 
@@ -26,7 +27,7 @@ pub struct Manager {
     /// IDs of sessions that were shared or joined by this client,
     /// but have since been stopped. This state is maintained so that the
     /// copy link button can still work for ended sessions.
-    ended_session_ids: HashMap<EntityId, SessionId>,
+    ended_sessions: HashMap<EntityId, SharedSessionJoinArgs>,
 }
 
 impl Manager {
@@ -34,7 +35,7 @@ impl Manager {
         Self {
             shared: Default::default(),
             joined: Default::default(),
-            ended_session_ids: Default::default(),
+            ended_sessions: Default::default(),
         }
     }
 
@@ -56,9 +57,22 @@ impl Manager {
             .map(|state| state.session_id)
     }
 
+    pub fn join_args(&self, terminal_view_id: &EntityId) -> Option<SharedSessionJoinArgs> {
+        self.shared
+            .get(terminal_view_id)
+            .or(self.joined.get(terminal_view_id))
+            .map(|state| SharedSessionJoinArgs::new(state.session_id, state.session_secret.clone()))
+    }
+
     /// Returns the most recently ended session id for the given terminal view.
     pub fn ended_session_id(&self, terminal_view_id: &EntityId) -> Option<SessionId> {
-        self.ended_session_ids.get(terminal_view_id).copied()
+        self.ended_sessions
+            .get(terminal_view_id)
+            .map(|join_args| join_args.session_id)
+    }
+
+    pub fn ended_join_args(&self, terminal_view_id: &EntityId) -> Option<SharedSessionJoinArgs> {
+        self.ended_sessions.get(terminal_view_id).cloned()
     }
 
     /// Returns the view handle to the shared terminal view, identified by `terminal_view_id`, if it's being shared.
@@ -140,17 +154,20 @@ impl Manager {
         &mut self,
         terminal_view: WeakViewHandle<TerminalView>,
         session_id: SessionId,
+        session_secret: Option<SessionSecret>,
         window_id: WindowId,
         ctx: &mut ModelContext<Self>,
     ) {
         let view_id = terminal_view.id();
         let state = SharedSessionState {
             session_id,
+            session_secret: session_secret.clone(),
             view_handle: terminal_view,
         };
         self.shared.insert(view_id, state);
         ctx.emit(ManagerEvent::StartedShare {
             session_id,
+            session_secret,
             window_id,
         });
     }
@@ -159,11 +176,13 @@ impl Manager {
         &mut self,
         terminal_view: WeakViewHandle<TerminalView>,
         session_id: SessionId,
+        session_secret: Option<SessionSecret>,
         ctx: &mut ModelContext<Self>,
     ) {
         let view_id = terminal_view.id();
         let state = SharedSessionState {
             session_id,
+            session_secret,
             view_handle: terminal_view,
         };
         self.joined.insert(view_id, state);
@@ -176,16 +195,26 @@ impl Manager {
     pub fn left_share(&mut self, terminal_view_id: EntityId) {
         // Remove the shared session from the shared sessions map and persist the session id.
         if let Some(removed_session) = self.joined.remove(&terminal_view_id) {
-            self.ended_session_ids
-                .insert(terminal_view_id, removed_session.session_id);
+            self.ended_sessions.insert(
+                terminal_view_id,
+                SharedSessionJoinArgs::new(
+                    removed_session.session_id,
+                    removed_session.session_secret,
+                ),
+            );
         }
     }
 
     pub fn stopped_share(&mut self, terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) {
         // Remove the shared session from the shared sessions map and persist the session id.
         if let Some(removed_session) = self.shared.remove(&terminal_view_id) {
-            self.ended_session_ids
-                .insert(terminal_view_id, removed_session.session_id);
+            self.ended_sessions.insert(
+                terminal_view_id,
+                SharedSessionJoinArgs::new(
+                    removed_session.session_id,
+                    removed_session.session_secret,
+                ),
+            );
         }
 
         ctx.emit(ManagerEvent::StoppedShare);
@@ -232,6 +261,7 @@ pub enum ManagerEvent {
     /// A shared session was started.
     StartedShare {
         session_id: SessionId,
+        session_secret: Option<SessionSecret>,
         /// The window that the session resides in.
         window_id: WindowId,
     },
