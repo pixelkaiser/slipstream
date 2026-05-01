@@ -1,7 +1,0 @@
-dist/
-node_modules/
-.env
-.proto-cache/
-*.sqlite
-*.sqlite-shm
-*.sqlite-wal

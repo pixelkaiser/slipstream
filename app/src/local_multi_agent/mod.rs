@@ -26,13 +26,15 @@ use crate::{
 
 const PREF_KEY: &str = "LocalMultiAgentConfig";
 const BUNDLED_SERVICE_DIR: &str = "bundled/local-multi-agent";
-const SERVER_ENTRYPOINT: &str = "dist/server.js";
+#[cfg(windows)]
+const SERVICE_BINARY_NAME: &str = "warp-local-multi-agent.exe";
+#[cfg(not(windows))]
+const SERVICE_BINARY_NAME: &str = "warp-local-multi-agent";
 const CONFIG_SCHEMA_JSON: &str =
-    include_str!("../../../tools/local-multi-agent/config-schema.json");
+    include_str!("../../../crates/local_multi_agent_service/config-schema.json");
 const RESTART_DEBOUNCE: Duration = Duration::from_millis(500);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-const SERVICE_DEPENDENCY_CHECK_JS: &str = "require('better-sqlite3');";
 
 pub const LOCAL_MODEL_ALIAS_IDS: [&str; 4] =
     ["auto", "auto-efficient", "auto-coding", "auto-reasoning"];
@@ -768,30 +770,27 @@ async fn start_service(
         Err(_) => ensure_port_available(&config)?,
     }
 
-    let service_dir = service_dir().context("Local multi-agent service is not bundled")?;
-    let server_js = service_dir.join(SERVER_ENTRYPOINT);
-    if !server_js.is_file() {
+    let service_binary =
+        service_binary_path().context("Local multi-agent service binary is not bundled")?;
+    if !service_binary.is_file() {
         bail!(
-            "Local multi-agent entrypoint not found at {}. Build or bundle tools/local-multi-agent first.",
-            server_js.display()
+            "Local multi-agent service binary not found at {}. Build or bundle crates/local_multi_agent_service first.",
+            service_binary.display()
         );
     }
 
     let service_env = config.env(openai_api_key.as_deref());
     prepare_service_paths(&service_env)?;
-    let path_env = std::env::var_os("PATH").and_then(|path| path.into_string().ok());
-    let node_binary = select_service_node_binary(path_env.as_deref(), &service_dir).await?;
+    let service_dir = service_binary.parent().map(Path::to_path_buf);
 
-    let mut command = Command::new(&node_binary);
+    let mut command = Command::new(&service_binary);
     command
-        .arg(&server_js)
-        .current_dir(&service_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    if let Some(path) = path_env {
-        command.env("PATH", path);
+    if let Some(service_dir) = service_dir.as_ref() {
+        command.current_dir(service_dir);
     }
     for (key, value) in service_env {
         command.env(key, value);
@@ -800,7 +799,7 @@ async fn start_service(
 
     let child = command
         .spawn()
-        .with_context(|| format!("Failed to spawn {}", server_js.display()))?;
+        .with_context(|| format!("Failed to spawn {}", service_binary.display()))?;
     let pid = Some(child.id());
 
     wait_until_healthy(root_url.clone()).await?;
@@ -811,112 +810,6 @@ async fn start_service(
         pid,
         config_hash,
     })
-}
-
-async fn select_service_node_binary(path_env: Option<&str>, service_dir: &Path) -> Result<PathBuf> {
-    let mut failures = Vec::new();
-
-    if let Ok(custom_node) = node_runtime::node_binary_path() {
-        if custom_node.is_file() {
-            match validate_service_node_dependencies(&custom_node, None, service_dir).await {
-                Ok(()) => {
-                    log::info!(
-                        "Using custom node installation at {} for local multi-agent service",
-                        custom_node.display()
-                    );
-                    return Ok(custom_node);
-                }
-                Err(error) => {
-                    log::warn!(
-                        "Custom node installation at {} is not compatible with local multi-agent service bundle: {error:#}",
-                        custom_node.display()
-                    );
-                    failures.push(format!("custom node {}: {error:#}", custom_node.display()));
-                }
-            }
-        }
-    }
-
-    if let Some(path_env) = path_env {
-        match node_runtime::detect_system_node(path_env).await {
-            Ok(()) => {
-                let system_node = PathBuf::from("node");
-                match validate_service_node_dependencies(&system_node, Some(path_env), service_dir)
-                    .await
-                {
-                    Ok(()) => {
-                        log::info!("Using system node for local multi-agent service");
-                        return Ok(system_node);
-                    }
-                    Err(error) => {
-                        log::warn!(
-                            "System node is not compatible with local multi-agent service bundle: {error:#}"
-                        );
-                        failures.push(format!("system node: {error:#}"));
-                    }
-                }
-            }
-            Err(error) => {
-                failures.push(format!("system node: {error:#}"));
-            }
-        }
-    }
-
-    let client = http_client::Client::new();
-    node_runtime::install_npm(&client)
-        .await
-        .context("Failed to install bundled Node.js runtime")?;
-    let custom_node = node_runtime::node_binary_path()
-        .context("Failed to locate bundled Node.js runtime after install")?;
-    validate_service_node_dependencies(&custom_node, None, service_dir)
-        .await
-        .with_context(|| {
-            if failures.is_empty() {
-                format!(
-                    "Bundled Node.js runtime at {} cannot load local multi-agent service dependencies",
-                    custom_node.display()
-                )
-            } else {
-                format!(
-                    "No compatible Node.js runtime found for local multi-agent service. Previous attempts: {}",
-                    failures.join("; ")
-                )
-            }
-        })?;
-    Ok(custom_node)
-}
-
-async fn validate_service_node_dependencies(
-    node_binary: &Path,
-    path_env: Option<&str>,
-    service_dir: &Path,
-) -> Result<()> {
-    let mut command = Command::new(node_binary);
-    command
-        .arg("-e")
-        .arg(SERVICE_DEPENDENCY_CHECK_JS)
-        .current_dir(service_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    if let Some(path_env) = path_env {
-        command.env("PATH", path_env);
-    }
-
-    let output = command
-        .output()
-        .await
-        .with_context(|| format!("Failed to run {}", node_binary.display()))?;
-    if output.status.success() {
-        return Ok(());
-    }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    bail!(
-        "{} failed to load local multi-agent service dependencies: {}",
-        node_binary.display(),
-        stderr.trim()
-    )
 }
 
 async fn wait_until_healthy(root_url: Url) -> Result<()> {
@@ -1060,18 +953,43 @@ fn ensure_port_available(config: &LocalMultiAgentConfig) -> Result<()> {
     }
 }
 
-fn service_dir() -> Option<PathBuf> {
+fn service_binary_path() -> Option<PathBuf> {
     if let Some(resources) = warp_core::paths::bundled_resources_dir() {
         let bundled = resources.join(BUNDLED_SERVICE_DIR);
-        if bundled.join(SERVER_ENTRYPOINT).is_file() {
-            return Some(bundled);
+        let binary = bundled.join(SERVICE_BINARY_NAME);
+        if binary.is_file() {
+            return Some(binary);
         }
     }
 
-    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(current_dir) = current_exe.parent() {
+            let binary = current_dir.join(SERVICE_BINARY_NAME);
+            if binary.is_file() {
+                return Some(binary);
+            }
+        }
+    }
+
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()?
-        .join("tools/local-multi-agent");
-    dev.join(SERVER_ENTRYPOINT).is_file().then_some(dev)
+        .to_path_buf();
+    [
+        workspace_root
+            .join("target")
+            .join("debug")
+            .join(SERVICE_BINARY_NAME),
+        workspace_root
+            .join("target")
+            .join("release-lto")
+            .join(SERVICE_BINARY_NAME),
+        workspace_root
+            .join("target")
+            .join("release")
+            .join(SERVICE_BINARY_NAME),
+    ]
+    .into_iter()
+    .find(|binary| binary.is_file())
 }
 
 fn default_graphql_db_path() -> String {
