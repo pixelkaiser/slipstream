@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, Local};
 use markdown_parser::FormattedTextFragment;
-use session_sharing_protocol::common::{ParticipantId, ParticipantList, Role, SessionId};
+use session_sharing_protocol::common::{
+    ParticipantId, ParticipantList, Role, SessionId, SessionSecret,
+};
 use session_sharing_protocol::sharer::SessionSourceType;
 use warp_core::features::FeatureFlag;
 use warpui::elements::MouseStateHandle;
@@ -92,6 +94,7 @@ pub struct Adapter {
     reconnecting_banner: ViewHandle<Banner<TerminalAction>>,
     is_reconnecting_banner_open: bool,
     session_id: SessionId,
+    session_secret: Option<SessionSecret>,
     started_at: DateTime<Local>,
     source_type: SessionSourceType,
 }
@@ -101,6 +104,7 @@ impl Adapter {
         kind: Kind,
         presence_manager: ModelHandle<PresenceManager>,
         session_id: SessionId,
+        session_secret: Option<SessionSecret>,
         started_at: DateTime<Local>,
         source_type: SessionSourceType,
         ctx: &mut ViewContext<TerminalView>,
@@ -123,6 +127,7 @@ impl Adapter {
             reconnecting_banner,
             is_reconnecting_banner_open: false,
             session_id,
+            session_secret,
             started_at,
             source_type,
         }
@@ -133,6 +138,7 @@ impl Adapter {
         firebase_uid: UserUid,
         participant_list: Box<ParticipantList>,
         session_id: SessionId,
+        session_secret: Option<SessionSecret>,
         started_at: DateTime<Local>,
         source_type: SessionSourceType,
         ctx: &mut ViewContext<TerminalView>,
@@ -145,6 +151,7 @@ impl Adapter {
             viewer,
             presence_manager,
             session_id,
+            session_secret,
             started_at,
             source_type,
             ctx,
@@ -155,6 +162,7 @@ impl Adapter {
         sharer_id: ParticipantId,
         firebase_uid: UserUid,
         session_id: SessionId,
+        session_secret: Option<SessionSecret>,
         started_at: DateTime<Local>,
         source_type: SessionSourceType,
         ctx: &mut ViewContext<TerminalView>,
@@ -180,6 +188,7 @@ impl Adapter {
             sharer,
             presence_manager,
             session_id,
+            session_secret,
             started_at,
             source_type,
             ctx,
@@ -355,6 +364,10 @@ impl Adapter {
 
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
+    }
+
+    pub fn session_secret(&self) -> Option<&SessionSecret> {
+        self.session_secret.as_ref()
     }
 
     pub fn source_type(&self) -> &SessionSourceType {

@@ -54,7 +54,7 @@ use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::shared_session::manager::{Manager, ManagerEvent};
 use crate::terminal::shared_session::role_change_modal::RoleChangeOpenSource;
-use crate::terminal::shared_session::{join_link, SharedSessionStatus};
+use crate::terminal::shared_session::{join_link_with_secret, SharedSessionStatus};
 use crate::terminal::view::ambient_agent::should_disable_snapshot;
 use crate::terminal::view::Event;
 use crate::terminal::{TerminalManager, TerminalView};
@@ -713,11 +713,14 @@ impl PaneContent for TerminalPane {
 }
 
 fn retrieve_shared_session_link(manager: &Manager, terminal_view_id: &EntityId) -> Option<Url> {
-    let Some(session_id) = manager.session_id(terminal_view_id) else {
+    let Some(join_args) = manager.join_args(terminal_view_id) else {
         log::warn!("Failed to get join link args for updating browser url");
         return None;
     };
-    if let Ok(url) = Url::parse(&join_link(&session_id)) {
+    if let Ok(url) = Url::parse(&join_link_with_secret(
+        &join_args.session_id,
+        join_args.session_secret.as_ref(),
+    )) {
         return Some(url);
     }
     None

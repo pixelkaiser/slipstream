@@ -47,7 +47,9 @@ use crate::terminal::shared_session::network::heartbeat::{Event as HeartbeatEven
 use crate::terminal::shared_session::viewer::event_loop::{
     EventLoop, SharedSessionInitialLoadMode,
 };
-use crate::terminal::shared_session::{connect_endpoint, EventNumber, SELECTION_THROTTLE_PERIOD};
+use crate::terminal::shared_session::{
+    connect_endpoint, EventNumber, SharedSessionJoinArgs, SELECTION_THROTTLE_PERIOD,
+};
 use crate::terminal::{TerminalModel, TerminalView};
 use crate::throttle::throttle;
 
@@ -108,6 +110,7 @@ pub struct Network {
     heartbeat: ModelHandle<Heartbeat>,
 
     session_id: SessionId,
+    join_args: SharedSessionJoinArgs,
     /// [`None`] until the viewer receives the successful join ack.
     event_loop: Option<ModelHandle<EventLoop>>,
 
@@ -146,7 +149,7 @@ pub struct Network {
 
 impl Network {
     pub fn new(
-        session_id: SessionId,
+        join_args: SharedSessionJoinArgs,
         channel_event_proxy: ChannelEventListener,
         terminal_view: WeakViewHandle<TerminalView>,
         terminal_model: Arc<FairMutex<TerminalModel>>,
@@ -159,10 +162,12 @@ impl Network {
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let heartbeat = ctx.add_model(|_| Heartbeat::default());
         ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
+        let session_id = join_args.session_id;
 
         let model = Network {
             heartbeat,
             session_id,
+            join_args: join_args.clone(),
             event_loop: None,
             ws_proxy_tx,
             #[cfg(test)]
@@ -187,7 +192,7 @@ impl Network {
         };
 
         model.start_write_to_pty_events_listener(write_to_pty_events_rx, ctx);
-        model.start_websocket(session_id, ws_proxy_rx, ctx);
+        model.start_websocket(join_args, ws_proxy_rx, ctx);
         ctx.spawn_stream_local(
             selection_throttled_rx,
             |network, selection, _ctx| {
@@ -227,6 +232,7 @@ impl Network {
         let model = Network {
             heartbeat,
             session_id,
+            join_args: session_id.into(),
             event_loop: None,
             ws_proxy_tx,
             ws_proxy_rx,
@@ -295,21 +301,25 @@ impl Network {
     ) -> anyhow::Result<UserID> {
         let user_id = UserID {
             anonymous_id: auth_state.anonymous_id(),
-            access_token: auth_client
-                .get_or_refresh_access_token()
-                .await
-                .ok()
-                .and_then(|token| token.bearer_token()),
+            access_token: if crate::server::server_api::no_cloud_mode_enabled() {
+                None
+            } else {
+                auth_client
+                    .get_or_refresh_access_token()
+                    .await
+                    .ok()
+                    .and_then(|token| token.bearer_token())
+            },
         };
         anyhow::Ok(user_id)
     }
 
     async fn connect_websocket_and_get_user_id(
-        session_id: SessionId,
+        join_args: SharedSessionJoinArgs,
         auth_client: Arc<dyn AuthClient>,
         auth_state: Arc<AuthState>,
     ) -> anyhow::Result<((impl Sink, impl Stream), UserID)> {
-        let Some(join_endpoint) = connect_endpoint(format!("/sessions/join/{session_id}")) else {
+        let Some(join_endpoint) = connect_endpoint(join_args.join_route()) else {
             bail!("This channel does not support session-sharing.");
         };
         let user_id = Self::get_user_id(auth_client, &auth_state).await?;
@@ -379,7 +389,7 @@ impl Network {
 
     fn start_websocket(
         &self,
-        session_id: SessionId,
+        join_args: SharedSessionJoinArgs,
         ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -387,7 +397,7 @@ impl Network {
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         // Open a websocket to the server to join the session.
         ctx.spawn(
-            Self::connect_websocket_and_get_user_id(session_id, auth_client, auth_state.clone()),
+            Self::connect_websocket_and_get_user_id(join_args, auth_client, auth_state.clone()),
             |network, conn, ctx| match conn {
                 Ok(((sink, stream), user_id)) => {
                     let initialize_message = UpstreamMessage::Initialize(InitPayload {
@@ -432,13 +442,13 @@ impl Network {
             log::error!("Cannot reconnect to server as viewer when event loop does not exist");
             return;
         };
-        let session_id = self.session_id;
+        let join_args = self.join_args.clone();
         let auth_client = ServerApiProvider::as_ref(ctx).get_auth_client();
         let auth_state = AuthStateProvider::as_ref(ctx).get().clone();
         let abort_handle = ctx.spawn_with_retry_on_error(
             move || {
                 log::info!("Attempting to reconnect to session sharing server as viewer");
-                Self::connect_websocket_and_get_user_id(session_id, auth_client.clone(), auth_state.clone())
+                Self::connect_websocket_and_get_user_id(join_args.clone(), auth_client.clone(), auth_state.clone())
             },
             RECONNECT_RETRY_STRATEGY,
             move |network, conn, ctx| match conn {
@@ -987,6 +997,10 @@ impl Network {
 
     pub fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    pub fn join_args(&self) -> SharedSessionJoinArgs {
+        self.join_args.clone()
     }
 }
 

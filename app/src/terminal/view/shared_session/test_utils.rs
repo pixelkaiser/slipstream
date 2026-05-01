@@ -32,7 +32,7 @@ pub fn terminal_view_for_viewer(app: &mut App) -> ViewHandle<TerminalView> {
     let (_, pane_group) = app.add_window(WindowStyle::NotStealFocus, |ctx| {
         let server_api = ServerApiProvider::as_ref(ctx).get();
         PaneGroup::new_for_shared_session_viewer(
-            session_id,
+            session_id.into(),
             tips_completed,
             user_default_shell_unsupported_banner_model_handle,
             server_api,
@@ -56,6 +56,7 @@ pub fn terminal_view_for_viewer(app: &mut App) -> ViewHandle<TerminalView> {
             ReplicaId::random(),
             Box::new(ParticipantList::default()),
             SessionId::new(),
+            None,
             SessionSourceType::default(),
             ctx,
         );
