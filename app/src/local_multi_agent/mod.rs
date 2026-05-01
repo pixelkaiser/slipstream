@@ -1,6 +1,12 @@
 #![cfg(not(target_family = "wasm"))]
 
-use std::{collections::BTreeMap, net::TcpListener, path::PathBuf, sync::LazyLock, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::TcpListener,
+    path::{Path, PathBuf},
+    sync::LazyLock,
+    time::Duration,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_process::{Child, Stdio};
@@ -13,6 +19,7 @@ use warp_core::user_preferences::GetUserPreferences;
 use warpui::{r#async::Timer, AppContext, Entity, ModelContext, SingletonEntity};
 
 use crate::{
+    ai::llms::LLMPreferences,
     server::server_api::{no_cloud_mode_enabled, LOCAL_NO_CLOUD_SERVER_ROOT_URL},
     ChannelState,
 };
@@ -24,6 +31,11 @@ const CONFIG_SCHEMA_JSON: &str =
     include_str!("../../../tools/local-multi-agent/config-schema.json");
 const RESTART_DEBOUNCE: Duration = Duration::from_millis(500);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
+const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const SERVICE_DEPENDENCY_CHECK_JS: &str = "require('better-sqlite3');";
+
+pub const LOCAL_MODEL_ALIAS_IDS: [&str; 4] =
+    ["auto", "auto-efficient", "auto-coding", "auto-reasoning"];
 
 static LOCAL_ROOT_URL: LazyLock<parking_lot::RwLock<Option<Url>>> =
     LazyLock::new(|| parking_lot::RwLock::new(None));
@@ -39,6 +51,8 @@ struct LocalMultiAgentConfigSchemaDefaults {
     host: String,
     #[serde(rename = "PORT")]
     port: u16,
+    #[serde(rename = "OPENAI_BASE_URL")]
+    openai_base_url: String,
     #[serde(rename = "OPENAI_MODEL")]
     openai_model: String,
     #[serde(rename = "LOCAL_MODEL_ALIASES")]
@@ -71,6 +85,7 @@ fn config_schema_defaults() -> LocalMultiAgentConfigSchemaDefaults {
 pub struct LocalMultiAgentConfig {
     pub host: String,
     pub port: u16,
+    pub openai_base_url: Option<String>,
     pub openai_model: Option<String>,
     pub local_model_aliases: String,
     pub local_model_list: String,
@@ -89,6 +104,7 @@ impl Default for LocalMultiAgentConfig {
         Self {
             host: defaults.host,
             port: defaults.port,
+            openai_base_url: non_empty(defaults.openai_base_url),
             openai_model: non_empty(defaults.openai_model),
             local_model_aliases: defaults.local_model_aliases,
             local_model_list: defaults.local_model_list,
@@ -125,6 +141,9 @@ impl LocalMultiAgentConfig {
         ) {
             return Err(LocalMultiAgentConfigError::InvalidLogLevel);
         }
+        if let Some(base_url) = self.openai_base_url.as_deref().and_then(non_empty_str) {
+            validate_absolute_http_url(base_url)?;
+        }
         if !self.local_model_aliases.trim().is_empty() {
             let value: serde_json::Value = serde_json::from_str(&self.local_model_aliases)
                 .map_err(|source| LocalMultiAgentConfigError::InvalidModelAliases { source })?;
@@ -139,6 +158,92 @@ impl LocalMultiAgentConfig {
         Ok(())
     }
 
+    pub fn provider_base_url(&self) -> &str {
+        self.openai_base_url
+            .as_deref()
+            .and_then(non_empty_str)
+            .unwrap_or(DEFAULT_OPENAI_BASE_URL)
+    }
+
+    pub fn model_aliases(&self) -> Result<BTreeMap<String, String>, LocalMultiAgentConfigError> {
+        parse_model_aliases(&self.local_model_aliases)
+    }
+
+    pub fn set_model_alias(
+        &mut self,
+        alias: &str,
+        model: &str,
+    ) -> Result<(), LocalMultiAgentConfigError> {
+        let mut aliases = self.model_aliases()?;
+        aliases.insert(alias.to_string(), model.to_string());
+        self.local_model_aliases = serde_json::to_string(&aliases).unwrap_or_default();
+        Ok(())
+    }
+
+    fn apply_discovered_models(
+        &mut self,
+        models: &[String],
+    ) -> Result<bool, LocalMultiAgentConfigError> {
+        let Some(first_model) = models.first() else {
+            return Ok(false);
+        };
+
+        let mut changed = false;
+        if self
+            .openai_model
+            .as_deref()
+            .is_none_or(|model| !models.iter().any(|candidate| candidate == model))
+        {
+            self.openai_model = Some(first_model.clone());
+            changed = true;
+        }
+
+        let model_list = models.join(",");
+        if self.local_model_list != model_list {
+            self.local_model_list = model_list;
+            changed = true;
+        }
+
+        let mut aliases = self.model_aliases()?;
+        for alias in LOCAL_MODEL_ALIAS_IDS {
+            let alias_missing_or_invalid = aliases
+                .get(alias)
+                .is_none_or(|model| !models.iter().any(|candidate| candidate == model));
+            if alias_missing_or_invalid {
+                aliases.insert(alias.to_string(), first_model.clone());
+                changed = true;
+            }
+        }
+        if changed {
+            self.local_model_aliases = serde_json::to_string(&aliases).unwrap_or_default();
+        }
+
+        Ok(changed)
+    }
+
+    pub fn model_choices(&self, discovered_models: &[String]) -> Vec<String> {
+        let mut seen = BTreeSet::new();
+        let mut choices = Vec::new();
+        for model in discovered_models
+            .iter()
+            .cloned()
+            .chain(parse_model_list_ids(&self.local_model_list))
+            .chain(self.openai_model.clone())
+            .chain(
+                self.model_aliases()
+                    .unwrap_or_default()
+                    .into_values()
+                    .collect::<Vec<_>>(),
+            )
+        {
+            let model = model.trim().to_string();
+            if !model.is_empty() && seen.insert(model.clone()) {
+                choices.push(model);
+            }
+        }
+        choices
+    }
+
     pub fn config_hash(&self) -> String {
         let json = serde_json::to_vec(self).unwrap_or_default();
         let mut hasher = Sha256::new();
@@ -146,11 +251,7 @@ impl LocalMultiAgentConfig {
         hex::encode(&hasher.finalize()[..8])
     }
 
-    pub fn env(
-        &self,
-        openai_api_key: Option<&str>,
-        openai_base_url: Option<&str>,
-    ) -> BTreeMap<String, String> {
+    pub fn env(&self, openai_api_key: Option<&str>) -> BTreeMap<String, String> {
         let mut env = BTreeMap::new();
         env.insert("HOST".to_string(), self.host.trim().to_string());
         env.insert("PORT".to_string(), self.port.to_string());
@@ -202,7 +303,7 @@ impl LocalMultiAgentConfig {
         if let Some(value) = openai_api_key.and_then(non_empty_str) {
             env.insert("OPENAI_API_KEY".to_string(), value.to_string());
         }
-        if let Some(value) = openai_base_url.and_then(non_empty_str) {
+        if let Some(value) = self.openai_base_url.as_deref().and_then(non_empty_str) {
             env.insert("OPENAI_BASE_URL".to_string(), value.to_string());
         }
         env
@@ -219,6 +320,8 @@ pub enum LocalMultiAgentConfigError {
     InvalidMaxHistoryMessages,
     #[error("Log level must be one of error, warn, info, or debug.")]
     InvalidLogLevel,
+    #[error("OpenAI Base URL must be an absolute http(s) URL.")]
+    InvalidOpenAiBaseUrl,
     #[error("Model aliases must be valid JSON: {source}")]
     InvalidModelAliases { source: serde_json::Error },
     #[error("Model aliases must be a JSON object.")]
@@ -246,6 +349,14 @@ pub enum LocalMultiAgentStatus {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalMultiAgentTestStatus {
+    NotRun,
+    Testing,
+    Passed { model_count: usize },
+    Failed { message: String },
+}
+
 impl LocalMultiAgentStatus {
     pub fn label(&self) -> String {
         match self {
@@ -262,6 +373,7 @@ impl LocalMultiAgentStatus {
 pub enum LocalMultiAgentManagerEvent {
     ConfigChanged,
     StatusChanged,
+    TestStatusChanged,
 }
 
 #[derive(Debug, Deserialize)]
@@ -270,18 +382,24 @@ struct LocalMultiAgentHealthResponse {
     version: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ProviderModelsResponse {
+    data: Vec<serde_json::Value>,
+}
+
 pub struct LocalMultiAgentManager {
     config: LocalMultiAgentConfig,
     status: LocalMultiAgentStatus,
+    test_status: LocalMultiAgentTestStatus,
+    discovered_models: Vec<String>,
     child: Option<Child>,
     restart_debounce: Option<AbortHandle>,
     openai_api_key: Option<String>,
-    openai_base_url: Option<String>,
 }
 
 impl LocalMultiAgentManager {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let config = load_config(ctx);
+        let config = load_config_with_legacy_migration(ctx);
         let status = if no_cloud_mode_enabled() {
             LocalMultiAgentStatus::Starting
         } else {
@@ -297,10 +415,11 @@ impl LocalMultiAgentManager {
         let mut manager = Self {
             config,
             status,
+            test_status: LocalMultiAgentTestStatus::NotRun,
+            discovered_models: Vec::new(),
             child: None,
             restart_debounce: None,
             openai_api_key: None,
-            openai_base_url: None,
         };
         if no_cloud_mode_enabled() {
             manager.schedule_restart(ctx);
@@ -316,6 +435,14 @@ impl LocalMultiAgentManager {
         &self.status
     }
 
+    pub fn test_status(&self) -> &LocalMultiAgentTestStatus {
+        &self.test_status
+    }
+
+    pub fn discovered_models(&self) -> &[String] {
+        &self.discovered_models
+    }
+
     pub fn root_url(&self) -> Option<Url> {
         self.config.root_url().ok()
     }
@@ -327,14 +454,12 @@ impl LocalMultiAgentManager {
     pub fn update_provider_config(
         &mut self,
         openai_api_key: Option<String>,
-        openai_base_url: Option<String>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.openai_api_key == openai_api_key && self.openai_base_url == openai_base_url {
+        if self.openai_api_key == openai_api_key {
             return;
         }
         self.openai_api_key = openai_api_key;
-        self.openai_base_url = openai_base_url;
         self.schedule_restart(ctx);
     }
 
@@ -349,6 +474,8 @@ impl LocalMultiAgentManager {
         }
         self.config = config;
         save_config(&self.config, ctx);
+        self.discovered_models.clear();
+        self.test_status = LocalMultiAgentTestStatus::NotRun;
         if let Ok(root_url) = self.config.root_url() {
             set_global_root_url(Some(root_url.clone()));
             if no_cloud_mode_enabled() {
@@ -356,12 +483,23 @@ impl LocalMultiAgentManager {
             }
         }
         ctx.emit(LocalMultiAgentManagerEvent::ConfigChanged);
+        ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
         self.schedule_restart(ctx);
         Ok(())
     }
 
     pub fn restart_with_config(&mut self, ctx: &mut ModelContext<Self>) {
         self.schedule_restart(ctx);
+    }
+
+    pub fn shutdown(&mut self, ctx: &mut ModelContext<Self>) {
+        if let Some(handle) = self.restart_debounce.take() {
+            handle.abort();
+        }
+        self.stop_child();
+        self.status = LocalMultiAgentStatus::Disabled;
+        set_global_root_url(None);
+        ctx.emit(LocalMultiAgentManagerEvent::StatusChanged);
     }
 
     pub fn health_check(&mut self, ctx: &mut ModelContext<Self>) {
@@ -385,6 +523,82 @@ impl LocalMultiAgentManager {
                     }
                 }
                 ctx.emit(LocalMultiAgentManagerEvent::StatusChanged);
+            },
+        );
+    }
+
+    pub fn test_backend(&mut self, ctx: &mut ModelContext<Self>) {
+        if let Err(error) = self.config.validate() {
+            self.test_status = LocalMultiAgentTestStatus::Failed {
+                message: error.to_string(),
+            };
+            ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
+            return;
+        }
+
+        let Some(root_url) = self.root_url() else {
+            self.test_status = LocalMultiAgentTestStatus::Failed {
+                message: "Invalid local service URL.".to_string(),
+            };
+            ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
+            return;
+        };
+
+        let provider_base_url = self.config.provider_base_url().to_string();
+        let openai_api_key = self.openai_api_key.clone();
+        let service_config = self.config.clone();
+        let service_openai_api_key = openai_api_key.clone();
+        self.test_status = LocalMultiAgentTestStatus::Testing;
+        ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
+
+        let _ = ctx.spawn(
+            async move {
+                let start_result = match health_check(root_url.clone()).await {
+                    Ok(()) => None,
+                    Err(error) => {
+                        log::info!(
+                            "Local multi-agent service was not healthy during test; attempting restart: {error:#}"
+                        );
+                        Some(start_service(service_config, service_openai_api_key).await?)
+                    }
+                };
+                let models =
+                    fetch_provider_models(&provider_base_url, openai_api_key.as_deref()).await?;
+                Ok::<_, anyhow::Error>((start_result, models))
+            },
+            |manager, result, ctx| {
+                match result {
+                    Ok((start_result, models)) => {
+                        if let Some(start_result) = start_result {
+                            manager.apply_start_result(start_result, ctx);
+                            ctx.emit(LocalMultiAgentManagerEvent::StatusChanged);
+                        }
+                        let model_count = models.len();
+                        manager.discovered_models = models.clone();
+                        match manager.config.apply_discovered_models(&models) {
+                            Ok(true) => {
+                                save_config(&manager.config, ctx);
+                                ctx.emit(LocalMultiAgentManagerEvent::ConfigChanged);
+                                manager.schedule_restart(ctx);
+                            }
+                            Ok(false) => {}
+                            Err(error) => {
+                                manager.test_status = LocalMultiAgentTestStatus::Failed {
+                                    message: error.to_string(),
+                                };
+                                ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
+                                return;
+                            }
+                        }
+                        manager.test_status = LocalMultiAgentTestStatus::Passed { model_count };
+                    }
+                    Err(error) => {
+                        manager.test_status = LocalMultiAgentTestStatus::Failed {
+                            message: format!("{error:#}"),
+                        };
+                    }
+                }
+                ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
             },
         );
     }
@@ -427,34 +641,47 @@ impl LocalMultiAgentManager {
         self.stop_child();
         let config = self.config.clone();
         let openai_api_key = self.openai_api_key.clone();
-        let openai_base_url = self.openai_base_url.clone();
         self.status = LocalMultiAgentStatus::Starting;
         ctx.emit(LocalMultiAgentManagerEvent::StatusChanged);
 
         let _ = ctx.spawn(
-            async move { start_service(config, openai_api_key, openai_base_url).await },
+            async move { start_service(config, openai_api_key).await },
             |manager, result, ctx| {
                 match result {
-                    Ok(StartServiceResult {
-                        child,
-                        root_url,
-                        pid,
-                        config_hash,
-                    }) => {
-                        manager.child = child;
-                        set_global_root_url(Some(root_url.clone()));
-                        let _ = ChannelState::override_server_root_url(root_url.to_string());
-                        manager.status = LocalMultiAgentStatus::Running {
-                            root_url,
-                            pid,
-                            config_hash,
-                        };
+                    Ok(start_result) => {
+                        manager.apply_start_result(start_result, ctx);
                     }
-                    Err(error) => manager.set_failed(error.to_string(), ctx),
+                    Err(error) => {
+                        log::warn!("Failed to start local multi-agent service: {error:#}");
+                        manager.set_failed(error.to_string(), ctx)
+                    }
                 }
                 ctx.emit(LocalMultiAgentManagerEvent::StatusChanged);
             },
         );
+    }
+
+    fn apply_start_result(&mut self, result: StartServiceResult, ctx: &mut ModelContext<Self>) {
+        let StartServiceResult {
+            child,
+            root_url,
+            pid,
+            config_hash,
+        } = result;
+        if child.is_some() {
+            self.stop_child();
+            self.child = child;
+        }
+        set_global_root_url(Some(root_url.clone()));
+        let _ = ChannelState::override_server_root_url(root_url.to_string());
+        self.status = LocalMultiAgentStatus::Running {
+            root_url,
+            pid,
+            config_hash,
+        };
+        LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+            prefs.refresh_available_models(ctx);
+        });
     }
 
     fn stop_child(&mut self) {
@@ -492,7 +719,6 @@ struct StartServiceResult {
 async fn start_service(
     config: LocalMultiAgentConfig,
     openai_api_key: Option<String>,
-    openai_base_url: Option<String>,
 ) -> Result<StartServiceResult> {
     config.validate()?;
     let root_url = config.root_url()?;
@@ -520,17 +746,10 @@ async fn start_service(
         );
     }
 
+    let service_env = config.env(openai_api_key.as_deref());
+    prepare_service_paths(&service_env)?;
     let path_env = std::env::var_os("PATH").and_then(|path| path.into_string().ok());
-    let node_binary = match node_runtime::find_working_node_binary(path_env.as_deref()).await {
-        Some(path) => path,
-        None => {
-            let client = http_client::Client::new();
-            node_runtime::install_npm(&client)
-                .await
-                .context("Failed to install bundled Node.js runtime")?;
-            node_runtime::node_binary_path().context("Failed to locate bundled Node.js runtime")?
-        }
-    };
+    let node_binary = select_service_node_binary(path_env.as_deref(), &service_dir).await?;
 
     let mut command = Command::new(&node_binary);
     command
@@ -543,7 +762,7 @@ async fn start_service(
     if let Some(path) = path_env {
         command.env("PATH", path);
     }
-    for (key, value) in config.env(openai_api_key.as_deref(), openai_base_url.as_deref()) {
+    for (key, value) in service_env {
         command.env(key, value);
     }
     command.env("LOCAL_CONFIG_HASH", &config_hash);
@@ -561,6 +780,112 @@ async fn start_service(
         pid,
         config_hash,
     })
+}
+
+async fn select_service_node_binary(path_env: Option<&str>, service_dir: &Path) -> Result<PathBuf> {
+    let mut failures = Vec::new();
+
+    if let Ok(custom_node) = node_runtime::node_binary_path() {
+        if custom_node.is_file() {
+            match validate_service_node_dependencies(&custom_node, None, service_dir).await {
+                Ok(()) => {
+                    log::info!(
+                        "Using custom node installation at {} for local multi-agent service",
+                        custom_node.display()
+                    );
+                    return Ok(custom_node);
+                }
+                Err(error) => {
+                    log::warn!(
+                        "Custom node installation at {} is not compatible with local multi-agent service bundle: {error:#}",
+                        custom_node.display()
+                    );
+                    failures.push(format!("custom node {}: {error:#}", custom_node.display()));
+                }
+            }
+        }
+    }
+
+    if let Some(path_env) = path_env {
+        match node_runtime::detect_system_node(path_env).await {
+            Ok(()) => {
+                let system_node = PathBuf::from("node");
+                match validate_service_node_dependencies(&system_node, Some(path_env), service_dir)
+                    .await
+                {
+                    Ok(()) => {
+                        log::info!("Using system node for local multi-agent service");
+                        return Ok(system_node);
+                    }
+                    Err(error) => {
+                        log::warn!(
+                            "System node is not compatible with local multi-agent service bundle: {error:#}"
+                        );
+                        failures.push(format!("system node: {error:#}"));
+                    }
+                }
+            }
+            Err(error) => {
+                failures.push(format!("system node: {error:#}"));
+            }
+        }
+    }
+
+    let client = http_client::Client::new();
+    node_runtime::install_npm(&client)
+        .await
+        .context("Failed to install bundled Node.js runtime")?;
+    let custom_node = node_runtime::node_binary_path()
+        .context("Failed to locate bundled Node.js runtime after install")?;
+    validate_service_node_dependencies(&custom_node, None, service_dir)
+        .await
+        .with_context(|| {
+            if failures.is_empty() {
+                format!(
+                    "Bundled Node.js runtime at {} cannot load local multi-agent service dependencies",
+                    custom_node.display()
+                )
+            } else {
+                format!(
+                    "No compatible Node.js runtime found for local multi-agent service. Previous attempts: {}",
+                    failures.join("; ")
+                )
+            }
+        })?;
+    Ok(custom_node)
+}
+
+async fn validate_service_node_dependencies(
+    node_binary: &Path,
+    path_env: Option<&str>,
+    service_dir: &Path,
+) -> Result<()> {
+    let mut command = Command::new(node_binary);
+    command
+        .arg("-e")
+        .arg(SERVICE_DEPENDENCY_CHECK_JS)
+        .current_dir(service_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    if let Some(path_env) = path_env {
+        command.env("PATH", path_env);
+    }
+
+    let output = command
+        .output()
+        .await
+        .with_context(|| format!("Failed to run {}", node_binary.display()))?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!(
+        "{} failed to load local multi-agent service dependencies: {}",
+        node_binary.display(),
+        stderr.trim()
+    )
 }
 
 async fn wait_until_healthy(root_url: Url) -> Result<()> {
@@ -604,6 +929,89 @@ async fn health_check(root_url: Url) -> Result<()> {
     } else {
         bail!("health response did not identify a Warp local service")
     }
+}
+
+async fn fetch_provider_models(base_url: &str, api_key: Option<&str>) -> Result<Vec<String>> {
+    validate_absolute_http_url(base_url)?;
+    let models_url = format!("{}/models", base_url.trim_end_matches('/'));
+    let client = reqwest::Client::new();
+    let mut request = client
+        .get(models_url)
+        .timeout(HEALTH_TIMEOUT)
+        .header(reqwest::header::ACCEPT, "application/json");
+    if let Some(api_key) = api_key.and_then(non_empty_str) {
+        request = request.bearer_auth(api_key);
+    }
+
+    let response = request
+        .send()
+        .await
+        .context("provider models request failed")?;
+    if !response.status().is_success() {
+        bail!(
+            "provider models request failed with HTTP {}",
+            response.status()
+        );
+    }
+
+    let payload = response
+        .json::<ProviderModelsResponse>()
+        .await
+        .context("provider models response was not OpenAI-compatible JSON")?;
+    let mut seen = BTreeSet::new();
+    let mut models = Vec::new();
+    for item in payload.data {
+        let id = match item {
+            serde_json::Value::String(id) => id,
+            serde_json::Value::Object(model) => model
+                .get("id")
+                .and_then(|id| id.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            _ => String::new(),
+        };
+        let id = id.trim().to_string();
+        if !id.is_empty() && seen.insert(id.clone()) {
+            models.push(id);
+        }
+    }
+
+    if models.is_empty() {
+        bail!("provider models response had no usable model IDs");
+    }
+
+    Ok(models)
+}
+
+fn prepare_service_paths(env: &BTreeMap<String, String>) -> Result<()> {
+    if let Some(path) = env
+        .get("LOCAL_GRAPHQL_DB_PATH")
+        .and_then(|path| non_empty_str(path))
+    {
+        create_parent_dir(path)
+            .with_context(|| format!("Failed to prepare local GraphQL DB path at {path}"))?;
+    }
+
+    if let Some(path) = env
+        .get("LOCAL_SERVICE_LOG_PATH")
+        .and_then(|path| non_empty_str(path))
+        .filter(|path| !matches!(path.to_ascii_lowercase().as_str(), "false" | "off" | "0"))
+    {
+        create_parent_dir(path)
+            .with_context(|| format!("Failed to prepare local service log path at {path}"))?;
+    }
+
+    Ok(())
+}
+
+fn create_parent_dir(path: &str) -> Result<()> {
+    if let Some(parent) = Path::new(path)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(())
 }
 
 fn ensure_port_available(config: &LocalMultiAgentConfig) -> Result<()> {
@@ -667,6 +1075,24 @@ fn load_config(ctx: &AppContext) -> LocalMultiAgentConfig {
     }
 }
 
+fn load_config_with_legacy_migration(ctx: &mut AppContext) -> LocalMultiAgentConfig {
+    let mut config = load_config(ctx);
+    if config.openai_base_url.is_none() {
+        let legacy_base_url = ::ai::api_keys::ApiKeyManager::as_ref(ctx)
+            .keys()
+            .openai_base_url
+            .clone();
+        if let Some(legacy_base_url) = legacy_base_url {
+            config.openai_base_url = Some(legacy_base_url);
+            save_config(&config, ctx);
+            ::ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |api_keys, ctx| {
+                api_keys.set_openai_base_url(None, ctx);
+            });
+        }
+    }
+    config
+}
+
 fn save_config(config: &LocalMultiAgentConfig, ctx: &AppContext) {
     let Ok(json) = serde_json::to_string(config) else {
         return;
@@ -687,6 +1113,67 @@ fn non_empty(value: String) -> Option<String> {
 fn non_empty_str(value: &str) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty()).then_some(value)
+}
+
+fn validate_absolute_http_url(value: &str) -> Result<(), LocalMultiAgentConfigError> {
+    let Ok(parsed) = Url::parse(value.trim().trim_end_matches('/')) else {
+        return Err(LocalMultiAgentConfigError::InvalidOpenAiBaseUrl);
+    };
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(LocalMultiAgentConfigError::InvalidOpenAiBaseUrl);
+    }
+    Ok(())
+}
+
+fn parse_model_aliases(
+    value: &str,
+) -> Result<BTreeMap<String, String>, LocalMultiAgentConfigError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let parsed: serde_json::Value = serde_json::from_str(value)
+        .map_err(|source| LocalMultiAgentConfigError::InvalidModelAliases { source })?;
+    let Some(object) = parsed.as_object() else {
+        return Err(LocalMultiAgentConfigError::ModelAliasesMustBeObject);
+    };
+    Ok(object
+        .iter()
+        .filter_map(|(key, value)| {
+            value
+                .as_str()
+                .and_then(non_empty_str)
+                .map(|value| (key.clone(), value.to_string()))
+        })
+        .collect())
+}
+
+fn parse_model_list_ids(value: &str) -> Vec<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Vec::new();
+    }
+    if value.starts_with('[') {
+        return serde_json::from_str::<serde_json::Value>(value)
+            .ok()
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|value| match value {
+                serde_json::Value::String(id) => Some(id),
+                serde_json::Value::Object(model) => model
+                    .get("id")
+                    .and_then(|id| id.as_str())
+                    .map(str::to_string),
+                _ => None,
+            })
+            .filter_map(|id| non_empty_str(&id).map(str::to_string))
+            .collect();
+    }
+    value
+        .split(',')
+        .filter_map(|id| non_empty_str(id).map(str::to_string))
+        .collect()
 }
 
 fn validate_context_tokens(value: &str) -> Result<(), LocalMultiAgentConfigError> {
@@ -717,6 +1204,10 @@ mod tests {
         let config = LocalMultiAgentConfig::default();
         assert_eq!(config.host, schema.host);
         assert_eq!(config.port, schema.port);
+        assert_eq!(
+            config.openai_base_url.as_deref(),
+            non_empty_str(&schema.openai_base_url)
+        );
         assert_eq!(config.local_model_aliases, schema.local_model_aliases);
         assert_eq!(config.local_model_list, schema.local_model_list);
         assert_eq!(config.local_enable_tools, schema.local_enable_tools);
@@ -729,8 +1220,11 @@ mod tests {
 
     #[test]
     fn config_to_env_uses_defaults_for_paths_and_provider_settings() {
-        let config = LocalMultiAgentConfig::default();
-        let env = config.env(Some("sk-test"), Some("http://127.0.0.1:11434/v1"));
+        let config = LocalMultiAgentConfig {
+            openai_base_url: Some("http://127.0.0.1:11434/v1".to_string()),
+            ..Default::default()
+        };
+        let env = config.env(Some("sk-test"));
         assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
         assert_eq!(env.get("PORT").map(String::as_str), Some("8787"));
         assert_eq!(
@@ -768,5 +1262,59 @@ mod tests {
             config.validate(),
             Err(LocalMultiAgentConfigError::InvalidContextTokensJson { .. })
         ));
+    }
+
+    #[test]
+    fn validation_rejects_bad_openai_base_url() {
+        let config = LocalMultiAgentConfig {
+            openai_base_url: Some("localhost:11434/v1".to_string()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            config.validate(),
+            Err(LocalMultiAgentConfigError::InvalidOpenAiBaseUrl)
+        ));
+    }
+
+    #[test]
+    fn discovered_models_update_default_aliases_and_model_list() {
+        let mut config = LocalMultiAgentConfig {
+            openai_model: Some("missing".to_string()),
+            local_model_aliases: r#"{"custom":"kept"}"#.to_string(),
+            local_model_list: "old".to_string(),
+            ..Default::default()
+        };
+        let models = vec!["model-a".to_string(), "model-b".to_string()];
+
+        assert!(config.apply_discovered_models(&models).unwrap());
+        assert_eq!(config.openai_model.as_deref(), Some("model-a"));
+        assert_eq!(config.local_model_list, "model-a,model-b");
+
+        let aliases = config.model_aliases().unwrap();
+        assert_eq!(aliases.get("custom").map(String::as_str), Some("kept"));
+        for alias in LOCAL_MODEL_ALIAS_IDS {
+            assert_eq!(aliases.get(alias).map(String::as_str), Some("model-a"));
+        }
+    }
+
+    #[test]
+    fn prepare_service_paths_creates_parent_directories() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("data/local-graphql.sqlite");
+        let log_path = temp_dir.path().join("logs/local-service.log");
+        let mut env = BTreeMap::new();
+        env.insert(
+            "LOCAL_GRAPHQL_DB_PATH".to_string(),
+            db_path.to_string_lossy().into_owned(),
+        );
+        env.insert(
+            "LOCAL_SERVICE_LOG_PATH".to_string(),
+            log_path.to_string_lossy().into_owned(),
+        );
+
+        prepare_service_paths(&env).unwrap();
+
+        assert!(db_path.parent().unwrap().is_dir());
+        assert!(log_path.parent().unwrap().is_dir());
     }
 }
