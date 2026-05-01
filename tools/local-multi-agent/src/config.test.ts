@@ -20,6 +20,7 @@ test("Warp config schema defaults match sidecar env defaults", () => {
   assert.equal(schema.version, 1);
   assert.equal(schema.defaults.HOST, "127.0.0.1");
   assert.equal(schema.defaults.PORT, 8787);
+  assert.equal(schema.defaults.OPENAI_BASE_URL, "");
   assert.equal(schema.defaults.OPENAI_MODEL, "");
   assert.equal(schema.defaults.LOCAL_MODEL_LIST, defaultModel);
   assert.equal(schema.defaults.LOCAL_ENABLE_TOOLS, true);

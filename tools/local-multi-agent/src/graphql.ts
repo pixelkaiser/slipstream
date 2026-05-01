@@ -635,8 +635,12 @@ function localModelInfo(model: LocalModelConfig): unknown {
 async function localAvailableLlms(): Promise<unknown> {
   const models = await fetchProviderModels();
   const choices = models.map(localModelInfo);
+  const configuredDefault = nonEmpty(process.env.OPENAI_MODEL);
+  const defaultId = configuredDefault && models.some((model) => model.id === configuredDefault)
+    ? configuredDefault
+    : models[0]?.id ?? defaultModel;
   return {
-    defaultId: models[0]?.id ?? defaultModel,
+    defaultId,
     choices,
     preferredCodexModelId: null,
   };
