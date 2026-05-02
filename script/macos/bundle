@@ -759,6 +759,13 @@ if [[ $SELFSIGN = true ]]; then
   fi
 elif [[ $CODESIGN = true ]]; then
   if [[ "$ARTIFACT" == app ]]; then
+    LOCAL_MULTI_AGENT_BINARY="$BUNDLED_RESOURCES_DIR/bundled/local-multi-agent/warp-local-multi-agent"
+    if [[ -f "$LOCAL_MULTI_AGENT_BINARY" ]]; then
+      echo "Codesigning bundled local multi-agent service at $LOCAL_MULTI_AGENT_BINARY..."
+      codesign -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$LOCAL_MULTI_AGENT_BINARY"
+      codesign --verify --strict --verbose=2 "$LOCAL_MULTI_AGENT_BINARY"
+    fi
+
     echo "Codesigning $BUNDLE_DIR/$WARP_APP_NAME.app..."
     # Use --deep so we sign bundled frameworks as well
     codesign --deep -f -o runtime --timestamp -s "$APPLE_TEAM_ID" "$BUNDLE_DIR/$WARP_APP_NAME.app" --entitlements "$ENTITLEMENTS_PLIST"
