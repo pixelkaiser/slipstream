@@ -1,9 +1,12 @@
 LOCAL_AGENT_PACKAGE := local_multi_agent_service
 LOCAL_AGENT_BIN := warp-local-multi-agent
+RELEASE_REMOTE ?= origin
+REF ?= HEAD
+DRY_RUN ?= 0
 
 .DEFAULT_GOAL := help
 
-.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test warp-local-signing-identity warp-signing-status warp-grant-keychain-access warp-trash-local-settings warp-check warp-build warp-build-optimized warp-build-oss
+.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test release-macos warp-local-signing-identity warp-signing-status warp-grant-keychain-access warp-trash-local-settings warp-check warp-build warp-build-optimized warp-build-oss
 
 help:
 	@echo "Slipstream local development targets:"
@@ -12,6 +15,7 @@ help:
 	@echo "  make local-agent-build    Build the local multi-agent service"
 	@echo "  make local-agent-start    Run the built local multi-agent service"
 	@echo "  make local-agent-test     Build and test the local multi-agent service"
+	@echo "  make release-macos TAG=v0.2.0 REF=<commit-ish>  Tag a commit and trigger the macOS release workflow"
 	@echo "  make warp-local-signing-identity  Create a stable local macOS signing identity"
 	@echo "  make warp-signing-status  Show available macOS code-signing identities"
 	@echo "  make warp-grant-keychain-access  Grant existing Slipstream keychain items to the signed app Team ID"
@@ -34,6 +38,48 @@ local-agent-start: local-agent-build
 
 local-agent-test:
 	cargo test -p $(LOCAL_AGENT_PACKAGE)
+
+release-macos:
+	@bash -eu -o pipefail -c '\
+		tag="$$1"; \
+		ref="$$2"; \
+		remote="$$3"; \
+		dry_run="$$4"; \
+		if [[ -z "$$tag" ]]; then \
+			echo "Usage: make release-macos TAG=v0.2.0 REF=<commit-ish>"; \
+			exit 2; \
+		fi; \
+		if ! [[ "$$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$$ ]]; then \
+			echo "Release tag must match vMAJOR.MINOR.PATCH, got: $$tag"; \
+			exit 2; \
+		fi; \
+		git fetch "$$remote" --tags >/dev/null; \
+		if ! commit="$$(git rev-parse --verify "$$ref^{commit}" 2>/dev/null)"; then \
+			echo "Could not resolve REF to a commit: $$ref"; \
+			exit 2; \
+		fi; \
+		if git show-ref --verify --quiet "refs/tags/$$tag"; then \
+			echo "Tag already exists locally or was fetched from $$remote: $$tag"; \
+			exit 2; \
+		fi; \
+		if git ls-remote --exit-code --tags "$$remote" "refs/tags/$$tag" >/dev/null 2>&1; then \
+			echo "Tag already exists on $$remote: $$tag"; \
+			exit 2; \
+		fi; \
+		subject="$$(git log -1 --format=%s "$$commit")"; \
+		echo "Release tag: $$tag"; \
+		echo "Release commit: $$commit"; \
+		echo "Commit subject: $$subject"; \
+		echo "Remote: $$remote"; \
+		if [[ "$$dry_run" == "1" || "$$dry_run" == "true" ]]; then \
+			echo "DRY_RUN=$$dry_run, not creating or pushing the tag."; \
+			exit 0; \
+		fi; \
+		git tag -a "$$tag" "$$commit" -m "Slipstream $$tag"; \
+		git push "$$remote" "refs/tags/$$tag"; \
+		echo "Triggered macOS release workflow for $$tag."; \
+		echo "Watch with: gh run list --workflow release-macos.yml --branch $$tag --limit 1"; \
+	' -- "$(TAG)" "$(REF)" "$(RELEASE_REMOTE)" "$(DRY_RUN)"
 
 warp-local-signing-identity:
 	./script/macos/create_local_codesign_identity
