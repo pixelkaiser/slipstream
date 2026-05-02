@@ -92,6 +92,31 @@ function relpath() {
   python -c "import os,sys;print(os.path.relpath(*(sys.argv[1:])))" "$@";
 }
 
+# Define a helper function that reads a top-level field from a JSON file.
+function json_field() {
+  local field="$1"
+  local path="$2"
+
+  python3 - "$field" "$path" <<'PY'
+import json
+import sys
+
+field, path = sys.argv[1], sys.argv[2]
+
+try:
+    with open(path, "r", encoding="utf-8") as file:
+        data = json.load(file)
+except Exception:
+    sys.exit(0)
+
+value = data.get(field, "")
+if value is None:
+    value = ""
+
+print(value)
+PY
+}
+
 # Defaults for command-line flags.
 UNIVERSAL_BINARY=true
 BUILD_BINARY=true
@@ -839,16 +864,38 @@ fi
 
 if [[ $CODESIGN = true ]]; then
   echo "Uploading $NOTARIZATION_ARTIFACT to Apple for notarization..."
-  xcrun notarytool submit "$NOTARIZATION_ARTIFACT" --apple-id "$WARP_NOTARIZATION_APPLE_ID" --password "$WARP_NOTARIZATION_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+  NOTARY_SUBMIT_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/notarytool-submit.XXXXXX.json")"
+  set +e
+  xcrun notarytool submit "$NOTARIZATION_ARTIFACT" \
+    --apple-id "$WARP_NOTARIZATION_APPLE_ID" \
+    --password "$WARP_NOTARIZATION_PASSWORD" \
+    --team-id "$APPLE_TEAM_ID" \
+    --wait \
+    --output-format json | tee "$NOTARY_SUBMIT_OUTPUT"
+  NOTARYTOOL_EXIT="${PIPESTATUS[0]}"
+  set -e
+
+  NOTARY_SUBMISSION_ID="$(json_field id "$NOTARY_SUBMIT_OUTPUT")"
+  NOTARY_STATUS="$(json_field status "$NOTARY_SUBMIT_OUTPUT")"
+
+  if [[ "$NOTARYTOOL_EXIT" != 0 || "$NOTARY_STATUS" != "Accepted" ]]; then
+    echo "Notarization failed with status '${NOTARY_STATUS:-unknown}'."
+    if [[ -n "$NOTARY_SUBMISSION_ID" ]]; then
+      echo "Fetching Apple notarization log for submission $NOTARY_SUBMISSION_ID..."
+      xcrun notarytool log "$NOTARY_SUBMISSION_ID" \
+        --apple-id "$WARP_NOTARIZATION_APPLE_ID" \
+        --password "$WARP_NOTARIZATION_PASSWORD" \
+        --team-id "$APPLE_TEAM_ID" \
+        --output-format json || true
+    else
+      echo "Apple notarytool did not return a submission ID."
+    fi
+    exit 1
+  fi
 
   if [[ $STAPLE_TICKET = true ]]; then
     echo "Attempting to staple the notarization ticket to $NOTARIZATION_ARTIFACT..."
     xcrun stapler staple "$NOTARIZATION_ARTIFACT"
-  fi
-
-  if [[ $? != 0 ]]; then
-    echo "Notarization failed; see above output for details."
-    exit 1
   fi
 
   # Verify the notarization results (this is format-dependent)
