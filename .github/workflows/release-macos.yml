@@ -111,27 +111,6 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Restore sccache cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: .sccache
-          key: release-macos-arm64-sccache-${{ github.job }}-${{ github.run_id }}
-          restore-keys: |
-            release-macos-arm64-sccache-${{ github.job }}-
-
-      - name: Install and enable sccache
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          brew install sccache
-          mkdir -p "$GITHUB_WORKSPACE/.sccache"
-          {
-            echo "SCCACHE_DIR=$GITHUB_WORKSPACE/.sccache"
-            echo "SCCACHE_CACHE_SIZE=5G"
-            echo "RUSTC_WRAPPER=sccache"
-          } >> "$GITHUB_ENV"
-
       - uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
@@ -170,18 +149,6 @@ jobs:
         shell: bash
         env:
           TAG: ${{ needs.release_metadata.outputs.tag }}
-
-      - name: Show sccache stats
-        if: always()
-        shell: bash
-        run: sccache --show-stats || true
-
-      - name: Save sccache cache
-        if: always()
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: .sccache
-          key: release-macos-arm64-sccache-${{ github.job }}-${{ github.run_id }}
 
       - name: Archive Apple Silicon build inputs
         shell: bash
