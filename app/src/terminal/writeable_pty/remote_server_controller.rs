@@ -199,7 +199,9 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                 self.flush_stashed_bootstrap(old_info, ctx);
             }
         }
-        let transport = SshTransport::new(socket_path, self.build_auth_context(ctx));
+        let install_options = WarpifySettings::as_ref(ctx).ssh_extension_install_options();
+        let transport =
+            SshTransport::new(socket_path, self.build_auth_context(ctx), install_options);
         self.did_install = false;
         self.remote_platform = None;
         self.preinstall_check = None;
@@ -533,7 +535,8 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         ctx: &mut ModelContext<Self>,
     ) {
         let auth_context = self.build_auth_context(ctx);
-        let transport = SshTransport::new(socket_path, auth_context.clone());
+        let install_options = WarpifySettings::as_ref(ctx).ssh_extension_install_options();
+        let transport = SshTransport::new(socket_path, auth_context.clone(), install_options);
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.connect_session(session_id, transport, auth_context, ctx);
         });

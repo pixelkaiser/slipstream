@@ -34,6 +34,8 @@ use crate::features::FeatureFlag;
 use crate::remote_server::manager::{RemoteServerManager, RemoteServerManagerEvent};
 use crate::server::telemetry::{BootstrappingInfo, TelemetryEvent};
 use crate::terminal::event::ExecutedExecutorCommandEvent;
+#[cfg(feature = "local_tty")]
+use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::ShellHost;
 use crate::terminal::ShellLaunchData;
 #[cfg(feature = "local_tty")]
@@ -188,6 +190,9 @@ impl Sessions {
                     client,
                     ..
                 } => {
+                    if !WarpifySettings::is_ssh_remote_server_enabled(ctx) {
+                        return;
+                    }
                     if let Some(session) = sessions.sessions.get(sid) {
                         let new_executor =
                             Arc::new(RemoteServerCommandExecutor::new(*sid, client.clone()));
@@ -357,7 +362,7 @@ impl Sessions {
         // RemoteServerCommandExecutor already has its client baked in, so
         // nothing else needs to be wired here.
         #[cfg(feature = "local_tty")]
-        if FeatureFlag::SshRemoteServer.is_enabled()
+        if WarpifySettings::is_ssh_remote_server_enabled(ctx)
             && matches!(
                 session_info.session_type,
                 BootstrapSessionType::WarpifiedRemote

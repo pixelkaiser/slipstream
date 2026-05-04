@@ -14865,7 +14865,7 @@ impl Workspace {
             // true for Auto SSH Warpification (mode 1) sessions where
             // `connect_session` was called at `InitShell` time.
             let has_remote_server = is_remote
-                && FeatureFlag::SshRemoteServer.is_enabled()
+                && WarpifySettings::is_ssh_remote_server_enabled(ctx)
                 && session_id.is_some_and(|sid| {
                     RemoteServerManager::as_ref(ctx).is_session_potentially_active(sid)
                 });

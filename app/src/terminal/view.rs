@@ -7194,7 +7194,7 @@ impl TerminalView {
 
         // Hide the input box during the entire remote-server setup flow.
         // The loading footer renders instead.
-        if FeatureFlag::SshRemoteServer.is_enabled() {
+        if WarpifySettings::is_ssh_remote_server_enabled(app) {
             if let Some(pending_sid) = model.pending_session_id() {
                 if self
                     .sessions
@@ -11789,7 +11789,7 @@ impl TerminalView {
     /// Returns `true` when the pending session has a connecting remote-server setup state
     /// and no failure banner is already shown for that session.
     fn show_remote_server_loading_footer(&self, model: &TerminalModel, app: &AppContext) -> bool {
-        if !FeatureFlag::SshRemoteServer.is_enabled() {
+        if !WarpifySettings::is_ssh_remote_server_enabled(app) {
             return false;
         }
         // Don't show the loading footer while the choice block is visible;

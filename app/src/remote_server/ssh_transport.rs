@@ -16,7 +16,8 @@ use remote_server::auth::RemoteServerAuthContext;
 use remote_server::client::RemoteServerClient;
 use remote_server::manager::RemoteServerExitStatus;
 use remote_server::setup::{
-    parse_uname_output, remote_server_daemon_dir, PreinstallCheckResult, RemotePlatform,
+    parse_uname_output, remote_server_daemon_dir, InstallScriptOptions, PreinstallCheckResult,
+    RemotePlatform,
 };
 use remote_server::ssh::{ssh_args, SshCommandError};
 use remote_server::transport::{Connection, Error, RemoteTransport};
@@ -31,6 +32,7 @@ use remote_server::transport::{Connection, Error, RemoteTransport};
 pub struct SshTransport {
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
+    install_options: InstallScriptOptions,
 }
 
 impl fmt::Debug for SshTransport {
@@ -42,10 +44,15 @@ impl fmt::Debug for SshTransport {
 }
 
 impl SshTransport {
-    pub fn new(socket_path: PathBuf, auth_context: Arc<RemoteServerAuthContext>) -> Self {
+    pub fn new(
+        socket_path: PathBuf,
+        auth_context: Arc<RemoteServerAuthContext>,
+        install_options: InstallScriptOptions,
+    ) -> Self {
         Self {
             socket_path,
             auth_context,
+            install_options,
         }
     }
 
@@ -194,8 +201,10 @@ impl RemoteTransport for SshTransport {
 
     fn install_binary(&self) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send>> {
         let socket_path = self.socket_path.clone();
+        let install_options = self.install_options.clone();
         Box::pin(async move {
-            let script = remote_server::setup::install_script(None);
+            let script =
+                remote_server::setup::install_script_with_options(&install_options, None);
             log::info!(
                 "Installing remote server binary to {}",
                 remote_server::setup::remote_server_binary()
@@ -213,7 +222,7 @@ impl RemoteTransport for SshTransport {
                         == Some(remote_server::setup::NO_HTTP_CLIENT_EXIT_CODE) =>
                 {
                     log::info!("Remote server has no curl/wget, falling back to SCP upload");
-                    scp_install_fallback(&socket_path)
+                    scp_install_fallback(&socket_path, &install_options)
                         .await
                         .map_err(Error::Other)
                 }
@@ -314,7 +323,10 @@ impl RemoteTransport for SshTransport {
 /// SCP install fallback: downloads the tarball locally, uploads it to
 /// the remote via SCP, then re-invokes the install script with the
 /// staging path baked in so the shared extraction tail runs.
-async fn scp_install_fallback(socket_path: &Path) -> anyhow::Result<()> {
+async fn scp_install_fallback(
+    socket_path: &Path,
+    install_options: &InstallScriptOptions,
+) -> anyhow::Result<()> {
     use std::process::Stdio;
 
     // Detect the remote platform so we can construct the correct download URL.
@@ -325,7 +337,8 @@ async fn scp_install_fallback(socket_path: &Path) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("SCP fallback: {e:#}"))?;
 
-    let url = remote_server::setup::download_tarball_url(&platform);
+    let url =
+        remote_server::setup::download_tarball_url_with_options(&platform, install_options);
     let remote_tarball_path = format!(
         "{}/oz-upload.tar.gz",
         remote_server::setup::remote_server_dir()
@@ -377,7 +390,10 @@ async fn scp_install_fallback(socket_path: &Path) -> anyhow::Result<()> {
     //    skips the download and extracts from the uploaded tarball.
     log::info!("Running extraction via install script with tarball at {remote_tarball_path}");
 
-    let script = remote_server::setup::install_script(Some(&remote_tarball_path));
+    let script = remote_server::setup::install_script_with_options(
+        install_options,
+        Some(&remote_tarball_path),
+    );
 
     let output = remote_server::ssh::run_ssh_script(socket_path, &script, timeout).await?;
     if output.status.success() {

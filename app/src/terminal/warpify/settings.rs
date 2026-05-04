@@ -1,11 +1,14 @@
 use anyhow::Result;
 use lazy_static::lazy_static;
+use remote_server::setup::InstallScriptOptions;
 use regex::Regex;
 use settings::{
     macros::{maybe_define_setting, register_settings_events},
     ChangeEventReason, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
 };
 use strum_macros::EnumIter;
+use url::Url;
+use warp_core::features::FeatureFlag;
 use warp_util::path::ShellFamily;
 use warpui::{AppContext, ModelContext};
 use warpui::{Entity, SingletonEntity};
@@ -61,6 +64,36 @@ maybe_define_setting!(UseSshTmuxWrapper, group: WarpifySettings, {
     private: false,
     toml_path: "warpify.ssh.use_ssh_tmux_wrapper",
     description: "Whether to use a tmux-based wrapper for SSH warpification.",
+});
+
+maybe_define_setting!(EnableSshRemoteServer, group: WarpifySettings, {
+    type: bool,
+    default: false,
+    supported_platforms: SupportedPlatforms::OR(SupportedPlatforms::MAC.into(), SupportedPlatforms::LINUX.into()),
+    sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+    private: false,
+    toml_path: "warpify.ssh.enable_ssh_remote_server",
+    description: "Whether to enable Warp's experimental SSH extension for remote server features.",
+});
+
+maybe_define_setting!(SshExtensionDownloadBaseUrl, group: WarpifySettings, {
+    type: String,
+    default: remote_server::setup::default_download_base_url().to_string(),
+    supported_platforms: SupportedPlatforms::OR(SupportedPlatforms::MAC.into(), SupportedPlatforms::LINUX.into()),
+    sync_to_cloud: SyncToCloud::Never,
+    private: false,
+    toml_path: "warpify.ssh.ssh_extension_download_base_url",
+    description: "Base URL used by remote hosts to download the SSH extension tarball.",
+});
+
+maybe_define_setting!(SshExtensionDownloadChannel, group: WarpifySettings, {
+    type: String,
+    default: remote_server::setup::default_download_channel().to_string(),
+    supported_platforms: SupportedPlatforms::OR(SupportedPlatforms::MAC.into(), SupportedPlatforms::LINUX.into()),
+    sync_to_cloud: SyncToCloud::Never,
+    private: false,
+    toml_path: "warpify.ssh.ssh_extension_download_channel",
+    description: "Release channel used when remote hosts download the SSH extension tarball.",
 });
 
 /// Controls how Warp handles the SSH extension (remote server binary) when connecting
@@ -156,6 +189,15 @@ pub struct WarpifySettings {
     /// tmux wrapper instead of the default legacy wrapper.
     pub use_ssh_tmux_wrapper: UseSshTmuxWrapper,
 
+    /// This setting controls whether SSH sessions should use the remote server-backed extension.
+    pub enable_ssh_remote_server: EnableSshRemoteServer,
+
+    /// Base URL used by remote hosts when downloading the SSH extension tarball.
+    pub ssh_extension_download_base_url: SshExtensionDownloadBaseUrl,
+
+    /// Release channel used by remote hosts when downloading the SSH extension tarball.
+    pub ssh_extension_download_channel: SshExtensionDownloadChannel,
+
     /// Controls the installation behavior for the SSH extension (remote server) when the binary
     /// is not installed on the remote host.
     pub ssh_extension_install_mode: SshExtensionInstallModeSetting,
@@ -224,6 +266,9 @@ impl WarpifySettings {
             ssh_hosts_denylist,
             enable_ssh_warpification: EnableSshWarpification::new_from_storage(ctx),
             use_ssh_tmux_wrapper: UseSshTmuxWrapper::new_from_storage(ctx),
+            enable_ssh_remote_server: EnableSshRemoteServer::new_from_storage(ctx),
+            ssh_extension_download_base_url: SshExtensionDownloadBaseUrl::new_from_storage(ctx),
+            ssh_extension_download_channel: SshExtensionDownloadChannel::new_from_storage(ctx),
             ssh_extension_install_mode: SshExtensionInstallModeSetting::new_from_storage(ctx),
         }
     }
@@ -247,6 +292,9 @@ impl WarpifySettings {
             ssh_hosts_denylist,
             enable_ssh_warpification: EnableSshWarpification::new(None),
             use_ssh_tmux_wrapper: UseSshTmuxWrapper::new(None),
+            enable_ssh_remote_server: EnableSshRemoteServer::new(None),
+            ssh_extension_download_base_url: SshExtensionDownloadBaseUrl::new(None),
+            ssh_extension_download_channel: SshExtensionDownloadChannel::new(None),
             ssh_extension_install_mode: SshExtensionInstallModeSetting::new(None),
         }
     }
@@ -272,6 +320,9 @@ impl WarpifySettings {
                 }
                 WarpifySettingsChangedEvent::EnableSshWarpification { .. } => {}
                 WarpifySettingsChangedEvent::UseSshTmuxWrapper { .. } => {}
+                WarpifySettingsChangedEvent::EnableSshRemoteServer { .. } => {}
+                WarpifySettingsChangedEvent::SshExtensionDownloadBaseUrl { .. } => {}
+                WarpifySettingsChangedEvent::SshExtensionDownloadChannel { .. } => {}
                 WarpifySettingsChangedEvent::SshExtensionInstallModeSetting { .. } => {}
             })
         });
@@ -304,6 +355,30 @@ impl WarpifySettings {
             WarpifySettings,
             use_ssh_tmux_wrapper,
             UseSshTmuxWrapper,
+            handle.clone(),
+            ctx
+        );
+
+        register_settings_events!(
+            WarpifySettings,
+            enable_ssh_remote_server,
+            EnableSshRemoteServer,
+            handle.clone(),
+            ctx
+        );
+
+        register_settings_events!(
+            WarpifySettings,
+            ssh_extension_download_base_url,
+            SshExtensionDownloadBaseUrl,
+            handle.clone(),
+            ctx
+        );
+
+        register_settings_events!(
+            WarpifySettings,
+            ssh_extension_download_channel,
+            SshExtensionDownloadChannel,
             handle.clone(),
             ctx
         );
@@ -345,6 +420,15 @@ pub enum WarpifySettingsChangedEvent {
     UseSshTmuxWrapper {
         change_event_reason: ChangeEventReason,
     },
+    EnableSshRemoteServer {
+        change_event_reason: ChangeEventReason,
+    },
+    SshExtensionDownloadBaseUrl {
+        change_event_reason: ChangeEventReason,
+    },
+    SshExtensionDownloadChannel {
+        change_event_reason: ChangeEventReason,
+    },
     SshExtensionInstallModeSetting {
         change_event_reason: ChangeEventReason,
     },
@@ -359,6 +443,54 @@ impl SingletonEntity for WarpifySettings {}
 /// This is the other impl block for this model. This one contains the actual subshell-specific
 /// logic.
 impl WarpifySettings {
+    pub fn is_ssh_remote_server_enabled(app: &AppContext) -> bool {
+        let settings = Self::as_ref(app);
+        FeatureFlag::SshRemoteServer.is_enabled()
+            && settings.enable_ssh_remote_server.is_supported_on_current_platform()
+            && *settings.enable_ssh_warpification.value()
+            && *settings.enable_ssh_remote_server.value()
+    }
+
+    pub fn ssh_extension_install_options(&self) -> InstallScriptOptions {
+        InstallScriptOptions::new(
+            self.normalized_ssh_extension_download_base_url(),
+            self.normalized_ssh_extension_download_channel(),
+        )
+    }
+
+    pub fn normalize_ssh_extension_download_base_url(value: &str) -> Result<String> {
+        let trimmed = value.trim().trim_end_matches('/');
+        let parsed = Url::parse(trimmed)?;
+        match parsed.scheme() {
+            "http" | "https" => Ok(trimmed.to_string()),
+            scheme => anyhow::bail!(
+                "SSH extension download URL must use http:// or https://, not {scheme}://"
+            ),
+        }
+    }
+
+    pub fn normalize_ssh_extension_download_channel(value: &str) -> String {
+        let trimmed = value.trim();
+        if remote_server::setup::is_supported_download_channel(trimmed) {
+            trimmed.to_string()
+        } else {
+            remote_server::setup::default_download_channel().to_string()
+        }
+    }
+
+    fn normalized_ssh_extension_download_base_url(&self) -> String {
+        Self::normalize_ssh_extension_download_base_url(
+            self.ssh_extension_download_base_url.value(),
+        )
+        .unwrap_or_else(|_| remote_server::setup::default_download_base_url().to_string())
+    }
+
+    fn normalized_ssh_extension_download_channel(&self) -> String {
+        Self::normalize_ssh_extension_download_channel(
+            self.ssh_extension_download_channel.value(),
+        )
+    }
+
     fn is_built_in_subshell_match(command: &str) -> bool {
         for command_regex in SUBSHELL_COMMAND_REGEXES.iter() {
             if command_regex.is_match(command) {

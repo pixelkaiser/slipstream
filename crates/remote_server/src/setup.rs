@@ -7,6 +7,26 @@ use std::time::Duration;
 use anyhow::anyhow;
 use warp_core::channel::{Channel, ChannelState};
 
+pub const PRODUCTION_DOWNLOAD_BASE_URL: &str = "https://app.warp.dev/download/cli";
+pub const DOWNLOAD_CHANNEL_STABLE: &str = "stable";
+pub const DOWNLOAD_CHANNEL_PREVIEW: &str = "preview";
+pub const DOWNLOAD_CHANNEL_DEV: &str = "dev";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstallScriptOptions {
+    pub download_base_url: String,
+    pub download_channel: String,
+}
+
+impl InstallScriptOptions {
+    pub fn new(download_base_url: String, download_channel: String) -> Self {
+        Self {
+            download_base_url,
+            download_channel,
+        }
+    }
+}
+
 /// State machine for the remote server install → launch → initialize flow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RemoteServerSetupState {
@@ -389,7 +409,7 @@ fn pinned_version() -> &'static str {
 
 /// The install script template, loaded from a standalone `.sh` file for
 /// readability. Placeholders like `{download_base_url}` are substituted by
-/// [`install_script`].
+/// [`install_script_with_options`].
 const INSTALL_SCRIPT_TEMPLATE: &str = include_str!("install_remote_server.sh");
 
 /// Returns the install script that downloads and installs the CLI binary
@@ -405,19 +425,35 @@ const INSTALL_SCRIPT_TEMPLATE: &str = include_str!("install_remote_server.sh");
 /// `&version={v}` / `-{v}` on every other channel, where `v` falls back
 /// to `CARGO_PKG_VERSION` when no release tag is baked in.
 pub fn install_script(staging_tarball_path: Option<&str>) -> String {
-    let (vq, version_suffix) = match ChannelState::channel() {
+    install_script_with_options(
+        &InstallScriptOptions::new(download_url(), download_channel().into()),
+        staging_tarball_path,
+    )
+}
+
+pub fn install_script_with_options(
+    options: &InstallScriptOptions,
+    staging_tarball_path: Option<&str>,
+) -> String {
+    let (version_query, version_suffix) = match ChannelState::channel() {
         Channel::Local | Channel::Oss => (String::new(), String::new()),
         Channel::Stable | Channel::Preview | Channel::Dev | Channel::Integration => {
             let v = pinned_version();
             (format!("&version={v}"), format!("-{v}"))
         }
     };
+    let download_base_url = options.download_base_url.trim().trim_end_matches('/');
+    let download_channel = if is_supported_download_channel(&options.download_channel) {
+        options.download_channel.trim()
+    } else {
+        default_download_channel()
+    };
     INSTALL_SCRIPT_TEMPLATE
-        .replace("{download_base_url}", &download_url())
-        .replace("{channel}", download_channel())
+        .replace("{download_base_url}", download_base_url)
+        .replace("{download_channel}", download_channel)
         .replace("{install_dir}", &remote_server_dir())
         .replace("{binary_name}", binary_name())
-        .replace("{version_query}", &vq)
+        .replace("{version_query}", &version_query)
         .replace("{version_suffix}", &version_suffix)
         .replace(
             "{no_http_client_exit_code}",
@@ -434,6 +470,21 @@ fn download_url() -> String {
     let base = ChannelState::server_root_url();
     let base = base.trim_end_matches('/');
     format!("{base}/download/cli")
+}
+
+pub fn default_download_base_url() -> &'static str {
+    PRODUCTION_DOWNLOAD_BASE_URL
+}
+
+pub fn default_download_channel() -> &'static str {
+    download_channel()
+}
+
+pub fn is_supported_download_channel(channel: &str) -> bool {
+    matches!(
+        channel.trim(),
+        DOWNLOAD_CHANNEL_STABLE | DOWNLOAD_CHANNEL_PREVIEW | DOWNLOAD_CHANNEL_DEV
+    )
 }
 
 /// Maps the client's [`Channel`] to the server's download channel parameter.
@@ -468,12 +519,28 @@ fn version_query() -> String {
 /// parameterized by the remote platform. Used by the SCP upload
 /// fallback to download the same artifact the shell script would fetch.
 pub fn download_tarball_url(platform: &RemotePlatform) -> String {
+    download_tarball_url_with_options(
+        platform,
+        &InstallScriptOptions::new(download_url(), download_channel().into()),
+    )
+}
+
+pub fn download_tarball_url_with_options(
+    platform: &RemotePlatform,
+    options: &InstallScriptOptions,
+) -> String {
+    let download_base_url = options.download_base_url.trim().trim_end_matches('/');
+    let download_channel = if is_supported_download_channel(&options.download_channel) {
+        options.download_channel.trim()
+    } else {
+        default_download_channel()
+    };
     format!(
         "{}?package=tar&os={}&arch={}&channel={}{}",
-        download_url(),
+        download_base_url,
         platform.os.as_str(),
         platform.arch.as_str(),
-        download_channel(),
+        download_channel,
         version_query(),
     )
 }
