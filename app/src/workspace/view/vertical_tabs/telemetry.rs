@@ -49,11 +49,13 @@ impl VerticalTabsDisplayOption {
                 json!("working_directory")
             }
             Self::PrimaryInfo(VerticalTabsPrimaryInfo::Branch) => json!("branch"),
+            Self::PrimaryInfo(VerticalTabsPrimaryInfo::RemoteHost) => json!("remote_host"),
             Self::CompactSubtitle(VerticalTabsCompactSubtitle::Branch) => json!("branch"),
             Self::CompactSubtitle(VerticalTabsCompactSubtitle::WorkingDirectory) => {
                 json!("working_directory")
             }
             Self::CompactSubtitle(VerticalTabsCompactSubtitle::Command) => json!("command"),
+            Self::CompactSubtitle(VerticalTabsCompactSubtitle::RemoteHost) => json!("remote_host"),
             Self::ShowPrLink(value) => json!(value),
             Self::ShowDiffStats(value) => json!(value),
             Self::ShowDetailsOnHover(value) => json!(value),

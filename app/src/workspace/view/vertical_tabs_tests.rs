@@ -4,7 +4,9 @@ use crate::pane_group::pane::IPaneType;
 use crate::pane_group::{PaneId, TerminalPaneId};
 use crate::safe_triangle::SafeTriangle;
 use crate::terminal::CLIAgent;
-use crate::workspace::tab_settings::VerticalTabsDisplayGranularity;
+use crate::workspace::tab_settings::{
+    VerticalTabsCompactSubtitle, VerticalTabsDisplayGranularity, VerticalTabsPrimaryInfo,
+};
 use pathfinder_geometry::rect::RectF;
 use pathfinder_geometry::vector::Vector2F;
 use std::path::PathBuf;
@@ -16,9 +18,10 @@ use super::{
     compact_branch_subtitle_display, detail_sidecar_width_and_bounds,
     detail_target_for_hovered_row, non_terminal_search_text_fragments,
     pane_ids_for_display_granularity, pane_search_text_fragments, preferred_agent_tab_titles,
-    push_normalized_unique_summary_label, search_fragments_contain_query,
-    select_summary_pane_kind_icons, should_keep_detail_sidecar_visible_for_mouse_position,
-    sort_summary_primary_labels_status_first, summary_overflow_count,
+    push_normalized_unique_summary_label, resolve_compact_subtitle,
+    search_fragments_contain_query, select_summary_pane_kind_icons,
+    should_keep_detail_sidecar_visible_for_mouse_position,
+    sort_summary_primary_labels_status_first, subtitle_options_for_primary, summary_overflow_count,
     summary_search_text_fragments, terminal_kind_badge_label, terminal_primary_line_data,
     terminal_pull_request_badge_label, terminal_search_text_fragments,
     terminal_title_fallback_font, uses_outer_group_container, visible_pane_ids_for_detail_target,
@@ -872,6 +875,53 @@ fn compact_branch_subtitle_falls_back_to_working_directory_without_branch_icon()
     assert_eq!(
         compact_branch_subtitle_display(Some("main"), Some("~/warp")),
         Some(("main".to_string(), true))
+    );
+}
+
+#[test]
+fn compact_subtitle_conflict_with_remote_host_falls_back_to_branch() {
+    assert_eq!(
+        resolve_compact_subtitle(
+            VerticalTabsPrimaryInfo::RemoteHost,
+            VerticalTabsCompactSubtitle::RemoteHost
+        ),
+        VerticalTabsCompactSubtitle::Branch
+    );
+    assert_eq!(
+        resolve_compact_subtitle(
+            VerticalTabsPrimaryInfo::Command,
+            VerticalTabsCompactSubtitle::RemoteHost
+        ),
+        VerticalTabsCompactSubtitle::RemoteHost
+    );
+}
+
+#[test]
+fn subtitle_options_include_all_non_primary_metadata() {
+    assert_eq!(
+        subtitle_options_for_primary(VerticalTabsPrimaryInfo::Command),
+        [
+            (VerticalTabsCompactSubtitle::Branch, "Branch"),
+            (
+                VerticalTabsCompactSubtitle::WorkingDirectory,
+                "Working Directory"
+            ),
+            (VerticalTabsCompactSubtitle::RemoteHost, "Remote Host"),
+        ]
+    );
+    assert_eq!(
+        subtitle_options_for_primary(VerticalTabsPrimaryInfo::RemoteHost),
+        [
+            (VerticalTabsCompactSubtitle::Branch, "Branch"),
+            (
+                VerticalTabsCompactSubtitle::WorkingDirectory,
+                "Working Directory"
+            ),
+            (
+                VerticalTabsCompactSubtitle::Command,
+                "Command / Conversation"
+            ),
+        ]
     );
 }
 

@@ -1,5 +1,6 @@
 use crate::context_chips::display_chip::GitLineChanges;
 use crate::context_chips::{git_line_changes_from_chips, ContextChipKind};
+use crate::terminal::model::session::SessionType;
 use crate::terminal::TerminalView;
 use warpui::AppContext;
 
@@ -30,6 +31,23 @@ impl TerminalView {
             .terminal_title()
             .filter(|title| !title.trim().is_empty())
             .unwrap_or(fallback_title)
+    }
+
+    pub fn display_remote_host(&self, ctx: &AppContext) -> String {
+        let Some(session) = self
+            .active_block_session_id()
+            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
+        else {
+            return "Local".to_string();
+        };
+
+        if session.is_legacy_ssh_session()
+            || matches!(session.session_type(), SessionType::WarpifiedRemote { .. })
+        {
+            format!("{}@{}", session.user(), session.hostname())
+        } else {
+            "Local".to_string()
+        }
     }
 
     #[cfg_attr(not(feature = "local_fs"), allow(clippy::unnecessary_lazy_evaluations))]
