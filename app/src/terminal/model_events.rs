@@ -30,8 +30,8 @@ use super::{
         terminal_model::{CommandType, HandlerEvent},
     },
 };
-use crate::features::FeatureFlag;
 use crate::terminal::shell::ShellType;
+use crate::terminal::warpify::settings::WarpifySettings;
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// Model that dispatches events that have been emitted by the [`crate::terminal::TerminalModel`],
@@ -89,7 +89,7 @@ impl ModelEventDispatcher {
                     pending_session_info.is_legacy_ssh_session,
                     IsLegacySSHSession::Yes { .. }
                 );
-                if FeatureFlag::SshRemoteServer.is_enabled() && is_legacy_ssh {
+                if WarpifySettings::is_ssh_remote_server_enabled(ctx) && is_legacy_ssh {
                     ModelEvent::SshInitShell {
                         pending_session_info,
                     }
@@ -308,7 +308,7 @@ impl ModelEventDispatcher {
 
     /// Finalizes session initialization by calling `Sessions::initialize_bootstrapped_session`.
     ///
-    /// For legacy SSH sessions with the `SshRemoteServer` flag, this also
+    /// For opted-in legacy SSH sessions with the `SshRemoteServer` flag, this also
     /// sends the `SessionBootstrapped` notification to the remote server via
     /// the manager.
     ///
@@ -345,7 +345,7 @@ impl ModelEventDispatcher {
         // `SessionsEvent::SessionBootstrapped`, which causes subscribers to
         // immediately queue `RunCommand` requests (e.g. `load_external_commands`).
         // The daemon must have the executor ready before those requests arrive.
-        if FeatureFlag::SshRemoteServer.is_enabled() && is_legacy_ssh {
+        if WarpifySettings::is_ssh_remote_server_enabled(ctx) && is_legacy_ssh {
             RemoteServerManager::handle(ctx).update(ctx, |mgr, _ctx| {
                 mgr.notify_session_bootstrapped(
                     session_id,

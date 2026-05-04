@@ -3,7 +3,7 @@
 #
 # Placeholders (substituted at runtime by setup.rs):
 #   {download_base_url}         — e.g. https://app.warp.dev/download/cli
-#   {channel}                   — stable | preview | dev
+#   {download_channel}          — stable | preview | dev
 #   {install_dir}               — e.g. ~/.warp/remote-server
 #   {binary_name}               — e.g. oz | oz-dev | oz-preview
 #   {version_query}             — e.g. &version=v0.2026... (empty when no release tag)
@@ -65,7 +65,7 @@ if [ -n "$staging_tarball_path" ]; then
   mv "$staging_tarball_path" "$tmpdir/oz.tar.gz"
 else
   # Normal path: download via curl or wget.
-  url="{download_base_url}?package=tar&os=$os_name&arch=$arch_name&channel={channel}{version_query}"
+  url="{download_base_url}?package=tar&os=$os_name&arch=$arch_name&channel={download_channel}{version_query}"
 
   if command -v curl >/dev/null 2>&1; then
     curl -fSL --connect-timeout 15 "$url" -o "$tmpdir/oz.tar.gz"
@@ -76,7 +76,6 @@ else
     exit {no_http_client_exit_code}
   fi
 fi
-
 tar -xzf "$tmpdir/oz.tar.gz" -C "$tmpdir"
 
 bin=$(find "$tmpdir" -type f -name 'oz*' ! -name '*.tar.gz' | head -n1)

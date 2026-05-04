@@ -488,3 +488,31 @@ fn parse_preinstall_missing_status_falls_open() {
     assert_eq!(result.status, PreinstallStatus::Unknown);
     assert!(result.is_supported());
 }
+
+#[test]
+fn install_script_with_options_uses_configured_download_url_and_channel() {
+    let script = install_script_with_options(
+        &InstallScriptOptions::new(
+            "https://downloads.example.com/warp/cli/".to_string(),
+            DOWNLOAD_CHANNEL_PREVIEW.to_string(),
+        ),
+        None,
+    );
+
+    assert!(script.contains(
+        "https://downloads.example.com/warp/cli?package=tar&os=$os_name&arch=$arch_name&channel=preview"
+    ));
+}
+
+#[test]
+fn install_script_with_options_falls_back_for_invalid_channel() {
+    let script = install_script_with_options(
+        &InstallScriptOptions::new(
+            PRODUCTION_DOWNLOAD_BASE_URL.to_string(),
+            "nightly".to_string(),
+        ),
+        None,
+    );
+
+    assert!(script.contains(&format!("channel={}", default_download_channel())));
+}

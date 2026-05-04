@@ -35,7 +35,7 @@ use crate::HostId;
 use repo_metadata::RepoMetadataUpdate;
 use serde::Serialize;
 #[cfg(not(target_family = "wasm"))]
-use warp_core::channel::ChannelState;
+use warp_core::channel::{Channel, ChannelState};
 use warp_core::SessionId;
 use warp_util::remote_path::{RemoteNavigationResult, RemotePath};
 use warp_util::standardized_path::StandardizedPath;
@@ -198,25 +198,79 @@ impl RemoteServerErrorKind {
 ///   `server` string): the tags must match exactly. Mismatched releases
 ///   cause the manager to tear the session down and delete the stale
 ///   binary so the next reconnect reinstalls.
-/// - Client has no version (`None`): always compatible. This covers two
-///   dev-loop scenarios:
-///   1. `cargo run` + `script/deploy_remote_server` — neither side
-///      reports a release tag (server string is empty).
-///   2. `cargo run` against a remote that has a release-tagged binary
-///      already installed — the client has no tag but the server does.
-///      Treating this as compatible avoids tearing down and deleting a
-///      perfectly good server binary just because the local dev client
-///      doesn't carry a release tag.
-/// - Client has a version but server reports empty: incompatible. A
-///   release-tagged client should not accept an untagged server — it
-///   likely means the binary was deployed via the dev script rather
-///   than the release channel.
+/// - Both sides are unknown (client `None` and server reports an empty
+///   string): treat as compatible. This preserves the `cargo run` +
+///   `script/deploy_remote_server` dev loop, where neither side reports a
+///   release tag.
+/// - OSS/Slipstream clients with no baked release tag accept a non-empty
+///   production remote-server tag because the extension is downloaded from
+///   the configured production endpoint/channel instead of built from the
+///   local checkout.
 #[cfg(not(target_family = "wasm"))]
 fn version_is_compatible(client: Option<&str>, server: &str) -> bool {
-    match (client, server.is_empty()) {
-        (Some(c), false) => c == server,
-        (None, _) => true,
-        (Some(_), true) => false,
+    version_is_compatible_for_channel(ChannelState::channel(), client, server)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn version_is_compatible_for_channel(
+    channel: Channel,
+    client: Option<&str>,
+    server: &str,
+) -> bool {
+    match (channel, client, server.is_empty()) {
+        // Slipstream/OSS intentionally downloads production remote-server artifacts but does
+        // not have a baked Warp release tag in local builds, so there is no exact release tag
+        // to compare against.
+        (Channel::Oss, None, false) => true,
+        (_, Some(c), false) => c == server,
+        (_, None, true) => true,
+        (_, Some(_), true) | (_, None, false) => false,
+    }
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oss_without_client_version_accepts_production_remote_server_version() {
+        assert!(version_is_compatible_for_channel(
+            Channel::Oss,
+            None,
+            "v0.2026.04.29.08.57.stable_01"
+        ));
+    }
+
+    #[test]
+    fn local_without_client_version_rejects_production_remote_server_version() {
+        assert!(!version_is_compatible_for_channel(
+            Channel::Local,
+            None,
+            "v0.2026.04.29.08.57.stable_01"
+        ));
+    }
+
+    #[test]
+    fn matching_release_versions_are_compatible() {
+        assert!(version_is_compatible_for_channel(
+            Channel::Stable,
+            Some("v0.2026.04.29.08.57.stable_01"),
+            "v0.2026.04.29.08.57.stable_01"
+        ));
+    }
+
+    #[test]
+    fn mismatched_release_versions_are_incompatible() {
+        assert!(!version_is_compatible_for_channel(
+            Channel::Stable,
+            Some("v0.2026.04.29.08.57.stable_01"),
+            "v0.2026.04.30.08.57.stable_01"
+        ));
+    }
+
+    #[test]
+    fn empty_client_and_server_versions_are_compatible() {
+        assert!(version_is_compatible_for_channel(Channel::Local, None, ""));
     }
 }
 

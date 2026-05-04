@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -6,7 +8,7 @@ use futures::AsyncWriteExt as _;
 use futures::TryStreamExt as _;
 use http_client::StatusCode;
 
-use remote_server::setup::RemotePlatform;
+use remote_server::setup::{InstallScriptOptions, RemotePlatform};
 use remote_server::transport::Error;
 
 const REMOTE_SERVER_TARBALL_CACHE_FILE_NAME: &str = "oz.tar.gz";
@@ -32,10 +34,13 @@ pub(super) fn should_try_install(error: &Error) -> bool {
 /// The tarball is downloaded or reused from the local cache first, then uploaded
 /// to the remote host and passed to the install script as an already-downloaded
 /// archive. This avoids requiring the remote host to download the tarball itself.
-pub(super) async fn install(socket_path: &Path) -> Result<(), Error> {
+pub(super) async fn install(
+    socket_path: &Path,
+    install_options: &InstallScriptOptions,
+) -> Result<(), Error> {
     let platform = super::super::detect_remote_platform(socket_path).await?;
 
-    let client_tarball_path = cached_remote_server_tarball(&platform)
+    let client_tarball_path = cached_remote_server_tarball(&platform, install_options)
         .await
         .map_err(Error::Other)?;
     let timeout = remote_server::setup::SCP_INSTALL_TIMEOUT;
@@ -73,7 +78,10 @@ pub(super) async fn install(socket_path: &Path) -> Result<(), Error> {
     .map_err(Error::Other)?;
 
     log::info!("Running extraction via install script with tarball at {remote_tarball_path}");
-    let script = remote_server::setup::install_script(Some(&remote_tarball_path));
+    let script = remote_server::setup::install_script_with_options(
+        install_options,
+        Some(&remote_tarball_path),
+    );
 
     let output = remote_server::ssh::run_ssh_script(socket_path, &script, timeout)
         .await
@@ -100,13 +108,23 @@ fn remote_server_tarball_cache_temp_dir() -> PathBuf {
     remote_server_tarball_cache_root().join(".tmp")
 }
 
-fn current_remote_server_tarball_cache_version() -> &'static str {
-    remote_server::setup::remote_server_artifact_version()
+fn current_remote_server_tarball_cache_version(install_options: &InstallScriptOptions) -> String {
+    let mut hasher = DefaultHasher::new();
+    install_options.download_base_url.hash(&mut hasher);
+    install_options.download_channel.hash(&mut hasher);
+    format!(
+        "{}-{:016x}",
+        remote_server::setup::remote_server_artifact_version(),
+        hasher.finish()
+    )
 }
 
-fn remote_server_tarball_cache_path(platform: &RemotePlatform) -> PathBuf {
+fn remote_server_tarball_cache_path(
+    platform: &RemotePlatform,
+    install_options: &InstallScriptOptions,
+) -> PathBuf {
     remote_server_tarball_cache_root()
-        .join(current_remote_server_tarball_cache_version())
+        .join(current_remote_server_tarball_cache_version(install_options))
         .join(format!(
             "{}-{}",
             platform.os.as_str(),
@@ -125,8 +143,11 @@ async fn is_valid_cached_tarball(path: &Path) -> bool {
 ///
 /// Reuses an existing cached tarball when available; otherwise downloads the
 /// tarball into the cache and returns the newly cached path.
-async fn cached_remote_server_tarball(platform: &RemotePlatform) -> anyhow::Result<PathBuf> {
-    let cache_path = remote_server_tarball_cache_path(platform);
+async fn cached_remote_server_tarball(
+    platform: &RemotePlatform,
+    install_options: &InstallScriptOptions,
+) -> anyhow::Result<PathBuf> {
+    let cache_path = remote_server_tarball_cache_path(platform, install_options);
     if is_valid_cached_tarball(&cache_path).await {
         log::info!(
             "Using cached remote-server tarball at {}",
@@ -139,7 +160,7 @@ async fn cached_remote_server_tarball(platform: &RemotePlatform) -> anyhow::Resu
         let _ = async_fs::remove_file(&cache_path).await;
     }
 
-    let url = remote_server::setup::download_tarball_url(platform);
+    let url = remote_server::setup::download_tarball_url_with_options(platform, install_options);
     log::info!(
         "Downloading remote-server tarball from {url} into cache at {}",
         cache_path.display()
