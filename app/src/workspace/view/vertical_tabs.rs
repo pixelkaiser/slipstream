@@ -576,8 +576,10 @@ pub(super) struct VerticalTabsPanelState {
     command_option_mouse_state: MouseStateHandle,
     directory_option_mouse_state: MouseStateHandle,
     branch_option_mouse_state: MouseStateHandle,
+    remote_host_option_mouse_state: MouseStateHandle,
     subtitle_option_1_mouse_state: MouseStateHandle,
     subtitle_option_2_mouse_state: MouseStateHandle,
+    subtitle_option_3_mouse_state: MouseStateHandle,
     show_pr_link_mouse_state: MouseStateHandle,
     show_pr_link_info_tooltip_mouse_state: MouseStateHandle,
     show_diff_stats_mouse_state: MouseStateHandle,
@@ -611,8 +613,10 @@ impl Default for VerticalTabsPanelState {
             command_option_mouse_state: Default::default(),
             directory_option_mouse_state: Default::default(),
             branch_option_mouse_state: Default::default(),
+            remote_host_option_mouse_state: Default::default(),
             subtitle_option_1_mouse_state: Default::default(),
             subtitle_option_2_mouse_state: Default::default(),
+            subtitle_option_3_mouse_state: Default::default(),
             show_pr_link_mouse_state: Default::default(),
             show_pr_link_info_tooltip_mouse_state: Default::default(),
             show_diff_stats_mouse_state: Default::default(),
@@ -3276,6 +3280,7 @@ fn render_terminal_row_content(
         .unwrap_or_else(|| title_text.clone());
 
     let git_branch = terminal_view.current_git_branch(app);
+    let remote_host = terminal_view.display_remote_host(app);
 
     // Line 1 and line 2 depend on the "Pane title as" setting.
     // Line 3 (metadata) shows context data on the left + badges on the right.
@@ -3285,6 +3290,7 @@ fn render_terminal_row_content(
     // | Command          | command/conversation | working directory       | git branch           |
     // | WorkingDirectory | working directory    | command/conversation    | git branch           |
     // | Branch           | git branch           | command/conversation    | working directory    |
+    // | RemoteHost       | remote host          | command/conversation    | git branch           |
     let (first_line, second_line, metadata_left) = match primary_info {
         VerticalTabsPrimaryInfo::Command => (
             render_pane_title_slot(
@@ -3364,6 +3370,26 @@ fn render_terminal_row_content(
                 MetadataLeftContent::WorkingDirectory(working_directory),
             )
         }
+        VerticalTabsPrimaryInfo::RemoteHost => (
+            render_pane_title_slot(
+                props,
+                || {
+                    render_text_line(
+                        &remote_host,
+                        main_text_color,
+                        ClipConfig::ellipsis(),
+                        appearance,
+                    )
+                },
+                12.,
+                main_text_color,
+                ClipConfig::ellipsis(),
+                appearance,
+                app,
+            ),
+            render_terminal_primary_line_for_view(terminal_view, appearance, sub_text_color, app),
+            MetadataLeftContent::GitBranch(git_branch),
+        ),
     };
 
     let first_line_element = if has_unread_activity(&props.typed, app) {
@@ -4513,6 +4539,9 @@ fn resolve_compact_subtitle(
         ) | (
             VerticalTabsPrimaryInfo::Branch,
             VerticalTabsCompactSubtitle::Branch
+        ) | (
+            VerticalTabsPrimaryInfo::RemoteHost,
+            VerticalTabsCompactSubtitle::RemoteHost
         )
     );
     if is_conflict {
@@ -4527,12 +4556,13 @@ fn default_compact_subtitle(primary: VerticalTabsPrimaryInfo) -> VerticalTabsCom
         VerticalTabsPrimaryInfo::Command => VerticalTabsCompactSubtitle::Branch,
         VerticalTabsPrimaryInfo::WorkingDirectory => VerticalTabsCompactSubtitle::Branch,
         VerticalTabsPrimaryInfo::Branch => VerticalTabsCompactSubtitle::Command,
+        VerticalTabsPrimaryInfo::RemoteHost => VerticalTabsCompactSubtitle::Branch,
     }
 }
 
 fn subtitle_options_for_primary(
     primary: VerticalTabsPrimaryInfo,
-) -> [(VerticalTabsCompactSubtitle, &'static str); 2] {
+) -> [(VerticalTabsCompactSubtitle, &'static str); 3] {
     match primary {
         VerticalTabsPrimaryInfo::Command => [
             (VerticalTabsCompactSubtitle::Branch, "Branch"),
@@ -4540,6 +4570,7 @@ fn subtitle_options_for_primary(
                 VerticalTabsCompactSubtitle::WorkingDirectory,
                 "Working Directory",
             ),
+            (VerticalTabsCompactSubtitle::RemoteHost, "Remote Host"),
         ],
         VerticalTabsPrimaryInfo::WorkingDirectory => [
             (VerticalTabsCompactSubtitle::Branch, "Branch"),
@@ -4547,6 +4578,7 @@ fn subtitle_options_for_primary(
                 VerticalTabsCompactSubtitle::Command,
                 "Command / Conversation",
             ),
+            (VerticalTabsCompactSubtitle::RemoteHost, "Remote Host"),
         ],
         VerticalTabsPrimaryInfo::Branch => [
             (
@@ -4556,6 +4588,18 @@ fn subtitle_options_for_primary(
             (
                 VerticalTabsCompactSubtitle::WorkingDirectory,
                 "Working Directory",
+            ),
+            (VerticalTabsCompactSubtitle::RemoteHost, "Remote Host"),
+        ],
+        VerticalTabsPrimaryInfo::RemoteHost => [
+            (VerticalTabsCompactSubtitle::Branch, "Branch"),
+            (
+                VerticalTabsCompactSubtitle::WorkingDirectory,
+                "Working Directory",
+            ),
+            (
+                VerticalTabsCompactSubtitle::Command,
+                "Command / Conversation",
             ),
         ],
     }
@@ -4813,6 +4857,15 @@ pub(super) fn render_settings_popup(
         theme,
     );
 
+    let remote_host_option = render_primary_info_option(
+        "Remote Host",
+        matches!(current_primary_info, VerticalTabsPrimaryInfo::RemoteHost),
+        state.remote_host_option_mouse_state.clone(),
+        VerticalTabsPrimaryInfo::RemoteHost,
+        appearance,
+        theme,
+    );
+
     // Assemble popup — top-level display granularity first, then density and pane-row sections.
     let mut popup_col = Flex::column()
         .with_main_axis_size(MainAxisSize::Min)
@@ -4837,6 +4890,7 @@ pub(super) fn render_settings_popup(
         popup_col.add_child(command_option);
         popup_col.add_child(directory_option);
         popup_col.add_child(branch_option);
+        popup_col.add_child(remote_host_option);
 
         if matches!(current_mode, VerticalTabsViewMode::Compact) {
             popup_col.add_child(make_divider(theme));
@@ -4859,6 +4913,7 @@ pub(super) fn render_settings_popup(
             let mouse_states = [
                 state.subtitle_option_1_mouse_state.clone(),
                 state.subtitle_option_2_mouse_state.clone(),
+                state.subtitle_option_3_mouse_state.clone(),
             ];
             for (i, (value, label)) in options.iter().enumerate() {
                 popup_col.add_child(render_compact_subtitle_option(
@@ -6060,6 +6115,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
             let terminal_view = terminal_pane.terminal_view(app).as_ref(app);
             let terminal_title = terminal_view.terminal_title_from_shell();
             let git_branch = terminal_view.current_git_branch(app);
+            let remote_host = terminal_view.display_remote_host(app);
             let working_directory = terminal_view
                 .display_working_directory(app)
                 .filter(|wd| !wd.trim().is_empty());
@@ -6094,6 +6150,12 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                             .with_color(main_text_color.into())
                             .finish(),
                     },
+                    VerticalTabsPrimaryInfo::RemoteHost => {
+                        Text::new_inline(remote_host.clone(), font_family, 12.)
+                            .with_clip(ClipConfig::ellipsis())
+                            .with_color(main_text_color.into())
+                            .finish()
+                    }
                 },
                 12.,
                 main_text_color,
@@ -6144,6 +6206,12 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                             .finish(),
                     )
                 }
+                VerticalTabsCompactSubtitle::RemoteHost => Some(
+                    Text::new_inline(remote_host, font_family, 10.)
+                        .with_clip(ClipConfig::ellipsis())
+                        .with_color(sub_text_color.into())
+                        .finish(),
+                ),
             };
 
             (title, subtitle)
