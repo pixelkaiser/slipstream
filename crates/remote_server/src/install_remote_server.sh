@@ -3,7 +3,7 @@
 #
 # Placeholders (substituted at runtime by setup.rs):
 #   {download_base_url}  — e.g. https://app.warp.dev/download/cli
-#   {channel}            — stable | preview | dev
+#   {download_channel}   — stable | preview | dev
 #   {install_dir}        — e.g. ~/.warp/remote-server
 #   {binary_name}        — e.g. oz | oz-dev | oz-preview
 #   {version_query}      — e.g. &version=v0.2026... (empty when no release tag)
@@ -40,7 +40,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-curl -fSL "{download_base_url}?package=tar&os=$os_name&arch=$arch_name&channel={channel}{version_query}" \
+curl -fSL "{download_base_url}?package=tar&os=$os_name&arch=$arch_name&channel={download_channel}{version_query}" \
   -o "$tmpdir/oz.tar.gz"
 tar -xzf "$tmpdir/oz.tar.gz" -C "$tmpdir"
 

@@ -48,6 +48,7 @@ use crate::editor::{EditorOptions, EditorView, TextOptions};
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
 use crate::terminal::input::InputDropTargetData;
 use crate::terminal::view::{TerminalDropTargetData, TerminalView};
+use crate::terminal::warpify::settings::WarpifySettings;
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
@@ -64,7 +65,6 @@ use crate::{
     view_components::DismissibleToast,
     workspace::ToastStack,
 };
-use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::{color::internal_colors, Fill};
 use warp_core::HostId;
 use warpui::ui_components::components::UiComponent;
@@ -1444,7 +1444,7 @@ impl FileTreeView {
     ) {
         use crate::remote_server::manager::RemoteServerManager;
 
-        if !FeatureFlag::SshRemoteServer.is_enabled() {
+        if !WarpifySettings::is_ssh_remote_server_enabled(ctx) {
             return;
         }
 

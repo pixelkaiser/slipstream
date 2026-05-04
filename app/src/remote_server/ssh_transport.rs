@@ -16,7 +16,8 @@ use remote_server::auth::RemoteServerAuthContext;
 use remote_server::client::RemoteServerClient;
 use remote_server::manager::RemoteServerExitStatus;
 use remote_server::setup::{
-    parse_uname_output, remote_server_daemon_dir, PreinstallCheckResult, RemotePlatform,
+    parse_uname_output, remote_server_daemon_dir, InstallScriptOptions, PreinstallCheckResult,
+    RemotePlatform,
 };
 use remote_server::ssh::ssh_args;
 use remote_server::transport::{Connection, RemoteTransport};
@@ -31,6 +32,7 @@ use remote_server::transport::{Connection, RemoteTransport};
 pub struct SshTransport {
     socket_path: PathBuf,
     auth_context: Arc<RemoteServerAuthContext>,
+    install_options: InstallScriptOptions,
 }
 
 impl fmt::Debug for SshTransport {
@@ -42,10 +44,15 @@ impl fmt::Debug for SshTransport {
 }
 
 impl SshTransport {
-    pub fn new(socket_path: PathBuf, auth_context: Arc<RemoteServerAuthContext>) -> Self {
+    pub fn new(
+        socket_path: PathBuf,
+        auth_context: Arc<RemoteServerAuthContext>,
+        install_options: InstallScriptOptions,
+    ) -> Self {
         Self {
             socket_path,
             auth_context,
+            install_options,
         }
     }
 
@@ -193,8 +200,9 @@ impl RemoteTransport for SshTransport {
 
     fn install_binary(&self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send>> {
         let socket_path = self.socket_path.clone();
+        let install_options = self.install_options.clone();
         Box::pin(async move {
-            let script = remote_server::setup::install_script();
+            let script = remote_server::setup::install_script_with_options(&install_options);
             log::info!(
                 "Installing remote server binary to {}",
                 remote_server::setup::remote_server_binary()
