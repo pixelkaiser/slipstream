@@ -14,7 +14,8 @@ use remote_server::auth::RemoteServerAuthContext;
 use remote_server::client::RemoteServerClient;
 use remote_server::manager::RemoteServerExitStatus;
 use remote_server::setup::{
-    parse_uname_output, remote_server_daemon_dir, PreinstallCheckResult, RemotePlatform,
+    parse_uname_output, remote_server_daemon_dir, InstallScriptOptions, PreinstallCheckResult,
+    RemotePlatform,
 };
 use remote_server::ssh::ssh_args;
 use remote_server::transport::{Connection, ControlPath, Error, InstallOutcome, RemoteTransport};
@@ -38,6 +39,7 @@ pub struct SshTransport {
     /// running, in which case Warp must not run `ssh -O exit` against it
     /// on teardown.
     warp_owns_control_master: bool,
+    install_options: InstallScriptOptions,
 }
 
 impl fmt::Debug for SshTransport {
@@ -54,11 +56,13 @@ impl SshTransport {
         socket_path: PathBuf,
         auth_context: Arc<RemoteServerAuthContext>,
         warp_owns_control_master: bool,
+        install_options: InstallScriptOptions,
     ) -> Self {
         Self {
             socket_path,
             auth_context,
             warp_owns_control_master,
+            install_options,
         }
     }
 
@@ -219,7 +223,8 @@ impl RemoteTransport for SshTransport {
 
     fn install_binary(&self) -> Pin<Box<dyn Future<Output = InstallOutcome> + Send>> {
         let socket_path = self.socket_path.clone();
-        Box::pin(async move { installation::install_binary(&socket_path).await })
+        let install_options = self.install_options.clone();
+        Box::pin(async move { installation::install_binary(&socket_path, &install_options).await })
     }
 
     fn connect(

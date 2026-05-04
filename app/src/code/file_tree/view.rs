@@ -49,6 +49,7 @@ use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
 use crate::server::telemetry::TelemetryEvent;
 use crate::terminal::input::InputDropTargetData;
 use crate::terminal::view::{TerminalDropTargetData, TerminalView};
+use crate::terminal::warpify::settings::WarpifySettings;
 use crate::ui_components::icons::Icon;
 use crate::ui_components::item_highlight::{ImageOrIcon, ItemHighlightState};
 #[cfg(feature = "local_fs")]
@@ -1461,7 +1462,7 @@ impl FileTreeView {
     ) {
         use crate::remote_server::manager::RemoteServerManager;
 
-        if !FeatureFlag::SshRemoteServer.is_enabled() {
+        if !WarpifySettings::is_ssh_remote_server_enabled(ctx) {
             return;
         }
 

@@ -18,6 +18,10 @@ fn remote_proxy_command_quotes_identity_key() {
         PathBuf::from("/tmp/control-master.sock"),
         static_auth_context(),
         true,
+        InstallScriptOptions::new(
+            remote_server::setup::default_download_base_url().to_string(),
+            remote_server::setup::default_download_channel().to_string(),
+        ),
     );
 
     let command = transport.remote_proxy_command();
