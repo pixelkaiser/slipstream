@@ -17222,7 +17222,7 @@ impl Workspace {
             // true for Auto SSH Warpification (mode 1) sessions where
             // `connect_session` was called at `InitShell` time.
             let has_remote_server = is_remote
-                && FeatureFlag::SshRemoteServer.is_enabled()
+                && WarpifySettings::is_ssh_remote_server_enabled(ctx)
                 && session_id.is_some_and(|sid| {
                     RemoteServerManager::as_ref(ctx).is_session_potentially_active(sid)
                 });
@@ -22531,6 +22531,9 @@ impl Workspace {
         }
         if *warpify_settings.enable_ssh_warpification.value() {
             context.set.insert(flags::SSH_WARPIFICATION_CONTEXT_FLAG);
+        }
+        if *warpify_settings.use_ssh_tmux_wrapper.value() {
+            context.set.insert(flags::SSH_TMUX_WRAPPER_CONTEXT_FLAG);
         }
 
         if keys_settings.extra_meta_keys.left_alt {

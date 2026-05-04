@@ -153,12 +153,12 @@ fn new_command_executor_for_local_tty_session(
     use wsl_command_executor::WslCommandExecutor;
 
     use super::IsSSHWrapperSession;
-    use crate::features::FeatureFlag;
     use crate::remote_server::manager::RemoteServerManager;
     use crate::settings::DebugSettings;
     use crate::terminal::available_shells::AvailableShells;
     use crate::terminal::model::session::{BootstrapSessionType, ShellLaunchData};
     use crate::terminal::shell::ShellType;
+    use crate::terminal::warpify::settings::WarpifySettings;
 
     // When the remote server feature flag is enabled and the session is an
     // SSH wrapper session, use the remote server executor *if* the manager
@@ -173,7 +173,7 @@ fn new_command_executor_for_local_tty_session(
     // fall through to the existing ControlMaster-based
     // `RemoteCommandExecutor` below. This preserves the fallback behavior
     // described in specs/APP-3797.
-    if FeatureFlag::SshRemoteServer.is_enabled() {
+    if WarpifySettings::is_ssh_remote_server_enabled(ctx) {
         if let IsSSHWrapperSession::Yes { .. } = &session_info.is_ssh_wrapper_session {
             let session_id = session_info.session_id;
             let maybe_client = RemoteServerManager::handle(ctx)
