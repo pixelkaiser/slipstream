@@ -1,7 +1,9 @@
 use super::*;
 use crate::test_util::settings::initialize_settings_for_tests;
 use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
+use serde_json::json;
 use settings::Setting;
+use settings_value::SettingsValue;
 use warpui::{App, SingletonEntity};
 
 #[test]
@@ -98,4 +100,24 @@ fn header_toolbar_chip_selection_custom_empty_reports_all_absent() {
     for item in HeaderToolbarItemKind::all_items() {
         assert!(!config.contains_item(&item));
     }
+}
+
+#[test]
+fn vertical_tabs_remote_host_options_persist_as_remote_host() {
+    assert_eq!(
+        VerticalTabsPrimaryInfo::RemoteHost.to_file_value(),
+        json!("remote_host")
+    );
+    assert_eq!(
+        VerticalTabsPrimaryInfo::from_file_value(&json!("remote_host")),
+        Some(VerticalTabsPrimaryInfo::RemoteHost)
+    );
+    assert_eq!(
+        VerticalTabsCompactSubtitle::RemoteHost.to_file_value(),
+        json!("remote_host")
+    );
+    assert_eq!(
+        VerticalTabsCompactSubtitle::from_file_value(&json!("remote_host")),
+        Some(VerticalTabsCompactSubtitle::RemoteHost)
+    );
 }
