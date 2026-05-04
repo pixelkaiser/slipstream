@@ -1,6 +1,8 @@
 use super::*;
 use crate::test_util::settings::initialize_settings_for_tests;
+use serde_json::json;
 use settings::Setting;
+use settings_value::SettingsValue;
 use warpui::{App, SingletonEntity};
 
 #[test]
@@ -54,5 +56,25 @@ fn show_vertical_tab_panel_in_restored_windows_uses_vertical_tabs_path() {
     assert_eq!(
         ShowVerticalTabPanelInRestoredWindows::toml_key(),
         "show_panel_in_restored_windows"
+    );
+}
+
+#[test]
+fn vertical_tabs_remote_host_options_persist_as_remote_host() {
+    assert_eq!(
+        VerticalTabsPrimaryInfo::RemoteHost.to_file_value(),
+        json!("remote_host")
+    );
+    assert_eq!(
+        VerticalTabsPrimaryInfo::from_file_value(&json!("remote_host")),
+        Some(VerticalTabsPrimaryInfo::RemoteHost)
+    );
+    assert_eq!(
+        VerticalTabsCompactSubtitle::RemoteHost.to_file_value(),
+        json!("remote_host")
+    );
+    assert_eq!(
+        VerticalTabsCompactSubtitle::from_file_value(&json!("remote_host")),
+        Some(VerticalTabsCompactSubtitle::RemoteHost)
     );
 }
