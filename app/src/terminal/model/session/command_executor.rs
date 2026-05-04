@@ -161,10 +161,11 @@ fn new_command_executor_for_local_tty_session(
     use crate::terminal::available_shells::AvailableShells;
     use crate::terminal::model::session::{BootstrapSessionType, ShellLaunchData};
     use crate::terminal::shell::ShellType;
+    use crate::terminal::warpify::settings::WarpifySettings;
 
-    // When the remote server feature flag is enabled and the session is a
-    // legacy SSH session, use the remote server executor *if* the manager
-    // already has a live `Connected` client for this session.
+    // When the remote server feature is enabled for a legacy SSH session,
+    // use the remote server executor *if* the manager already has a live
+    // `Connected` client for this session.
     //
     // By construction this branch is only reached after
     // `ModelEventDispatcher::complete_bootstrapped_session` has gated on
@@ -175,7 +176,7 @@ fn new_command_executor_for_local_tty_session(
     // fall through to the existing ControlMaster-based
     // `RemoteCommandExecutor` below. This preserves the fallback behavior
     // described in specs/APP-3797.
-    if FeatureFlag::SshRemoteServer.is_enabled() {
+    if WarpifySettings::is_ssh_remote_server_enabled(ctx) {
         if let IsLegacySSHSession::Yes { .. } = &session_info.is_legacy_ssh_session {
             let session_id = session_info.session_id;
             let maybe_client = RemoteServerManager::handle(ctx)
