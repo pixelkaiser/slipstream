@@ -402,6 +402,7 @@ pub enum VerticalTabsPrimaryInfo {
     Command,
     WorkingDirectory,
     Branch,
+    RemoteHost,
 }
 
 settings::macros::implement_setting_for_enum!(
@@ -434,6 +435,7 @@ pub enum VerticalTabsCompactSubtitle {
     Branch,
     WorkingDirectory,
     Command,
+    RemoteHost,
 }
 
 settings::macros::implement_setting_for_enum!(
