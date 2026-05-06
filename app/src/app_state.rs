@@ -301,6 +301,8 @@ pub enum LeftPanelDisplayedTab {
     GlobalSearch,
     WarpDrive,
     ConversationListView,
+    #[cfg(not(target_family = "wasm"))]
+    CodexConversations,
 }
 
 impl From<ToolPanelView> for LeftPanelDisplayedTab {
@@ -310,6 +312,8 @@ impl From<ToolPanelView> for LeftPanelDisplayedTab {
             ToolPanelView::GlobalSearch { .. } => LeftPanelDisplayedTab::GlobalSearch,
             ToolPanelView::WarpDrive => LeftPanelDisplayedTab::WarpDrive,
             ToolPanelView::ConversationListView => LeftPanelDisplayedTab::ConversationListView,
+            #[cfg(not(target_family = "wasm"))]
+            ToolPanelView::CodexConversations => LeftPanelDisplayedTab::CodexConversations,
         }
     }
 }

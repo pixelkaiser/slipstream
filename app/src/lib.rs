@@ -17,6 +17,8 @@ mod chip_configurator;
 mod cloud_object;
 mod code;
 mod code_review;
+#[cfg(not(target_family = "wasm"))]
+mod codex_app_server;
 mod coding_entrypoints;
 mod coding_panel_enablement_state;
 mod command_palette;
@@ -136,6 +138,8 @@ use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::aws_credentials::AwsCredentialRefresher as _;
 use crate::ai::mcp::FileBasedMCPManager;
 use crate::ai::mcp::FileMCPWatcher;
+#[cfg(not(target_family = "wasm"))]
+use crate::codex_app_server::CodexAppServerModel;
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 use ::ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ::ai::index::full_source_code_embedding::SyncTask;
@@ -1331,6 +1335,9 @@ pub(crate) fn initialize_app(
         );
         manager
     });
+
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(CodexAppServerModel::new);
 
     ctx.add_singleton_model(AntivirusInfo::new);
 

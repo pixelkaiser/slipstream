@@ -1,10 +1,17 @@
 use std::collections::HashMap;
 
 use super::{
-    artifact_from_fork_proto, AIConversation, AIConversationAutoexecuteMode, AIConversationId,
+    artifact_from_fork_proto, codex_output_status, AIConversation,
+    AIConversationAutoexecuteMode, AIConversationId,
+};
+use crate::ai::agent::task::TaskId;
+use crate::ai::agent::{
+    AIAgentActionResultType, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
+    AIAgentOutputStatus, FinishedAIAgentOutput, RequestCommandOutputResult,
 };
 use crate::ai::artifacts::Artifact;
 use crate::persistence::model::AgentConversationData;
+use chrono::Local;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
@@ -237,5 +244,114 @@ fn fork_artifacts_adds_file_artifacts_to_conversation() {
             description: Some("Daily summary".to_string()),
             size_bytes: Some(42),
         })
+    );
+}
+
+#[test]
+fn codex_output_converts_command_execution_to_command_action() {
+    let task_id = TaskId::new("root-task".to_string());
+    let (status, action_results) = codex_output_status(
+        Some(
+            "Before\n\ncommandExecution: /bin/zsh -lc 'rg foo'\n\nAfter".to_string(),
+        ),
+        false,
+        &task_id,
+    );
+
+    let output = match status {
+        AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success { output },
+        } => output,
+        _ => panic!("expected finished successful output"),
+    };
+    let messages = &output.get().messages;
+
+    assert_eq!(messages.len(), 3);
+    assert!(matches!(
+        messages[0].message,
+        AIAgentOutputMessageType::Text(_)
+    ));
+    let AIAgentOutputMessageType::Action(action) = &messages[1].message else {
+        panic!("expected command action");
+    };
+    let AIAgentActionType::RequestCommandOutput { command, .. } = &action.action else {
+        panic!("expected request command output action");
+    };
+    assert_eq!(command, "/bin/zsh -lc 'rg foo'");
+    assert!(!action.requires_result);
+    assert!(matches!(
+        messages[2].message,
+        AIAgentOutputMessageType::Text(_)
+    ));
+
+    assert_eq!(action_results.len(), 1);
+    assert_eq!(action_results[0].id, action.id);
+    let AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
+        command,
+        output,
+        exit_code,
+        ..
+    }) = &action_results[0].result
+    else {
+        panic!("expected completed command result");
+    };
+    assert_eq!(command, "/bin/zsh -lc 'rg foo'");
+    assert_eq!(output, "");
+    assert!(exit_code.was_successful());
+}
+
+#[test]
+fn append_finished_codex_exchange_stores_command_result_for_restore() {
+    let mut conversation = restored_conversation(None);
+
+    conversation
+        .append_codex_exchange(
+            Some("inspect the repo".to_string()),
+            Some("commandExecution: git status --short".to_string()),
+            None,
+            false,
+            Local::now(),
+        )
+        .unwrap();
+
+    let exchange = conversation.root_task_exchanges().next().unwrap();
+    let action = exchange
+        .output_status
+        .output()
+        .unwrap()
+        .get()
+        .actions()
+        .next()
+        .unwrap()
+        .clone();
+    let result = exchange
+        .input
+        .iter()
+        .find_map(|input| match input {
+            AIAgentInput::ActionResult { result, .. } => Some(result),
+            _ => None,
+        })
+        .unwrap();
+
+    assert_eq!(result.id, action.id);
+}
+
+#[test]
+fn codex_conversation_initial_working_directory_falls_back_to_exchange_cwd() {
+    let mut conversation = AIConversation::new_with_id(AIConversationId::new(), false);
+
+    conversation
+        .append_codex_exchange(
+            Some("what changed?".to_string()),
+            Some("Done".to_string()),
+            Some("/Users/te/dev/warp".to_string()),
+            false,
+            Local::now(),
+        )
+        .unwrap();
+
+    assert_eq!(
+        conversation.initial_working_directory().as_deref(),
+        Some("/Users/te/dev/warp")
     );
 }
