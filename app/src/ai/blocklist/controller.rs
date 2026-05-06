@@ -58,6 +58,8 @@ use crate::ai::document::ai_document_model::{
 };
 use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::AIRequestUsageModel;
+#[cfg(not(target_family = "wasm"))]
+use crate::codex_app_server::CodexAppServerModel;
 use crate::cloud_object::model::persistence::CloudModel;
 use crate::features::FeatureFlag;
 use crate::global_resource_handles::GlobalResourceHandlesProvider;
@@ -1117,6 +1119,32 @@ impl BlocklistAIController {
             .is_viewer();
         if is_viewer {
             log::error!("Viewers should never attempt to send queries directly");
+        }
+
+        #[cfg(not(target_family = "wasm"))]
+        if CodexAppServerModel::as_ref(ctx).is_codex_conversation(conversation_id) {
+            if !additional_attachments.is_empty() {
+                log::warn!(
+                    "Ignoring attachments for Codex app-server conversation {conversation_id:?}"
+                );
+            }
+            let submitted = CodexAppServerModel::handle(ctx).update(ctx, |codex_model, ctx| {
+                codex_model.submit_conversation_prompt(
+                    conversation_id,
+                    query,
+                    self.terminal_view_id,
+                    ctx,
+                )
+            });
+            if submitted {
+                ctx.emit(BlocklistAIControllerEvent::SentRequest {
+                    contains_user_query: true,
+                    is_queued_prompt,
+                    model_id: LLMId::from("codex"),
+                    stream_id: ResponseStreamId::new_local(),
+                });
+            }
+            return;
         }
 
         // Ensure we capture all pending context blocks before promoting and attaching them to the conversation.

@@ -1,5 +1,7 @@
 mod build_plan_migration_modal;
 pub(crate) mod cloud_agent_capacity_modal;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod codex_conversations;
 pub(crate) mod codex_modal;
 pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
@@ -108,8 +110,8 @@ use warpui::{
 
 use self::vertical_tabs::telemetry::{VerticalTabsDisplayOption, VerticalTabsTelemetryEvent};
 use self::vertical_tabs::{
-    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID, VerticalTabsPanelState, render_detail_sidecar,
-    render_settings_popup,
+    render_detail_sidecar, render_settings_popup, VerticalTabsPanelState,
+    VERTICAL_TABS_SETTINGS_BUTTON_POSITION_ID,
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use super::action::AutoCloudHandoffTrigger;
@@ -155,14 +157,14 @@ use crate::ai::agent_conversations_model::AgentConversationsModelEvent;
 use crate::ai::agent_conversations_model::{
     AgentConversationNavigationSubject, AgentConversationsModel,
 };
-use crate::ai::agent_management::AgentManagementEvent;
-use crate::ai::agent_management::notifications::NotificationFilter;
 use crate::ai::agent_management::notifications::toast_stack::AgentNotificationToastStack;
 use crate::ai::agent_management::notifications::view::{
     NotificationMailboxView, NotificationMailboxViewEvent,
 };
+use crate::ai::agent_management::notifications::NotificationFilter;
 use crate::ai::agent_management::telemetry::AgentManagementTelemetryEvent;
 use crate::ai::agent_management::view::{AgentManagementView, AgentManagementViewEvent};
+use crate::ai::agent_management::AgentManagementEvent;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::ambient_agents::telemetry::HandoffEntryPoint;
 use crate::ai::ambient_agents::telemetry::{CloudAgentTelemetryEvent, CloudModeEntryPoint};
@@ -217,7 +219,7 @@ use crate::auth::auth_state::AuthState;
 use crate::auth::auth_view_modal::{AuthRedirectPayload, AuthView, AuthViewEvent, AuthViewVariant};
 use crate::auth::AuthStateProvider;
 use crate::autoupdate::{
-    AutoupdateState, AutoupdateStateEvent, RelaunchModel, is_incoming_version_past_current,
+    is_incoming_version_past_current, AutoupdateState, AutoupdateStateEvent, RelaunchModel,
 };
 use crate::banner::BannerState;
 use crate::billing::shared_objects_creation_denied_modal::{
@@ -287,8 +289,8 @@ use crate::quit_warning::UnsavedStateSummary;
 use crate::referral_theme_status::ReferralThemeEvent;
 use crate::remote_server::manager::RemoteServerManager;
 use crate::resource_center::{
-    ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
     mark_feature_used_and_write_to_user_defaults, skip_tips_and_write_to_user_defaults,
+    ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
 };
 use crate::reward_view::{RewardEvent, RewardKind, RewardView};
 use crate::root_view::{quake_mode_window_id, NewWorkspaceSource, OpenLaunchConfigArg};
@@ -325,6 +327,8 @@ use crate::settings::{
     MonospaceFontSize, PaneSettings, PrivacySettings, SelectionSettings, Settings, SshSettings,
     ThemeSettings,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::settings::{CodexAppServerSettings, CodexAppServerSettingsChangedEvent};
 use crate::settings_view::environments_page::EnvironmentsPage;
 use crate::settings_view::handoff_environment_creation_modal::{
     HandoffEnvironmentCreationModal, HandoffEnvironmentCreationModalEvent,
@@ -1976,16 +1980,12 @@ impl Workspace {
                     && ai_settings.default_tab_config_path() == path.to_string_lossy();
                 if is_removed_default {
                     AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                        report_if_error!(
-                            settings
-                                .default_session_mode_internal
-                                .set_value(DefaultSessionMode::Terminal, ctx)
-                        );
-                        report_if_error!(
-                            settings
-                                .default_tab_config_path
-                                .set_value(String::new(), ctx)
-                        );
+                        report_if_error!(settings
+                            .default_session_mode_internal
+                            .set_value(DefaultSessionMode::Terminal, ctx));
+                        report_if_error!(settings
+                            .default_tab_config_path
+                            .set_value(String::new(), ctx));
                     });
                 }
                 if let Err(e) = std::fs::remove_file(path) {
@@ -2907,6 +2907,23 @@ impl Workspace {
                 ctx.notify();
             }
         });
+
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_model(
+            &CodexAppServerSettings::handle(ctx),
+            |me, _, event, ctx| match event {
+                CodexAppServerSettingsChangedEvent::CodexAppServerEnabled { .. } => {
+                    me.update_left_panel_available_views(ctx);
+                    ctx.notify();
+                }
+                CodexAppServerSettingsChangedEvent::CodexAppServerUrl { .. }
+                | CodexAppServerSettingsChangedEvent::CodexImportedProjectPaths { .. }
+                | CodexAppServerSettingsChangedEvent::CodexImportedThreadIds { .. }
+                | CodexAppServerSettingsChangedEvent::CodexAppServerBearerToken { .. } => {
+                    ctx.notify();
+                }
+            },
+        );
 
         ctx.subscribe_to_model(&WarpDriveSettings::handle(ctx), |me, _, event, ctx| {
             if let WarpDriveSettingsChangedEvent::EnableWarpDrive { .. } = event {
@@ -3839,6 +3856,8 @@ impl Workspace {
                 },
                 LeftPanelDisplayedTab::WarpDrive => ToolPanelView::WarpDrive,
                 LeftPanelDisplayedTab::ConversationListView => ToolPanelView::ConversationListView,
+                #[cfg(not(target_family = "wasm"))]
+                LeftPanelDisplayedTab::CodexConversations => ToolPanelView::CodexConversations,
             };
             lp.restore_active_view_from_snapshot(active_view, ctx);
             lp.set_active_pane_group(pane_group.clone(), &self.working_directories_model, ctx);
@@ -5649,11 +5668,9 @@ impl Workspace {
             right,
         };
         TabSettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(
-                settings
-                    .header_toolbar_chip_selection
-                    .set_value(selection, ctx)
-            );
+            report_if_error!(settings
+                .header_toolbar_chip_selection
+                .set_value(selection, ctx));
         });
     }
 
@@ -5701,11 +5718,9 @@ impl Workspace {
         if !FeatureFlag::ConfigurableToolbar.is_enabled() {
             return;
         }
-        let items = vec![
-            MenuItemFields::new("Re-arrange toolbar items")
-                .with_on_select_action(WorkspaceAction::OpenHeaderToolbarEditor)
-                .into_item(),
-        ];
+        let items = vec![MenuItemFields::new("Re-arrange toolbar items")
+            .with_on_select_action(WorkspaceAction::OpenHeaderToolbarEditor)
+            .into_item()];
         self.header_toolbar_context_menu
             .update(ctx, |menu, ctx| menu.set_items(items, ctx));
         self.show_header_toolbar_context_menu = Some(position);
@@ -7849,21 +7864,17 @@ impl Workspace {
 
     fn toggle_recording_mode(&self, ctx: &mut ViewContext<Self>) {
         DebugSettings::handle(ctx).update(ctx, |debug_settings, settings_ctx| {
-            report_if_error!(
-                debug_settings
-                    .recording_mode
-                    .toggle_and_save_value(settings_ctx)
-            );
+            report_if_error!(debug_settings
+                .recording_mode
+                .toggle_and_save_value(settings_ctx));
         });
     }
 
     fn toggle_in_band_generators(&self, ctx: &mut ViewContext<Self>) {
         DebugSettings::handle(ctx).update(ctx, |debug_settings, settings_ctx| {
-            report_if_error!(
-                debug_settings
-                    .are_in_band_generators_for_all_sessions_enabled
-                    .toggle_and_save_value(settings_ctx)
-            );
+            report_if_error!(debug_settings
+                .are_in_band_generators_for_all_sessions_enabled
+                .toggle_and_save_value(settings_ctx));
         });
     }
 
@@ -8026,11 +8037,9 @@ impl Workspace {
 
         // Mark that we've done the one-time auto-open
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(
-                settings
-                    .has_auto_opened_conversation_list
-                    .set_value(true, ctx)
-            );
+            report_if_error!(settings
+                .has_auto_opened_conversation_list
+                .set_value(true, ctx));
         });
     }
 
@@ -9938,11 +9947,9 @@ impl Workspace {
 
     pub fn toggle_block_snackbar(&mut self, ctx: &mut ViewContext<Self>) {
         BlockListSettings::handle(ctx).update(ctx, |blocklist_settings, ctx| {
-            report_if_error!(
-                blocklist_settings
-                    .snackbar_enabled
-                    .toggle_and_save_value(ctx)
-            );
+            report_if_error!(blocklist_settings
+                .snackbar_enabled
+                .toggle_and_save_value(ctx));
         });
     }
 
@@ -9954,11 +9961,9 @@ impl Workspace {
 
     pub fn toggle_syntax_highlighting(&mut self, ctx: &mut ViewContext<Self>) {
         InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
-            report_if_error!(
-                input_settings
-                    .syntax_highlighting
-                    .toggle_and_save_value(ctx)
-            );
+            report_if_error!(input_settings
+                .syntax_highlighting
+                .toggle_and_save_value(ctx));
         });
     }
 
@@ -9973,11 +9978,9 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         AccessibilitySettings::handle(ctx).update(ctx, |accessibility_settings, ctx| {
-            report_if_error!(
-                accessibility_settings
-                    .a11y_verbosity
-                    .set_value(verbosity, ctx)
-            );
+            report_if_error!(accessibility_settings
+                .a11y_verbosity
+                .set_value(verbosity, ctx));
         });
     }
 
@@ -16764,11 +16767,9 @@ impl Workspace {
 
     fn reset_zoom(&mut self, ctx: &mut ViewContext<Self>) {
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(
-                window_settings
-                    .zoom_level
-                    .set_value(ZoomLevel::default_value(), ctx)
-            );
+            report_if_error!(window_settings
+                .zoom_level
+                .set_value(ZoomLevel::default_value(), ctx));
         });
     }
 
@@ -16788,11 +16789,9 @@ impl Workspace {
         };
 
         WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
-            report_if_error!(
-                window_settings
-                    .zoom_level
-                    .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx)
-            );
+            report_if_error!(window_settings
+                .zoom_level
+                .set_value(crate::window_settings::ZoomLevel::VALUES[next_index], ctx));
         });
     }
 
@@ -16805,11 +16804,9 @@ impl Workspace {
 
     fn set_terminal_font_size(&mut self, new_font_size: f32, ctx: &mut ViewContext<Self>) {
         FontSettings::handle(ctx).update(ctx, |font_settings, ctx| {
-            report_if_error!(
-                font_settings
-                    .monospace_font_size
-                    .set_value(new_font_size, ctx)
-            );
+            report_if_error!(font_settings
+                .monospace_font_size
+                .set_value(new_font_size, ctx));
         });
     }
 
@@ -17105,8 +17102,8 @@ impl Workspace {
     }
 
     fn handle_codex_modal_event(&mut self, event: &CodexModalEvent, ctx: &mut ViewContext<Self>) {
-        use crate::AIExecutionProfilesModel;
         use crate::ai::blocklist::agent_view::AgentViewEntryOrigin;
+        use crate::AIExecutionProfilesModel;
 
         match event {
             CodexModalEvent::Close => {
@@ -17905,6 +17902,8 @@ impl Workspace {
                         ToolPanelView::GlobalSearch { .. } => "Global search",
                         ToolPanelView::WarpDrive => "Warp Drive",
                         ToolPanelView::ConversationListView => "Agent conversations",
+                        #[cfg(not(target_family = "wasm"))]
+                        ToolPanelView::CodexConversations => "Codex conversations",
                     }
                 } else {
                     "Tools panel"
@@ -17959,6 +17958,8 @@ impl Workspace {
                 ToolPanelView::GlobalSearch { .. } => "Global search",
                 ToolPanelView::WarpDrive => "Warp Drive",
                 ToolPanelView::ConversationListView => "Agent conversations",
+                #[cfg(not(target_family = "wasm"))]
+                ToolPanelView::CodexConversations => "Codex conversations",
             }
         } else {
             "Tools panel"
@@ -20932,6 +20933,10 @@ impl Workspace {
         {
             views.push(ToolPanelView::ConversationListView);
         }
+        #[cfg(not(target_family = "wasm"))]
+        if *CodexAppServerSettings::as_ref(ctx).enabled.value() {
+            views.push(ToolPanelView::CodexConversations);
+        }
 
         if cfg!(feature = "local_fs") && *CodeSettings::as_ref(ctx).show_project_explorer.value() {
             views.push(ToolPanelView::ProjectExplorer);
@@ -21098,16 +21103,12 @@ impl TypedActionView for Workspace {
                         } else {
                             // Config missing or deleted — clear and fall through to Terminal.
                             AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                                report_if_error!(
-                                    settings
-                                        .default_session_mode_internal
-                                        .set_value(DefaultSessionMode::Terminal, ctx)
-                                );
-                                report_if_error!(
-                                    settings
-                                        .default_tab_config_path
-                                        .set_value(String::new(), ctx)
-                                );
+                                report_if_error!(settings
+                                    .default_session_mode_internal
+                                    .set_value(DefaultSessionMode::Terminal, ctx));
+                                report_if_error!(settings
+                                    .default_tab_config_path
+                                    .set_value(String::new(), ctx));
                             });
                             self.add_terminal_tab(false, ctx);
                         }
@@ -21226,11 +21227,9 @@ impl TypedActionView for Workspace {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.default_session_mode_internal.set_value(*mode, ctx));
                     if let Some(path) = tab_config_path {
-                        report_if_error!(
-                            settings
-                                .default_tab_config_path
-                                .set_value(path.to_string_lossy().into_owned(), ctx)
-                        );
+                        report_if_error!(settings
+                            .default_tab_config_path
+                            .set_value(path.to_string_lossy().into_owned(), ctx));
                     }
                 });
                 #[cfg(feature = "local_tty")]
