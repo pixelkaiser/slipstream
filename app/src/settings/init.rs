@@ -36,10 +36,10 @@ use super::{
     cloud_preferences::CloudPreferencesSettings, initializer::SettingsInitializer,
     native_preference::NativePreferenceSettings, AISettings, AccessibilitySettings,
     AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
-    CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent,
-    GPUSettings, InputBoxType, InputModeSettings, InputSettings, PaneSettings,
-    SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
-    VimBannerSettings, WarpDrivePrivacySettings,
+    CodeSettings, CodexAppServerSettings, DebugSettings, EmacsBindingsSettings, FontSettings,
+    FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings, InputSettings,
+    PaneSettings, SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings,
+    ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
 };
 
 pub struct UserDefaultsOnStartup {
@@ -69,6 +69,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     CommandSearchSettings::register(ctx);
     AliasExpansionSettings::register(ctx);
     CodeSettings::register(ctx);
+    CodexAppServerSettings::register(ctx);
     LigatureSettings::register(ctx);
     GPUSettings::register(ctx);
     ChangelogSettings::register(ctx);
@@ -406,7 +407,9 @@ fn migrate_native_settings_to_settings_file(ctx: &mut AppContext) {
         ))));
     }
 
-    log::info!("Settings file migration complete — migrated {migrated_count} settings, {failed_count} failed");
+    log::info!(
+        "Settings file migration complete — migrated {migrated_count} settings, {failed_count} failed"
+    );
 
     // Record the migration so it won't re-run if the user deletes the TOML
     // file. This marker is written unconditionally — for new users the native

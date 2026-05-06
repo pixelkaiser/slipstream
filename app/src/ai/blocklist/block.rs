@@ -1800,6 +1800,19 @@ impl AIBlock {
     }
 
     fn handle_updated_output(&mut self, output: &AIAgentOutput, ctx: &mut ViewContext<Self>) {
+        let action_result_inputs = self
+            .model
+            .inputs_to_render(ctx)
+            .iter()
+            .filter(|input| matches!(input, AIAgentInput::ActionResult { .. }))
+            .cloned()
+            .collect_vec();
+        if !action_result_inputs.is_empty() {
+            self.action_model.update(ctx, |action_model, _ctx| {
+                action_model.restore_action_results_from_inputs(&action_result_inputs);
+            });
+        }
+
         // Ensure ui state handles are initialized for todo operation output messages.
         for message in &output.messages {
             if let AIAgentOutputMessageType::TodoOperation(TodoOperation::UpdateTodos { .. }) =

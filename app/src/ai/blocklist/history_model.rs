@@ -651,6 +651,80 @@ impl BlocklistAIHistoryModel {
         Ok(())
     }
 
+    pub(crate) fn append_codex_exchange(
+        &mut self,
+        conversation_id: AIConversationId,
+        query: Option<String>,
+        output_text: Option<String>,
+        working_directory: Option<String>,
+        is_streaming: bool,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<AIAgentExchangeId, UpdateHistoryError> {
+        let conversation = self
+            .conversations_by_id
+            .get_mut(&conversation_id)
+            .ok_or(UpdateHistoryError::ConversationNotFound(conversation_id))?;
+        let prev_status = conversation.status().clone();
+        let exchange_id = conversation.append_codex_exchange(
+            query,
+            output_text,
+            working_directory,
+            is_streaming,
+            Local::now(),
+        )?;
+        ctx.emit(BlocklistAIHistoryEvent::AppendedExchange {
+            exchange_id,
+            task_id: conversation.get_root_task_id().clone(),
+            terminal_view_id,
+            conversation_id,
+            is_hidden: false,
+            response_stream_id: None,
+        });
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
+            conversation_id,
+            terminal_view_id,
+            update: ConversationStatusUpdate::Changed {
+                prev_status,
+            },
+            new_status: conversation.status().clone(),
+        });
+        Ok(exchange_id)
+    }
+
+    pub(crate) fn update_codex_exchange_output(
+        &mut self,
+        conversation_id: AIConversationId,
+        exchange_id: AIAgentExchangeId,
+        output_text: String,
+        is_finished: bool,
+        is_error: bool,
+        terminal_view_id: EntityId,
+        ctx: &mut ModelContext<Self>,
+    ) -> Result<(), UpdateHistoryError> {
+        let conversation = self
+            .conversations_by_id
+            .get_mut(&conversation_id)
+            .ok_or(UpdateHistoryError::ConversationNotFound(conversation_id))?;
+        let prev_status = conversation.status().clone();
+        conversation.update_codex_exchange_output(exchange_id, output_text, is_finished, is_error)?;
+        ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+            exchange_id,
+            terminal_view_id,
+            conversation_id,
+            is_hidden: false,
+        });
+        if is_finished && prev_status != *conversation.status() {
+            ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id,
+                terminal_view_id,
+                update: ConversationStatusUpdate::Changed { prev_status },
+                new_status: conversation.status().clone(),
+            });
+        }
+        Ok(())
+    }
+
     pub fn restore_conversations(
         &mut self,
         terminal_view_id: EntityId,
@@ -706,6 +780,11 @@ impl BlocklistAIHistoryModel {
             terminal_view_id,
             conversation_ids,
         });
+    }
+
+    pub(crate) fn cache_external_conversation(&mut self, conversation: AIConversation) {
+        self.conversations_by_id
+            .insert(conversation.id(), conversation);
     }
 
     /// Sets the active conversation ID, transferring ownership from any other
