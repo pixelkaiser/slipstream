@@ -139,6 +139,8 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(|_| ActiveAgentViewsModel::new());
     app.add_singleton_model(AgentNotificationsModel::new);
     app.add_singleton_model(AgentConversationsModel::new);
+    #[cfg(not(target_family = "wasm"))]
+    app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
     app.add_singleton_model(SessionPermissionsManager::new);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(HarnessAvailabilityModel::new);
@@ -2165,6 +2167,45 @@ fn find_non_following_tab_index(workspace: &Workspace, ctx: &AppContext) -> usiz
             )
         })
         .expect("Expected a non-following tab")
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn compute_left_panel_views_hides_codex_conversations_when_disabled() {
+    let _conversation_list_guard =
+        FeatureFlag::AgentViewConversationListView.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        app.update(|ctx| {
+            let views = Workspace::compute_left_panel_views(ctx);
+            assert!(!views.contains(&ToolPanelView::CodexConversations));
+        });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn compute_left_panel_views_shows_codex_conversations_when_enabled() {
+    use ::settings::Setting as _;
+    use warpui::SingletonEntity as _;
+
+    let _conversation_list_guard =
+        FeatureFlag::AgentViewConversationListView.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        app.update(|ctx| {
+            crate::settings::CodexAppServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings.enabled.set_value(true, ctx).unwrap();
+            });
+
+            let views = Workspace::compute_left_panel_views(ctx);
+            assert!(views.contains(&ToolPanelView::CodexConversations));
+        });
+    });
 }
 
 #[test]

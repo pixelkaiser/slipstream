@@ -30,6 +30,10 @@ use super::settings_page::{
 use super::{features, SettingsAction};
 use super::{flags, DisplayCount};
 use super::{SettingsSection, ToggleSettingActionPair};
+#[cfg(not(target_family = "wasm"))]
+use crate::codex_app_server::{
+    codex_start_command, normalize_codex_app_server_url, CodexAppServerModel,
+};
 use crate::editor::{
     Event as EditorEvent, SingleLineEditorOptions, TextOptions,
     ACCEPT_AUTOSUGGESTION_KEYBINDING_NAME,
@@ -56,6 +60,10 @@ use crate::settings::{
     VimStatusBar, VimUnnamedSystemClipboard, DEFAULT_QUAKE_MODE_SIZE_PERCENTAGES,
     QUAKE_WINDOW_AUTOHIDE_SUPPORTED,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::settings::{
+    CodexAppServerEnabled, CodexAppServerSettings, CodexAppServerSettingsChangedEvent,
+};
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
 };
@@ -81,7 +89,9 @@ use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
 use crate::util::bindings::{
     keybinding_name_to_display_string, reset_keybinding_to_default, set_custom_keybinding,
 };
-use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
+use crate::view_components::{
+    Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
+};
 use crate::workspace::tab_settings::{NewTabPlacement, TabSettings};
 use crate::workspace::WorkspaceAction;
 use crate::{appearance::Appearance, settings::native_preference::NativePreferenceSettings};
@@ -92,6 +102,8 @@ use crate::{root_view::QuakeModePinPosition, workspace::tab_settings::TabSetting
 use ::settings::{Setting, ToggleableSetting};
 use std::cell::RefCell;
 use std::collections::HashMap;
+#[cfg(not(target_family = "wasm"))]
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use strum::IntoEnumIterator;
@@ -644,6 +656,14 @@ pub enum FeaturesPageAction {
     ToggleAutoOpenCodeReviewPane,
     ToggleShowTerminalInputMessageLine,
     ToggleAgentInAppNotifications,
+    #[cfg(not(target_family = "wasm"))]
+    ToggleCodex,
+    #[cfg(not(target_family = "wasm"))]
+    SetCodexServerUrl,
+    #[cfg(not(target_family = "wasm"))]
+    SetCodexBearerToken,
+    #[cfg(not(target_family = "wasm"))]
+    RefreshCodexConnection,
     MakeWarpDefaultTerminal,
 }
 
@@ -1155,6 +1175,29 @@ impl FeaturesPageAction {
                 action: "ToggleAgentInAppNotifications".to_string(),
                 value: to_string(*AISettings::as_ref(ctx).show_agent_notifications),
             },
+            #[cfg(not(target_family = "wasm"))]
+            Self::ToggleCodex => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleCodex".to_string(),
+                value: to_string(*CodexAppServerSettings::as_ref(ctx).enabled.value()),
+            },
+            #[cfg(not(target_family = "wasm"))]
+            Self::SetCodexServerUrl => TelemetryEvent::FeaturesPageAction {
+                action: "SetCodexServerUrl".to_string(),
+                value: CodexAppServerSettings::as_ref(ctx)
+                    .server_url
+                    .value()
+                    .clone(),
+            },
+            #[cfg(not(target_family = "wasm"))]
+            Self::SetCodexBearerToken => TelemetryEvent::FeaturesPageAction {
+                action: "SetCodexBearerToken".to_string(),
+                value: "set".to_string(),
+            },
+            #[cfg(not(target_family = "wasm"))]
+            Self::RefreshCodexConnection => TelemetryEvent::FeaturesPageAction {
+                action: "RefreshCodexConnection".to_string(),
+                value: String::new(),
+            },
         }
     }
 }
@@ -1221,6 +1264,17 @@ pub struct FeaturesPageView {
 
     mouse_scroll_input_editor: ViewHandle<EditorView>,
     valid_mouse_scroll_multiplier: bool,
+
+    #[cfg(not(target_family = "wasm"))]
+    codex_server_url_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    codex_bearer_token_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    codex_import_project_editor: ViewHandle<SubmittableTextInput>,
+    #[cfg(not(target_family = "wasm"))]
+    codex_import_thread_editor: ViewHandle<SubmittableTextInput>,
+    #[cfg(not(target_family = "wasm"))]
+    valid_codex_server_url: bool,
 
     // Whether or not the SSH wrapper value was changed while the page has been
     // open.
@@ -1616,6 +1670,24 @@ impl TypedActionView for FeaturesPageView {
             ToggleAgentInAppNotifications => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.show_agent_notifications.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            ToggleCodex => {
+                CodexAppServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.enabled.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            SetCodexServerUrl => self.set_codex_server_url(ctx),
+            #[cfg(not(target_family = "wasm"))]
+            SetCodexBearerToken => self.set_codex_bearer_token(ctx),
+            #[cfg(not(target_family = "wasm"))]
+            RefreshCodexConnection => {
+                CodexAppServerModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.refresh(ctx);
                 });
                 ctx.notify();
             }
@@ -2077,6 +2149,39 @@ impl FeaturesPageView {
             }
         });
 
+        #[cfg(not(target_family = "wasm"))]
+        {
+            ctx.subscribe_to_model(&CodexAppServerSettings::handle(ctx), |me, _, event, ctx| {
+                match event {
+                    CodexAppServerSettingsChangedEvent::CodexAppServerUrl { .. } => {
+                        let url = CodexAppServerSettings::as_ref(ctx)
+                            .server_url
+                            .value()
+                            .clone();
+                        me.codex_server_url_editor.update(ctx, move |editor, ctx| {
+                            editor.set_buffer_text(&url, ctx);
+                        });
+                    }
+                    CodexAppServerSettingsChangedEvent::CodexAppServerBearerToken { .. } => {
+                        let token = CodexAppServerSettings::as_ref(ctx)
+                            .bearer_token
+                            .value()
+                            .clone();
+                        me.codex_bearer_token_editor
+                            .update(ctx, move |editor, ctx| {
+                                editor.set_buffer_text(&token, ctx);
+                            });
+                    }
+                    _ => {}
+                }
+                ctx.notify();
+            });
+
+            ctx.subscribe_to_model(&CodexAppServerModel::handle(ctx), |_, _, _, ctx| {
+                ctx.notify();
+            });
+        }
+
         let pin_position_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
 
@@ -2307,6 +2412,70 @@ impl FeaturesPageView {
             me.handle_mouse_scroll_input_editor_event(event, ctx);
         });
 
+        #[cfg(not(target_family = "wasm"))]
+        let codex_server_url_editor = ctx.add_typed_action_view(|ctx| {
+            let mut editor = EditorView::single_line(width_and_height_editor_options.clone(), ctx);
+            editor.set_placeholder_text("ws://127.0.0.1:4500", ctx);
+            editor
+        });
+        #[cfg(not(target_family = "wasm"))]
+        codex_server_url_editor.update(ctx, |editor, ctx| {
+            let url = CodexAppServerSettings::as_ref(ctx)
+                .server_url
+                .value()
+                .clone();
+            editor.set_buffer_text(&url, ctx);
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&codex_server_url_editor, |me, _, event, ctx| {
+            me.handle_codex_server_url_editor_event(event, ctx);
+        });
+
+        #[cfg(not(target_family = "wasm"))]
+        let codex_bearer_token_editor = ctx.add_typed_action_view(|ctx| {
+            let mut editor = EditorView::single_line(width_and_height_editor_options.clone(), ctx);
+            editor.set_placeholder_text("Optional bearer token", ctx);
+            editor
+        });
+        #[cfg(not(target_family = "wasm"))]
+        codex_bearer_token_editor.update(ctx, |editor, ctx| {
+            let token = CodexAppServerSettings::as_ref(ctx)
+                .bearer_token
+                .value()
+                .clone();
+            editor.set_buffer_text(&token, ctx);
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&codex_bearer_token_editor, |me, _, event, ctx| {
+            me.handle_codex_bearer_token_editor_event(event, ctx);
+        });
+
+        #[cfg(not(target_family = "wasm"))]
+        let codex_import_project_editor = ctx.add_typed_action_view(|ctx| {
+            let mut input =
+                SubmittableTextInput::new(ctx).validate_on_submit(|value| !value.trim().is_empty());
+            input.set_placeholder_text("Import project path", ctx);
+            input.set_outer_margins(8., 0., ctx);
+            input
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&codex_import_project_editor, |me, _, event, ctx| {
+            me.handle_codex_import_project_event(event, ctx);
+        });
+
+        #[cfg(not(target_family = "wasm"))]
+        let codex_import_thread_editor = ctx.add_typed_action_view(|ctx| {
+            let mut input =
+                SubmittableTextInput::new(ctx).validate_on_submit(|value| !value.trim().is_empty());
+            input.set_placeholder_text("Import Codex thread ID", ctx);
+            input.set_outer_margins(8., 0., ctx);
+            input
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&codex_import_thread_editor, |me, _, event, ctx| {
+            me.handle_codex_import_thread_event(event, ctx);
+        });
+
         let notifications_long_running_threshold_editor = {
             ctx.add_typed_action_view(|ctx| {
                 let options = SingleLineEditorOptions {
@@ -2417,6 +2586,17 @@ impl FeaturesPageView {
 
             mouse_scroll_input_editor,
             valid_mouse_scroll_multiplier: true,
+
+            #[cfg(not(target_family = "wasm"))]
+            codex_server_url_editor,
+            #[cfg(not(target_family = "wasm"))]
+            codex_bearer_token_editor,
+            #[cfg(not(target_family = "wasm"))]
+            codex_import_project_editor,
+            #[cfg(not(target_family = "wasm"))]
+            codex_import_thread_editor,
+            #[cfg(not(target_family = "wasm"))]
+            valid_codex_server_url: true,
 
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             force_x11_changed: false,
@@ -2743,6 +2923,10 @@ impl FeaturesPageView {
             system_widgets.push(Box::new(GraphicsBackendWidget::default()));
         }
 
+        #[cfg(not(target_family = "wasm"))]
+        let codex_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
+            vec![Box::new(CodexWidget::default())];
+
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
             if windowing_system_is_customizable(ctx) {
@@ -2762,6 +2946,8 @@ impl FeaturesPageView {
                 "Workflows",
                 vec![Box::new(WorkflowsInCommandSearch::default())],
             ),
+            #[cfg(not(target_family = "wasm"))]
+            Category::new("Codex", codex_widgets),
             Category::new("System", system_widgets),
         ];
 
@@ -3040,6 +3226,114 @@ impl FeaturesPageView {
                 );
             })
         }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_codex_server_url_editor_event(
+        &mut self,
+        event: &EditorEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            EditorEvent::Edited(_) => {
+                let input = self.codex_server_url_editor.as_ref(ctx).buffer_text(ctx);
+                self.valid_codex_server_url = normalize_codex_app_server_url(&input).is_ok();
+                ctx.notify();
+            }
+            EditorEvent::Enter | EditorEvent::Blurred => self.set_codex_server_url(ctx),
+            EditorEvent::Escape => ctx.emit(FeaturesSettingsPageEvent::FocusModal),
+            _ => {}
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn set_codex_server_url(&mut self, ctx: &mut ViewContext<Self>) {
+        let input = self.codex_server_url_editor.as_ref(ctx).buffer_text(ctx);
+        let normalized = match normalize_codex_app_server_url(&input) {
+            Ok(url) => url.to_string(),
+            Err(_) => {
+                self.valid_codex_server_url = false;
+                ctx.notify();
+                return;
+            }
+        };
+
+        self.valid_codex_server_url = true;
+        self.codex_server_url_editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(&normalized, ctx);
+        });
+        CodexAppServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+            report_if_error!(settings.server_url.set_value(normalized, ctx));
+        });
+        ctx.notify();
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_codex_bearer_token_editor_event(
+        &mut self,
+        event: &EditorEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            EditorEvent::Enter | EditorEvent::Blurred => self.set_codex_bearer_token(ctx),
+            EditorEvent::Escape => ctx.emit(FeaturesSettingsPageEvent::FocusModal),
+            _ => {}
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn set_codex_bearer_token(&mut self, ctx: &mut ViewContext<Self>) {
+        let token = self.codex_bearer_token_editor.as_ref(ctx).buffer_text(ctx);
+        CodexAppServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+            report_if_error!(settings
+                .bearer_token
+                .set_value(token.trim().to_string(), ctx));
+        });
+        ctx.notify();
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_codex_import_project_event(
+        &mut self,
+        event: &SubmittableTextInputEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            SubmittableTextInputEvent::Submit(path) => {
+                let path = PathBuf::from(path.trim());
+                CodexAppServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut paths = settings.imported_project_paths.value().clone();
+                    if !paths.contains(&path) {
+                        paths.push(path);
+                        report_if_error!(settings.imported_project_paths.set_value(paths, ctx));
+                    }
+                });
+            }
+            SubmittableTextInputEvent::Escape => ctx.emit(FeaturesSettingsPageEvent::FocusModal),
+        }
+        ctx.notify();
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_codex_import_thread_event(
+        &mut self,
+        event: &SubmittableTextInputEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            SubmittableTextInputEvent::Submit(thread_id) => {
+                let thread_id = thread_id.trim().to_string();
+                CodexAppServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut thread_ids = settings.imported_thread_ids.value().clone();
+                    if !thread_ids.contains(&thread_id) {
+                        thread_ids.push(thread_id);
+                        report_if_error!(settings.imported_thread_ids.set_value(thread_ids, ctx));
+                    }
+                });
+            }
+            SubmittableTextInputEvent::Escape => ctx.emit(FeaturesSettingsPageEvent::FocusModal),
+        }
+        ctx.notify();
     }
 
     fn set_height_ratio(&mut self, ctx: &mut ViewContext<Self>) {
@@ -4167,6 +4461,233 @@ fn init_display_count_dropdown(
         }
         _ => dropdown.set_selected_by_name("Active Screen", ctx),
     };
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Default)]
+struct CodexWidget {
+    switch_state: SwitchStateHandle,
+    refresh_button: MouseStateHandle,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl CodexWidget {
+    fn render_editor_row(
+        &self,
+        label: &'static str,
+        editor: ViewHandle<EditorView>,
+        appearance: &Appearance,
+        border_color: Option<Fill>,
+    ) -> Box<dyn Element> {
+        let input = appearance
+            .ui_builder()
+            .text_input(editor)
+            .with_style(UiComponentStyles {
+                padding: Some(Coords::uniform(8.)),
+                background: Some(appearance.theme().surface_2().into()),
+                border_color,
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        Flex::column()
+            .with_spacing(6.)
+            .with_child(
+                Text::new_inline(label, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                    .with_color(appearance.theme().foreground().into_solid())
+                    .finish(),
+            )
+            .with_child(input)
+            .finish()
+    }
+
+    fn render_imports(&self, view: &FeaturesPageView, appearance: &Appearance) -> Box<dyn Element> {
+        Flex::column()
+            .with_spacing(8.)
+            .with_child(
+                Text::new_inline("Imports", appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                    .with_color(appearance.theme().foreground().into_solid())
+                    .finish(),
+            )
+            .with_child(ChildView::new(&view.codex_import_project_editor).finish())
+            .with_child(ChildView::new(&view.codex_import_thread_editor).finish())
+            .finish()
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl SettingsWidget for CodexWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "codex app server conversations threads websocket openai import project thread"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let settings = CodexAppServerSettings::as_ref(app);
+        let enabled = *settings.enabled.value();
+        let toggle = render_body_item::<FeaturesPageAction>(
+            "Codex".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                CodexAppServerEnabled::storage_key(),
+                CodexAppServerEnabled::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(enabled)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleCodex);
+                })
+                .finish(),
+            Some(
+                "Show native Codex app-server conversations as a separate Tools panel view."
+                    .to_string(),
+            ),
+        );
+
+        if !enabled {
+            return toggle;
+        }
+
+        let status = CodexAppServerModel::as_ref(app).status().label();
+        let status_text = appearance
+            .ui_builder()
+            .wrappable_text(status, true)
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                font_color: Some(
+                    appearance
+                        .theme()
+                        .sub_text_color(appearance.theme().background())
+                        .into_solid(),
+                ),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        let refresh = appearance
+            .ui_builder()
+            .button(ButtonVariant::Secondary, self.refresh_button.clone())
+            .with_text_label("Check".to_string())
+            .with_style(UiComponentStyles {
+                padding: Some(Coords::default().top(6.).bottom(6.).left(12.).right(12.)),
+                ..Default::default()
+            })
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(FeaturesPageAction::RefreshCodexConnection);
+            })
+            .finish();
+
+        let border_color =
+            (!view.valid_codex_server_url).then(|| themes::theme::Fill::error().into());
+        let url_row = self.render_editor_row(
+            "App-server URL",
+            view.codex_server_url_editor.clone(),
+            appearance,
+            border_color,
+        );
+        let token_row = self.render_editor_row(
+            "Bearer token",
+            view.codex_bearer_token_editor.clone(),
+            appearance,
+            None,
+        );
+        let start_command = appearance
+            .ui_builder()
+            .wrappable_text(
+                format!(
+                    "Start command: {}",
+                    codex_start_command(settings.server_url.value())
+                ),
+                true,
+            )
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                font_color: Some(
+                    appearance
+                        .theme()
+                        .sub_text_color(appearance.theme().background())
+                        .into_solid(),
+                ),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        let imported_projects = settings
+            .imported_project_paths
+            .value()
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let imported_threads = settings.imported_thread_ids.value().join("\n");
+        let imports_summary = appearance
+            .ui_builder()
+            .wrappable_text(
+                format!(
+                    "Imported projects:\n{}\nImported threads:\n{}",
+                    if imported_projects.is_empty() {
+                        "None"
+                    } else {
+                        imported_projects.as_str()
+                    },
+                    if imported_threads.is_empty() {
+                        "None"
+                    } else {
+                        imported_threads.as_str()
+                    },
+                ),
+                true,
+            )
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                font_color: Some(
+                    appearance
+                        .theme()
+                        .sub_text_color(appearance.theme().background())
+                        .into_solid(),
+                ),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        Flex::column()
+            .with_child(toggle)
+            .with_spacing(12.)
+            .with_child(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(Shrinkable::new(1., status_text).finish())
+                    .with_child(refresh)
+                    .finish(),
+            )
+            .with_child(url_row)
+            .with_child(token_row)
+            .with_child(start_command)
+            .with_child(self.render_imports(view, appearance))
+            .with_child(imports_summary)
+            .finish()
+    }
 }
 
 #[derive(Default)]

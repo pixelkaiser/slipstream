@@ -21,10 +21,10 @@ pub fn initialize_settings_for_tests_with_mode(
             app_icon::AppIconSettings, init_and_register_user_preferences,
             manager::SettingsManager, AISettings, AccessibilitySettings, AliasExpansionSettings,
             AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
-            CloudPreferencesSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
-            FontSettings, GPUSettings, InputModeSettings, InputSettings, NativePreferenceSettings,
-            PaneSettings, SameLinePromptBlockSettings, ScrollSettings, SelectionSettings,
-            SshSettings, ThemeSettings, VimBannerSettings,
+            CloudPreferencesSettings, CodeSettings, CodexAppServerSettings, DebugSettings,
+            EmacsBindingsSettings, FontSettings, GPUSettings, InputModeSettings, InputSettings,
+            NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
+            SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
         },
         terminal::{
             general_settings::GeneralSettings, keys_settings::KeysSettings,
@@ -98,6 +98,7 @@ pub fn initialize_settings_for_tests_with_mode(
     WindowSettings::register(app);
     SharedSessionSettings::register(app);
     CodeSettings::register(app);
+    CodexAppServerSettings::register(app);
     SemanticSelection::register(app);
 
     app.update(|ctx| {

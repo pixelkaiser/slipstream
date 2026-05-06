@@ -662,23 +662,31 @@ impl BlocklistAIActionModel {
     /// Bulk restore action results from a list of exchanges (used when loading conversations from tasks)
     pub fn restore_action_results_from_exchanges(&mut self, exchanges: Vec<&AIAgentExchange>) {
         for exchange in exchanges.iter() {
-            for input in &exchange.input {
-                if let AIAgentInput::ActionResult { result, .. } = input {
-                    let result_id = result.id.clone();
-                    let mut result_to_insert = result.clone();
-                    if let AIAgentActionResultType::RequestCommandOutput(
-                        RequestCommandOutputResult::LongRunningCommandSnapshot { .. },
-                    ) = &result.result
-                    {
-                        // On restoration we set long running command snapshot results to cancelled,
-                        // since this means the command was incomplete when the app was closed.
-                        result_to_insert.result = AIAgentActionResultType::RequestCommandOutput(
-                            RequestCommandOutputResult::CancelledBeforeExecution,
-                        );
-                    }
-                    self.past_action_results
-                        .insert(result_id, Arc::new(result_to_insert));
+            self.restore_action_results_from_inputs(&exchange.input);
+        }
+    }
+
+    /// Restore action results from inputs already attached to an exchange.
+    pub fn restore_action_results_from_inputs<'a>(
+        &mut self,
+        inputs: impl IntoIterator<Item = &'a AIAgentInput>,
+    ) {
+        for input in inputs {
+            if let AIAgentInput::ActionResult { result, .. } = input {
+                let result_id = result.id.clone();
+                let mut result_to_insert = result.clone();
+                if let AIAgentActionResultType::RequestCommandOutput(
+                    RequestCommandOutputResult::LongRunningCommandSnapshot { .. },
+                ) = &result.result
+                {
+                    // On restoration we set long running command snapshot results to cancelled,
+                    // since this means the command was incomplete when the app was closed.
+                    result_to_insert.result = AIAgentActionResultType::RequestCommandOutput(
+                        RequestCommandOutputResult::CancelledBeforeExecution,
+                    );
                 }
+                self.past_action_results
+                    .insert(result_id, Arc::new(result_to_insert));
             }
         }
     }

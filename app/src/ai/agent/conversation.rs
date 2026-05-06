@@ -13,6 +13,7 @@ use crate::terminal::model::block::{
     AgentInteractionMetadata, AgentViewVisibility, BlockId, SerializedAIMetadata, SerializedBlock,
 };
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
+use ai::LLMId;
 
 use crate::ai::agent::api::convert_conversation::{
     compute_time_to_first_token_ms_from_messages, ConvertToExchanges,
@@ -21,8 +22,10 @@ use ai::document::AIDocumentId;
 use chrono::{DateTime, Local, TimeZone};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashSet;
-use std::{collections::HashMap, fmt::Display};
+use std::hash::{Hash, Hasher};
+use std::{collections::HashMap, fmt::Display, sync::Arc};
 
 use super::task_store::TaskStore;
 use uuid::Uuid;
@@ -68,9 +71,11 @@ use super::{
         transaction::{SavedTask, Transaction},
         Task, TaskId,
     },
-    AIAgentAction, AIAgentActionId, AIAgentContext, AIAgentExchange, AIAgentExchangeId,
-    AIAgentInput, AIAgentOutputStatus, AIAgentTodo, AIAgentTodoId, FinishedAIAgentOutput,
-    MessageId, RenderableAIError, RequestCost,
+    AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
+    AIAgentActionType, AIAgentContext, AIAgentExchange, AIAgentExchangeId, AIAgentInput,
+    AIAgentOutputStatus, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoId,
+    AgentOutputText, FinishedAIAgentOutput, MessageId, RenderableAIError,
+    RequestCommandOutputResult, RequestCost, UserQueryMode,
 };
 use super::{
     AIAgentOutput, OutputModelInfo, ServerOutputId, Shared, SuggestedLoggingId, Suggestions,
@@ -100,6 +105,171 @@ pub(crate) struct CommandBlockInfo {
     /// The api message ID that this command block was extracted from.
     /// Used to find the corresponding exchange for timestamp and PWD.
     pub(crate) message_id: String,
+}
+
+const CODEX_COMMAND_ACTION_ID_PREFIX: &str = "codex-command-";
+
+struct CodexOutputParts {
+    output: Shared<AIAgentOutput>,
+    action_results: Vec<AIAgentActionResult>,
+}
+
+fn codex_output_status(
+    text: Option<String>,
+    is_streaming: bool,
+    task_id: &TaskId,
+) -> (AIAgentOutputStatus, Vec<AIAgentActionResult>) {
+    let output = text.map(|text| codex_output_from_text(text, task_id));
+    let action_results = output
+        .as_ref()
+        .map(|output| output.action_results.clone())
+        .unwrap_or_default();
+    if is_streaming {
+        (
+            AIAgentOutputStatus::Streaming {
+                output: output.map(|output| output.output),
+            },
+            action_results,
+        )
+    } else {
+        (
+            AIAgentOutputStatus::Finished {
+                finished_output: FinishedAIAgentOutput::Success {
+                    output: output
+                        .map(|output| output.output)
+                        .unwrap_or_else(|| codex_output_from_text(String::new(), task_id).output),
+                },
+            },
+            action_results,
+        )
+    }
+}
+
+fn codex_output_from_text(text: String, task_id: &TaskId) -> CodexOutputParts {
+    let mut messages = Vec::new();
+    let mut action_results = Vec::new();
+    let mut text_buffer = Vec::new();
+    let mut command_index = 0;
+
+    for line in text.lines() {
+        if let Some(command) = codex_command_from_formatted_line(line) {
+            push_codex_text_message(&mut messages, &mut text_buffer);
+
+            let (message, result) =
+                codex_command_message_and_result(command, command_index, task_id);
+            messages.push(message);
+            action_results.push(result);
+            command_index += 1;
+        } else {
+            text_buffer.push(line);
+        }
+    }
+
+    push_codex_text_message(&mut messages, &mut text_buffer);
+
+    CodexOutputParts {
+        output: Shared::new(AIAgentOutput {
+            messages,
+            ..Default::default()
+        }),
+        action_results,
+    }
+}
+
+fn push_codex_text_message(messages: &mut Vec<AIAgentOutputMessage>, text_buffer: &mut Vec<&str>) {
+    let text = text_buffer.join("\n");
+    text_buffer.clear();
+
+    if text.trim().is_empty() {
+        return;
+    }
+
+    messages.push(AIAgentOutputMessage::text(
+        MessageId::new(format!("codex-{}", Uuid::new_v4())),
+        AIAgentText {
+            sections: vec![AIAgentTextSection::PlainText {
+                text: AgentOutputText::from(text),
+            }],
+        },
+    ));
+}
+
+fn codex_command_from_formatted_line(line: &str) -> Option<&str> {
+    let (role, command) = line.trim_start().split_once(':')?;
+    let normalized_role = role
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+
+    (normalized_role.ends_with("commandexecution") && !command.trim().is_empty())
+        .then(|| command.trim())
+}
+
+fn codex_command_message_and_result(
+    command: &str,
+    command_index: usize,
+    task_id: &TaskId,
+) -> (AIAgentOutputMessage, AIAgentActionResult) {
+    let command_hash = codex_command_hash(command, command_index);
+    let action_id = AIAgentActionId::from(format!(
+        "{CODEX_COMMAND_ACTION_ID_PREFIX}{command_index}-{command_hash:016x}"
+    ));
+    let block_id = BlockId::from(format!("codex-command-block-{command_hash:016x}"));
+    let command = command.to_string();
+    let action = AIAgentAction {
+        id: action_id.clone(),
+        task_id: task_id.clone(),
+        action: AIAgentActionType::RequestCommandOutput {
+            command: command.clone(),
+            is_read_only: None,
+            is_risky: None,
+            wait_until_completion: true,
+            uses_pager: None,
+            rationale: None,
+            citations: Vec::new(),
+        },
+        requires_result: false,
+    };
+    let result = AIAgentActionResult {
+        id: action_id,
+        task_id: task_id.clone(),
+        result: AIAgentActionResultType::RequestCommandOutput(
+            RequestCommandOutputResult::Completed {
+                block_id,
+                command,
+                output: String::new(),
+                exit_code: ExitCode::default(),
+            },
+        ),
+    };
+
+    (
+        AIAgentOutputMessage::action(
+            MessageId::new(format!(
+                "codex-command-message-{command_index}-{command_hash:016x}"
+            )),
+            action,
+        ),
+        result,
+    )
+}
+
+fn codex_command_hash(command: &str, command_index: usize) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    command_index.hash(&mut hasher);
+    command.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn is_codex_command_action_result(input: &AIAgentInput) -> bool {
+    matches!(
+        input,
+        AIAgentInput::ActionResult {
+            result: AIAgentActionResult { id, .. },
+            ..
+        } if id.to_string().starts_with(CODEX_COMMAND_ACTION_ID_PREFIX)
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -230,6 +400,9 @@ pub struct AIConversation {
     /// re-delivering already-processed events.
     last_event_sequence: Option<i64>,
 
+    /// Local-only conversations rendered through Agent View but owned by another backend.
+    exclude_from_navigation: bool,
+
     /// Per-conversation orchestration config hydrated from
     /// `OrchestrationConfigSnapshot` messages in the conversation's task list.
     orchestration_config: Option<OrchestrationConfig>,
@@ -285,10 +458,17 @@ impl AIConversation {
             parent_conversation_id: None,
             is_remote_child: false,
             last_event_sequence: None,
+            exclude_from_navigation: false,
             orchestration_config: None,
             orchestration_status: OrchestrationConfigStatus::default(),
             orchestration_plan_id: None,
         }
+    }
+
+    pub(crate) fn new_with_id(id: AIConversationId, is_viewing_shared_session: bool) -> Self {
+        let mut conversation = Self::new(is_viewing_shared_session);
+        conversation.id = id;
+        conversation
     }
 
     // TODO: derive todo list state from tasks instead of taking args.
@@ -473,6 +653,7 @@ impl AIConversation {
             parent_conversation_id,
             is_remote_child,
             last_event_sequence,
+            exclude_from_navigation: false,
             orchestration_config: None,
             orchestration_status: OrchestrationConfigStatus::default(),
             orchestration_plan_id: None,
@@ -1038,6 +1219,9 @@ impl AIConversation {
     /// Returns true if this conversation should be unconditionally excluded
     /// from conversation navigation and history.
     pub fn should_exclude_from_navigation(&self) -> bool {
+        if self.exclude_from_navigation {
+            return true;
+        }
         // Passive-only suggestions without any follow-up requests shouldn't be presented as
         // conversations.
         self.is_entirely_passive()
@@ -1050,6 +1234,10 @@ impl AIConversation {
             // Child agent conversations spawned by an orchestrator are managed via the parent's
             // status card and shouldn't clutter the navigation list.
             || self.is_child_agent_conversation()
+    }
+
+    pub(crate) fn set_exclude_from_navigation(&mut self, exclude: bool) {
+        self.exclude_from_navigation = exclude;
     }
 
     pub fn existing_suggestions(&self) -> Option<&Suggestions> {
@@ -1477,6 +1665,101 @@ impl AIConversation {
             new_task_id: root_task_id,
             new_conversation_id: self.id,
         });
+        Ok(())
+    }
+
+    pub(crate) fn append_codex_exchange(
+        &mut self,
+        query: Option<String>,
+        output_text: Option<String>,
+        working_directory: Option<String>,
+        is_streaming: bool,
+        start_time: DateTime<Local>,
+    ) -> Result<AIAgentExchangeId, UpdateConversationError> {
+        let root_task_id = self.task_store.root_task_id().clone();
+        let exchange_id = AIAgentExchangeId::new();
+        let input = query
+            .map(|query| AIAgentInput::UserQuery {
+                query,
+                context: Arc::<[AIAgentContext]>::from([]),
+                static_query_type: None,
+                referenced_attachments: HashMap::new(),
+                user_query_mode: UserQueryMode::Normal,
+                running_command: None,
+                intended_agent: None,
+            })
+            .into_iter()
+            .collect();
+        let (output_status, action_results) =
+            codex_output_status(output_text, is_streaming, &root_task_id);
+        let mut input: Vec<AIAgentInput> = input;
+        if !is_streaming {
+            input.extend(action_results.into_iter().map(|result| {
+                AIAgentInput::ActionResult {
+                    result,
+                    context: Arc::<[AIAgentContext]>::from([]),
+                }
+            }));
+        }
+        let exchange = AIAgentExchange {
+            id: exchange_id,
+            input,
+            output_status,
+            added_message_ids: HashSet::new(),
+            start_time,
+            finish_time: (!is_streaming).then_some(start_time),
+            time_to_first_token_ms: None,
+            working_directory,
+            model_id: LLMId::from("codex"),
+            request_cost: None,
+            coding_model_id: LLMId::from("codex"),
+            cli_agent_model_id: LLMId::from("codex"),
+            computer_use_model_id: LLMId::from("codex"),
+            response_initiator: None,
+        };
+
+        self.append_exchange_to_task(&root_task_id, exchange)?;
+        self.status = if is_streaming {
+            ConversationStatus::InProgress
+        } else {
+            ConversationStatus::Success
+        };
+        Ok(exchange_id)
+    }
+
+    pub(crate) fn update_codex_exchange_output(
+        &mut self,
+        exchange_id: AIAgentExchangeId,
+        output_text: String,
+        is_finished: bool,
+        is_error: bool,
+    ) -> Result<(), UpdateConversationError> {
+        let root_task_id = self.task_store.root_task_id().clone();
+        let (output_status, action_results) =
+            codex_output_status(Some(output_text), !is_finished, &root_task_id);
+        let exchange = self.get_exchange_to_update(exchange_id)?;
+        exchange.output_status = output_status;
+        exchange.input.retain(|input| !is_codex_command_action_result(input));
+        if is_finished && !is_error {
+            exchange
+                .input
+                .extend(action_results.into_iter().map(|result| {
+                    AIAgentInput::ActionResult {
+                        result,
+                        context: Arc::<[AIAgentContext]>::from([]),
+                    }
+                }));
+        }
+        if is_finished {
+            exchange.finish_time = Some(Local::now());
+            self.status = if is_error {
+                ConversationStatus::Error
+            } else {
+                ConversationStatus::Success
+            };
+        } else {
+            self.status = ConversationStatus::InProgress;
+        }
         Ok(())
     }
 
@@ -3018,6 +3301,10 @@ impl AIConversation {
         self.task_store
             .root_task()
             .and_then(Task::initial_working_directory)
+            .or_else(|| {
+                self.root_task_exchanges()
+                    .find_map(|exchange| exchange.working_directory.clone())
+            })
     }
 
     /// Returns the current working directory from the most recent exchange that has one.
