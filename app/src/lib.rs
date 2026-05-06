@@ -16,6 +16,8 @@ mod chip_configurator;
 mod cloud_object;
 mod code;
 mod code_review;
+#[cfg(not(target_family = "wasm"))]
+mod codex_app_server;
 mod coding_entrypoints;
 mod coding_panel_enablement_state;
 mod command_palette;
@@ -140,6 +142,8 @@ use ::ai::index::full_source_code_embedding::manager::{
 };
 #[cfg(feature = "local_fs")]
 use ::ai::index::full_source_code_embedding::SnapshotStorage;
+#[cfg(not(target_family = "wasm"))]
+use crate::codex_app_server::CodexAppServerModel;
 use ::ai::index::full_source_code_embedding::SyncTask;
 use ::ai::index::DEFAULT_SYNC_REQUESTS_PER_MIN;
 use ::ai::project_context::model::ProjectContextModel;
@@ -1608,6 +1612,9 @@ pub(crate) fn initialize_app(
         );
         manager
     });
+
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(CodexAppServerModel::new);
 
     ctx.add_singleton_model(AntivirusInfo::new);
 
