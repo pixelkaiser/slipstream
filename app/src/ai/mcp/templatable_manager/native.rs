@@ -890,12 +890,13 @@ impl TemplatableMCPServerManager {
             let authenticated_spawner = ctx.spawner();
 
             AuthContext {
+                oauth_result_tx: oauth_result_tx.clone(),
                 oauth_result_rx,
                 uuid: installation_uuid,
                 persisted_credentials,
                 is_headless,
                 is_file_based,
-                persist_credentials: Box::new(move |installation_uuid, credentials| {
+                persist_credentials: Arc::new(move |installation_uuid, credentials| {
                     let spawner = persist_spawner.clone();
                     Box::pin(async move {
                         spawner
