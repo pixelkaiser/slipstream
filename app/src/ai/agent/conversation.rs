@@ -118,10 +118,16 @@ pub(crate) struct CommandBlockInfo {
 }
 
 const CODEX_COMMAND_ACTION_ID_PREFIX: &str = "codex-command-";
+const CODEX_COMMAND_OUTPUT_PREFIX: &str = "commandExecution/output";
 
 struct CodexOutputParts {
     output: Shared<AIAgentOutput>,
     action_results: Vec<AIAgentActionResult>,
+}
+
+struct PendingCodexCommand {
+    command: String,
+    output: String,
 }
 
 fn codex_output_status(
@@ -159,22 +165,52 @@ fn codex_output_from_text(text: String, task_id: &TaskId) -> CodexOutputParts {
     let mut messages = Vec::new();
     let mut action_results = Vec::new();
     let mut text_buffer = Vec::new();
+    let mut pending_command = None;
     let mut command_index = 0;
 
     for line in text.lines() {
         if let Some(command) = codex_command_from_formatted_line(line) {
             push_codex_text_message(&mut messages, &mut text_buffer);
+            flush_pending_codex_command(
+                &mut messages,
+                &mut action_results,
+                &mut pending_command,
+                &mut command_index,
+                task_id,
+            );
 
-            let (message, result) =
-                codex_command_message_and_result(command, command_index, task_id);
-            messages.push(message);
-            action_results.push(result);
-            command_index += 1;
+            pending_command = Some(PendingCodexCommand {
+                command: command.to_string(),
+                output: String::new(),
+            });
+        } else if let Some(output) = codex_command_output_from_formatted_line(line) {
+            if let Some(command) = pending_command.as_mut() {
+                command.output.push_str(&output);
+            } else {
+                text_buffer.push(line);
+            }
         } else {
+            if pending_command.is_some() && line.trim().is_empty() {
+                continue;
+            }
+            flush_pending_codex_command(
+                &mut messages,
+                &mut action_results,
+                &mut pending_command,
+                &mut command_index,
+                task_id,
+            );
             text_buffer.push(line);
         }
     }
 
+    flush_pending_codex_command(
+        &mut messages,
+        &mut action_results,
+        &mut pending_command,
+        &mut command_index,
+        task_id,
+    );
     push_codex_text_message(&mut messages, &mut text_buffer);
 
     CodexOutputParts {
@@ -204,6 +240,23 @@ fn push_codex_text_message(messages: &mut Vec<AIAgentOutputMessage>, text_buffer
     ));
 }
 
+fn flush_pending_codex_command(
+    messages: &mut Vec<AIAgentOutputMessage>,
+    action_results: &mut Vec<AIAgentActionResult>,
+    pending_command: &mut Option<PendingCodexCommand>,
+    command_index: &mut usize,
+    task_id: &TaskId,
+) {
+    let Some(command) = pending_command.take() else {
+        return;
+    };
+    let (message, result) =
+        codex_command_message_and_result(&command.command, command.output, *command_index, task_id);
+    messages.push(message);
+    action_results.push(result);
+    *command_index += 1;
+}
+
 fn codex_command_from_formatted_line(line: &str) -> Option<&str> {
     let (role, command) = line.trim_start().split_once(':')?;
     let normalized_role = role
@@ -216,8 +269,31 @@ fn codex_command_from_formatted_line(line: &str) -> Option<&str> {
         .then(|| command.trim())
 }
 
+fn codex_command_output_from_formatted_line(line: &str) -> Option<String> {
+    let (role, output) = line.trim_start().split_once(':')?;
+    let normalized_role = role
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let command_output_role = CODEX_COMMAND_OUTPUT_PREFIX
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if !normalized_role.contains(&command_output_role) {
+        return None;
+    }
+
+    let output = output.trim();
+    serde_json::from_str::<String>(output)
+        .ok()
+        .or_else(|| (!output.is_empty()).then(|| output.to_string()))
+}
+
 fn codex_command_message_and_result(
     command: &str,
+    output: String,
     command_index: usize,
     task_id: &TaskId,
 ) -> (AIAgentOutputMessage, AIAgentActionResult) {
@@ -248,7 +324,7 @@ fn codex_command_message_and_result(
             RequestCommandOutputResult::Completed {
                 block_id,
                 command,
-                output: String::new(),
+                output,
                 exit_code: ExitCode::default(),
             },
         ),
@@ -1807,12 +1883,14 @@ impl AIConversation {
             codex_output_status(output_text, is_streaming, &root_task_id);
         let mut input: Vec<AIAgentInput> = input;
         if !is_streaming {
-            input.extend(action_results.into_iter().map(|result| {
-                AIAgentInput::ActionResult {
-                    result,
-                    context: Arc::<[AIAgentContext]>::from([]),
-                }
-            }));
+            input.extend(
+                action_results
+                    .into_iter()
+                    .map(|result| AIAgentInput::ActionResult {
+                        result,
+                        context: Arc::<[AIAgentContext]>::from([]),
+                    }),
+            );
         }
         let exchange = AIAgentExchange {
             id: exchange_id,
@@ -1852,16 +1930,20 @@ impl AIConversation {
             codex_output_status(Some(output_text), !is_finished, &root_task_id);
         let exchange = self.get_exchange_to_update(exchange_id)?;
         exchange.output_status = output_status;
-        exchange.input.retain(|input| !is_codex_command_action_result(input));
+        exchange
+            .input
+            .retain(|input| !is_codex_command_action_result(input));
         if is_finished && !is_error {
             exchange
                 .input
-                .extend(action_results.into_iter().map(|result| {
-                    AIAgentInput::ActionResult {
-                        result,
-                        context: Arc::<[AIAgentContext]>::from([]),
-                    }
-                }));
+                .extend(
+                    action_results
+                        .into_iter()
+                        .map(|result| AIAgentInput::ActionResult {
+                            result,
+                            context: Arc::<[AIAgentContext]>::from([]),
+                        }),
+                );
         }
         if is_finished {
             exchange.finish_time = Some(Local::now());

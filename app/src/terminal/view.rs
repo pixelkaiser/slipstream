@@ -5726,6 +5726,10 @@ impl TerminalView {
                     ctx,
                 );
                 self.update_context_blocks_and_exchanges(ctx);
+                self.update_scroll_position_locking(
+                    ScrollPositionUpdate::AfterRichBlockUpdated,
+                    ctx,
+                );
             }
             BlocklistAIHistoryEvent::SetActiveConversation { .. } => {
                 // When the conversation state changes or a new conversation

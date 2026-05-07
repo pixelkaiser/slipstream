@@ -2915,6 +2915,62 @@ impl AIAgentExchange {
         }
     }
 
+    pub(crate) fn format_codex_output_for_refresh(&self) -> String {
+        let Some(output) = self.output_status.output() else {
+            return String::new();
+        };
+
+        output
+            .get()
+            .messages
+            .iter()
+            .filter_map(|message| match &message.message {
+                AIAgentOutputMessageType::Action(AIAgentAction {
+                    id,
+                    action: AIAgentActionType::RequestCommandOutput { command, .. },
+                    ..
+                }) => {
+                    let mut parts = vec![format!("commandExecution: {command}")];
+                    if let Some(output) = self.codex_command_result_output(id) {
+                        parts.push(format!(
+                            "commandExecution/output: {}",
+                            serde_json::to_string(output).unwrap_or_else(|_| output.to_string())
+                        ));
+                    }
+                    Some(parts.join("\n\n"))
+                }
+                AIAgentOutputMessageType::Action(_) => None,
+                _ => {
+                    let text = message.to_string();
+                    (!text.trim().is_empty()).then_some(text)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    fn codex_command_result_output(&self, action_id: &AIAgentActionId) -> Option<&str> {
+        self.input.iter().find_map(|input| {
+            let AIAgentInput::ActionResult { result, .. } = input else {
+                return None;
+            };
+            if &result.id != action_id {
+                return None;
+            }
+            match &result.result {
+                AIAgentActionResultType::RequestCommandOutput(
+                    RequestCommandOutputResult::Completed { output, .. },
+                ) if !output.is_empty() => Some(output.as_str()),
+                AIAgentActionResultType::RequestCommandOutput(
+                    RequestCommandOutputResult::LongRunningCommandSnapshot {
+                        grid_contents, ..
+                    },
+                ) if !grid_contents.is_empty() => Some(grid_contents.as_str()),
+                _ => None,
+            }
+        })
+    }
+
     /// Format the entire exchange (both input and output) for copying to clipboard.
     /// Always adds USER: and AGENT: labels.
     /// If `skip_agent_label` is true, skips the AGENT: label (for consecutive agent outputs).
