@@ -837,6 +837,7 @@ impl TemplatableMCPServerManager {
                 .is_some();
 
         let auth_context = AuthContext {
+            oauth_result_tx: oauth_result_tx.clone(),
             oauth_result_rx,
             spawner: ctx.spawner(),
             uuid: installation_uuid,

@@ -26,9 +26,11 @@ const SIDECAR_POSITION_ID: &str = "model_sidecar_panel";
 use crate::{
     ai::{
         blocklist::{
+            history_model::BlocklistAIHistoryModel,
             prompt::PromptIconButtonTheme, BlocklistAIController, BlocklistAIControllerEvent,
             BlocklistAIInputEvent, BlocklistAIInputModel,
         },
+        agent::conversation::AIConversationId,
         execution_profiles::{
             model_menu_items::{available_model_menu_items, has_reasoning_variants, is_auto},
             profiles::{AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId},
@@ -58,6 +60,8 @@ use crate::{
     },
     workspace::WorkspaceAction,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::codex_app_server::{CodexAppServerModel, CodexModelInfo};
 
 use warp_core::ui::theme::{color::internal_colors, Fill};
 use warp_core::{
@@ -189,6 +193,10 @@ pub enum ProfileModelSelectorEvent {
 pub enum ProfileModelSelectorAction {
     SelectProfile(ClientProfileId),
     SelectModel(LLMId),
+    #[cfg(not(target_family = "wasm"))]
+    SelectCodexModel(String),
+    #[cfg(not(target_family = "wasm"))]
+    UseCodexDefault,
     SelectAutoModel,
     SelectReasoningModel(String),
     ManageProfiles,
@@ -462,6 +470,10 @@ impl ProfileModelSelector {
                 _ => (),
             },
         );
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_model(&CodexAppServerModel::handle(ctx), |me, _, _, ctx| {
+            me.refresh_state(ctx);
+        });
 
         if let Some(controller) = &controller {
             ctx.subscribe_to_model(controller, |me, _, event, ctx| {
@@ -570,6 +582,7 @@ impl ProfileModelSelector {
         self.is_model_menu_open = is_open;
         self.is_profile_menu_open = false;
         if is_open {
+            self.refresh_model_menu(ctx);
             LLMPreferences::handle(ctx).update(ctx, |preferences, _| {
                 preferences.hide_llm_popup(self.terminal_view_id)
             });
@@ -589,6 +602,24 @@ impl ProfileModelSelector {
 
     pub fn is_open(&self) -> bool {
         self.is_profile_menu_open || self.is_model_menu_open
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn active_codex_conversation_id(&self, app: &AppContext) -> Option<AIConversationId> {
+        let conversation_id =
+            BlocklistAIHistoryModel::as_ref(app).active_conversation_id(self.terminal_view_id)?;
+        CodexAppServerModel::as_ref(app)
+            .is_codex_conversation(conversation_id)
+            .then_some(conversation_id)
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn active_codex_conversation_id(&self, _app: &AppContext) -> Option<AIConversationId> {
+        None
+    }
+
+    fn is_codex_conversation_active(&self, app: &AppContext) -> bool {
+        self.active_codex_conversation_id(app).is_some()
     }
 
     pub fn model_menu_item_position_id(&self, llm_id: &LLMId) -> String {
@@ -613,30 +644,68 @@ impl ProfileModelSelector {
         }
 
         let model_name = {
-            let llm_preferences = LLMPreferences::as_ref(ctx);
-            let active_llm = if FeatureFlag::InlineMenuHeaders.is_enabled()
-                && self
-                    .terminal_model
-                    .lock()
-                    .block_list()
-                    .active_block()
-                    .is_agent_in_control_or_tagged_in()
+            #[cfg(not(target_family = "wasm"))]
+            if self.is_codex_conversation_active(ctx) {
+                CodexAppServerModel::as_ref(ctx).selected_model_display_name()
+            } else {
+                self.active_agent_model_label(ctx)
+            }
+            #[cfg(target_family = "wasm")]
             {
-                llm_preferences.get_active_cli_agent_model(ctx, Some(self.terminal_view_id))
-            } else {
-                llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id))
-            };
-
-            if let Some(description) = &active_llm.description {
-                format!("{} ({})", active_llm.display_name, description)
-            } else {
-                active_llm.display_name.clone()
+                self.active_agent_model_label(ctx)
             }
         };
         self.model_button.update(ctx, |button, ctx| {
             button.set_label(model_name, ctx);
         });
         ctx.notify();
+    }
+
+    fn active_agent_model_label(&self, app: &AppContext) -> String {
+        let llm_preferences = LLMPreferences::as_ref(app);
+        let active_llm = if FeatureFlag::InlineMenuHeaders.is_enabled()
+            && self
+                .terminal_model
+                .lock()
+                .block_list()
+                .active_block()
+                .is_agent_in_control_or_tagged_in()
+        {
+            llm_preferences.get_active_cli_agent_model(app, Some(self.terminal_view_id))
+        } else {
+            llm_preferences.get_active_base_model(app, Some(self.terminal_view_id))
+        };
+
+        if let Some(description) = &active_llm.description {
+            format!("{} ({})", active_llm.display_name, description)
+        } else {
+            active_llm.display_name.clone()
+        }
+    }
+
+    fn active_agent_menu_display_name(&self, app: &AppContext) -> String {
+        let llm_preferences = LLMPreferences::as_ref(app);
+        if FeatureFlag::InlineMenuHeaders.is_enabled()
+            && self
+                .terminal_model
+                .lock()
+                .block_list()
+                .active_block()
+                .is_agent_in_control_or_tagged_in()
+        {
+            llm_preferences
+                .get_active_cli_agent_model(app, Some(self.terminal_view_id))
+                .menu_display_name()
+        } else {
+            llm_preferences
+                .get_active_base_model(app, Some(self.terminal_view_id))
+                .menu_display_name()
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn active_codex_model_display_name(&self, app: &AppContext) -> String {
+        CodexAppServerModel::as_ref(app).selected_model_display_name()
     }
 
     pub fn set_blurred(&mut self, is_blurred: bool, ctx: &mut ViewContext<Self>) {
@@ -764,6 +833,12 @@ impl ProfileModelSelector {
     }
 
     fn refresh_model_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        #[cfg(not(target_family = "wasm"))]
+        if self.is_codex_conversation_active(ctx) {
+            self.refresh_codex_model_menu(ctx);
+            return;
+        }
+
         let llm_preferences = LLMPreferences::as_ref(ctx);
 
         let active_llm = llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id));
@@ -840,6 +915,107 @@ impl ProfileModelSelector {
             ctx.notify();
         });
         self.set_hovered_llm_info(Some(selected_index), ctx);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn refresh_codex_model_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        self.all_model_choices.clear();
+        self.hovered_llm_info = None;
+        self.model_spec_sidecar.hovered_info = None;
+        self.model_spec_sidecar.active_kind = None;
+
+        let codex_model = CodexAppServerModel::as_ref(ctx);
+        let models = codex_model.models().to_vec();
+        let selected_model_id = codex_model.selected_model_id().map(ToOwned::to_owned);
+
+        let mut items: Vec<MenuItem<ProfileModelSelectorAction>> = vec![
+            MenuItem::Header {
+                fields: MenuItemFields::new("Codex models"),
+                clickable: false,
+                right_side_fields: None,
+            },
+            MenuItem::Separator,
+        ];
+        items.push(Self::codex_default_model_menu_item(
+            selected_model_id.is_none(),
+        ));
+        items.push(MenuItem::Separator);
+        items.extend(models.iter().map(|model| {
+            let is_selected = selected_model_id.as_deref() == Some(model.id.as_str());
+            Self::codex_model_menu_item(model, is_selected)
+        }));
+
+        let selected_index = Self::find_selected_codex_index(&items, selected_model_id.as_deref());
+        self.model_dropdown.update(ctx, |menu, ctx| {
+            menu.set_width(MENU_WIDTH);
+            menu.set_items(items, ctx);
+            menu.set_selected_by_index(selected_index, ctx);
+            menu.set_safe_zone_target(None);
+            menu.set_submenu_being_shown_for_item_index(None);
+            ctx.notify();
+        });
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn codex_default_model_menu_item(is_selected: bool) -> MenuItem<ProfileModelSelectorAction> {
+        let mut fields = MenuItemFields::new("codex")
+            .with_on_select_action(ProfileModelSelectorAction::UseCodexDefault);
+        if is_selected {
+            fields = fields.with_icon(Icon::Check);
+        } else {
+            fields = fields.with_indent();
+        }
+        fields.into_item()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn codex_model_menu_item(
+        model: &CodexModelInfo,
+        is_selected: bool,
+    ) -> MenuItem<ProfileModelSelectorAction> {
+        let mut label = model.display_name.clone();
+        if model.is_default {
+            label = format!("{label} (default)");
+        }
+        let mut fields = MenuItemFields::new(label)
+            .with_on_select_action(ProfileModelSelectorAction::SelectCodexModel(model.id.clone()));
+        if is_selected {
+            fields = fields.with_icon(Icon::Check);
+        } else {
+            fields = fields.with_indent();
+        }
+        fields.into_item()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn find_selected_codex_index(
+        items: &[MenuItem<ProfileModelSelectorAction>],
+        selected_model_id: Option<&str>,
+    ) -> usize {
+        items
+            .iter()
+            .position(|item| {
+                if let MenuItem::Item(fields) = item {
+                    let is_selected = matches!(
+                        item.item_on_select_action(),
+                        Some(ProfileModelSelectorAction::SelectCodexModel(model_id))
+                            if Some(model_id.as_str()) == selected_model_id
+                    ) || (selected_model_id.is_none()
+                        && matches!(
+                            item.item_on_select_action(),
+                            Some(ProfileModelSelectorAction::UseCodexDefault)
+                        ));
+                    !fields.is_disabled() && is_selected
+                } else {
+                    false
+                }
+            })
+            .or_else(|| {
+                items.iter().position(|item| {
+                    matches!(item, MenuItem::Item(fields) if !fields.is_disabled())
+                })
+            })
+            .unwrap_or(0)
     }
 
     fn refresh_model_spec_sidecar(
@@ -1362,7 +1538,12 @@ impl ProfileModelSelector {
     fn render_model_section(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
-        let llm_preferences = LLMPreferences::as_ref(app);
+        let is_codex_conversation = self.is_codex_conversation_active(app);
+        #[cfg(not(target_family = "wasm"))]
+        let codex_has_model_choices =
+            is_codex_conversation && CodexAppServerModel::as_ref(app).has_model_choices();
+        #[cfg(target_family = "wasm")]
+        let codex_has_model_choices = false;
 
         // Allow editing if composing an ambient agent query, or if the user has edit access
         // in a shared session (i.e., not a viewer, or is an executor).
@@ -1375,24 +1556,30 @@ impl ProfileModelSelector {
                         .is_configuring_ambient_agent()
                 });
         let terminal_model = self.terminal_model.lock();
-        let has_edit_access = is_composing_ambient_agent
+        let has_shared_edit_access = is_composing_ambient_agent
             || !terminal_model.shared_session_status().is_viewer()
             || terminal_model.shared_session_status().is_executor();
-        let is_lrc = FeatureFlag::InlineMenuHeaders.is_enabled()
+        let has_edit_access =
+            has_shared_edit_access && (!is_codex_conversation || codex_has_model_choices);
+        let is_lrc = !is_codex_conversation
+            && FeatureFlag::InlineMenuHeaders.is_enabled()
             && terminal_model
                 .block_list()
                 .active_block()
                 .is_agent_in_control_or_tagged_in();
         drop(terminal_model);
 
-        let model_display_name = if is_lrc {
-            llm_preferences
-                .get_active_cli_agent_model(app, Some(self.terminal_view_id))
-                .menu_display_name()
+        let model_display_name = if is_codex_conversation {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                self.active_codex_model_display_name(app)
+            }
+            #[cfg(target_family = "wasm")]
+            {
+                "codex".to_string()
+            }
         } else {
-            llm_preferences
-                .get_active_base_model(app, Some(self.terminal_view_id))
-                .menu_display_name()
+            self.active_agent_menu_display_name(app)
         };
 
         let text_color = if self.is_blurred {
@@ -1419,13 +1606,18 @@ impl ProfileModelSelector {
         .finish();
 
         let mut content = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        if is_lrc {
-            let terminal_icon = Icon::Terminal
-                .to_warpui_icon(Fill::Solid(text_color))
-                .finish();
+        let leading_icon = if is_codex_conversation {
+            Some(Icon::OpenAILogo)
+        } else if is_lrc {
+            Some(Icon::Terminal)
+        } else {
+            None
+        };
+        if let Some(icon) = leading_icon {
+            let icon = icon.to_warpui_icon(Fill::Solid(text_color)).finish();
             content = content.with_child(
                 Container::new(
-                    ConstrainedBox::new(terminal_icon)
+                    ConstrainedBox::new(icon)
                         .with_height(icon_size)
                         .with_width(icon_size)
                         .finish(),
@@ -1440,7 +1632,9 @@ impl ProfileModelSelector {
         // Only show chevron icon if the user can click to open the menu (i.e. has edit access)
         // and the InlineMenuHeaders feature flag is not enabled
         // (when enabled, clicking opens the inline model selector instead of a dropdown).
-        if has_edit_access && !FeatureFlag::InlineMenuHeaders.is_enabled() {
+        if has_edit_access
+            && (is_codex_conversation || !FeatureFlag::InlineMenuHeaders.is_enabled())
+        {
             let chevron_icon = Icon::ChevronDown
                 .to_warpui_icon(Fill::Solid(text_color))
                 .finish();
@@ -1475,7 +1669,13 @@ impl ProfileModelSelector {
                     .finish();
 
                 let tooltip_text = if !has_edit_access {
-                    "Request edit access to change model".to_owned()
+                    if is_codex_conversation && !codex_has_model_choices {
+                        "Codex app-server model".to_owned()
+                    } else {
+                        "Request edit access to change model".to_owned()
+                    }
+                } else if is_codex_conversation {
+                    "Choose a Codex model".to_owned()
                 } else {
                     "Choose an agent model".to_owned()
                 };
@@ -1822,6 +2022,22 @@ impl TypedActionView for ProfileModelSelector {
                 });
                 self.set_model_menu_visibility(false, ctx);
             }
+            #[cfg(not(target_family = "wasm"))]
+            ProfileModelSelectorAction::SelectCodexModel(model_id) => {
+                log::info!("Selecting Codex app-server model {model_id} (from model selector)");
+                CodexAppServerModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.set_selected_model_id(Some(model_id.clone()), ctx);
+                });
+                self.set_model_menu_visibility(false, ctx);
+            }
+            #[cfg(not(target_family = "wasm"))]
+            ProfileModelSelectorAction::UseCodexDefault => {
+                log::info!("Using Codex app-server thread default model");
+                CodexAppServerModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.set_selected_model_id(None, ctx);
+                });
+                self.set_model_menu_visibility(false, ctx);
+            }
             ProfileModelSelectorAction::SelectAutoModel
             | ProfileModelSelectorAction::SelectReasoningModel(_) => {
                 self.handle_sidecar_selection(ctx);
@@ -1836,6 +2052,14 @@ impl TypedActionView for ProfileModelSelector {
                 self.set_profile_menu_visibility(!self.is_profile_menu_open, ctx);
             }
             ProfileModelSelectorAction::ToggleModelMenu => {
+                #[cfg(not(target_family = "wasm"))]
+                if self.is_codex_conversation_active(ctx) {
+                    if CodexAppServerModel::as_ref(ctx).has_model_choices() {
+                        self.set_model_menu_visibility(!self.is_model_menu_open, ctx);
+                    }
+                    return;
+                }
+
                 if FeatureFlag::InlineMenuHeaders.is_enabled() {
                     ctx.emit(ProfileModelSelectorEvent::ToggleInlineModelSelector);
                 } else {
@@ -1868,7 +2092,8 @@ impl View for ProfileModelSelector {
 
         // Only add profile button to compact layout if there are multiple profiles
         // and the user is not a viewer (we currently don't support profiles in shared sessions).
-        let should_show_profile_section = has_multiple_profiles && !is_viewer;
+        let should_show_profile_section =
+            has_multiple_profiles && !is_viewer && !self.is_codex_conversation_active(app);
         if should_show_profile_section {
             let profile_button_with_save_position = SavePosition::new(
                 ChildView::new(&self.profile_compact_button).finish(),
