@@ -313,10 +313,7 @@ impl CodexAppServerModel {
     }
 
     #[allow(dead_code)]
-    pub fn thread_id_for_conversation(
-        &self,
-        conversation_id: AIConversationId,
-    ) -> Option<&str> {
+    pub fn thread_id_for_conversation(&self, conversation_id: AIConversationId) -> Option<&str> {
         self.thread_id_by_conversation_id
             .get(&conversation_id)
             .map(String::as_str)
@@ -486,11 +483,7 @@ impl CodexAppServerModel {
         );
     }
 
-    pub fn open_thread_as_conversation(
-        &mut self,
-        thread_id: String,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    pub fn open_thread_as_conversation(&mut self, thread_id: String, ctx: &mut ModelContext<Self>) {
         let settings = CodexAppServerSettings::as_ref(ctx);
         if !*settings.enabled {
             return;
@@ -1019,10 +1012,8 @@ impl CodexAppServerModel {
 
         let active_thread_changed = self.active_thread.as_ref() != Some(&detail);
         if active_thread_changed {
-            if let Some(conversation_id) = self
-                .conversation_id_by_thread_id
-                .get(&thread_id)
-                .copied()
+            if let Some(conversation_id) =
+                self.conversation_id_by_thread_id.get(&thread_id).copied()
             {
                 let conversation = codex_thread_detail_to_ai_conversation(conversation_id, &detail);
                 BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
@@ -1627,6 +1618,7 @@ fn append_codex_restored_exchange(
 fn codex_items_to_agent_text(items: &[CodexConversationItem]) -> String {
     let mut parts = Vec::new();
     let mut assistant_delta_buffer = String::new();
+    let mut last_command: Option<String> = None;
 
     for item in items.iter().filter(|item| !is_codex_user_item(&item.role)) {
         if item.text.trim().is_empty() {
@@ -1635,6 +1627,32 @@ fn codex_items_to_agent_text(items: &[CodexConversationItem]) -> String {
 
         if is_codex_assistant_delta_item(&item.role) {
             assistant_delta_buffer.push_str(&item.text);
+            continue;
+        }
+
+        if is_codex_completed_item(&item.role)
+            && last_command.as_ref().is_some_and(|command| {
+                normalized_codex_text(command) == normalized_codex_text(&item.text)
+            })
+        {
+            continue;
+        }
+
+        if let Some(command) = codex_command_text_from_item(item) {
+            flush_codex_assistant_delta_buffer(&mut parts, &mut assistant_delta_buffer);
+            parts.push(format!("commandExecution: {command}"));
+            last_command = Some(command);
+            continue;
+        }
+
+        if is_codex_command_output_delta_item(&item.role) {
+            if let Some(output) = codex_command_output_text(&item.text) {
+                flush_codex_assistant_delta_buffer(&mut parts, &mut assistant_delta_buffer);
+                parts.push(format!(
+                    "commandExecution/output: {}",
+                    serde_json::to_string(&output).unwrap_or_else(|_| output)
+                ));
+            }
             continue;
         }
 
@@ -1668,6 +1686,13 @@ fn normalized_codex_text(text: &str) -> String {
     text.split_whitespace().collect::<String>()
 }
 
+fn normalized_codex_role(role: &str) -> String {
+    role.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
 fn is_codex_user_item(role: &str) -> bool {
     let role = role.to_ascii_lowercase();
     role == "user" || role == "usermessage" || role.ends_with("/usermessage")
@@ -1693,6 +1718,83 @@ fn is_codex_assistant_delta_item(role: &str) -> bool {
 fn is_codex_completed_item(role: &str) -> bool {
     let role = role.to_ascii_lowercase();
     role == "item/completed" || role.ends_with("/completed")
+}
+
+fn codex_command_text_from_item(item: &CodexConversationItem) -> Option<String> {
+    if is_codex_command_output_delta_item(&item.role) {
+        return None;
+    }
+
+    let role = normalized_codex_role(&item.role);
+    let is_command_role =
+        role.contains("commandexecution") || role == "itemstarted" || role.ends_with("started");
+    if !is_command_role {
+        return None;
+    }
+
+    let command = codex_command_text(&item.text)?;
+    if role.contains("commandexecution") || looks_like_codex_shell_command(&command) {
+        Some(command)
+    } else {
+        None
+    }
+}
+
+fn codex_command_text(text: &str) -> Option<String> {
+    serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| command_field(&value))
+        .or_else(|| (!text.trim().is_empty()).then(|| text.trim().to_string()))
+}
+
+fn looks_like_codex_shell_command(command: &str) -> bool {
+    let command = command.trim();
+    command.starts_with("/bin/")
+        || command.contains(" -lc ")
+        || command.starts_with("git ")
+        || command.starts_with("cargo ")
+        || command.starts_with("gh ")
+        || command.starts_with("rg ")
+        || command.starts_with("sed ")
+        || command.starts_with("nl ")
+        || command.starts_with("ls ")
+        || command.contains(" && ")
+        || command.contains(" | ")
+}
+
+fn is_codex_command_output_delta_item(role: &str) -> bool {
+    let role = normalized_codex_role(role);
+    role.contains("commandexecution") && role.contains("output")
+}
+
+fn codex_command_output_text(text: &str) -> Option<String> {
+    let output = serde_json::from_str::<Value>(text)
+        .ok()
+        .and_then(|value| codex_command_output_text_from_value(&value))
+        .unwrap_or_else(|| text.to_string());
+    (!output.is_empty()).then_some(output)
+}
+
+fn codex_command_output_text_from_value(value: &Value) -> Option<String> {
+    string_field(
+        value,
+        &["body", "output", "delta", "text", "content", "message"],
+    )
+    .or_else(|| {
+        value
+            .get("delta")
+            .and_then(codex_command_output_text_from_value)
+    })
+    .or_else(|| {
+        value
+            .get("event")
+            .and_then(codex_command_output_text_from_value)
+    })
+    .or_else(|| {
+        value
+            .get("item")
+            .and_then(codex_command_output_text_from_value)
+    })
 }
 
 fn parse_codex_timestamp(value: &str) -> Option<DateTime<Local>> {
@@ -2167,7 +2269,7 @@ fn text_from_value(value: &Value) -> Option<String> {
     if let Some(text) = string_field(
         value,
         &[
-            "text", "delta", "message", "output", "content", "plan", "command", "error",
+            "text", "delta", "message", "output", "body", "content", "plan", "command", "error",
         ],
     ) {
         return Some(text);
@@ -2369,7 +2471,9 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_codex_prompt_request("/planetary work").unwrap().collaboration_mode,
+            parse_codex_prompt_request("/planetary work")
+                .unwrap()
+                .collaboration_mode,
             None
         );
     }
@@ -2436,10 +2540,7 @@ mod tests {
     #[test]
     fn codex_thread_start_params_include_current_project_cwd() {
         assert_eq!(
-            thread_start_params(
-                Some("gpt-5.4-codex"),
-                Some(&PathBuf::from("/tmp/project"))
-            ),
+            thread_start_params(Some("gpt-5.4-codex"), Some(&PathBuf::from("/tmp/project"))),
             json!({
                 "model": "gpt-5.4-codex",
                 "cwd": "/tmp/project",
@@ -2552,6 +2653,37 @@ mod tests {
         }]);
 
         assert_eq!(text, "Done.");
+    }
+
+    #[test]
+    fn command_execution_items_render_as_command_markers_with_output() {
+        let text = codex_items_to_agent_text(&[
+            CodexConversationItem {
+                role: "item/started".to_string(),
+                text: "/bin/zsh -lc 'git status --short'".to_string(),
+            },
+            CodexConversationItem {
+                role: "item/commandExecution/outputDelta".to_string(),
+                text: json!({
+                    "body": " M app/src/codex_app_server/mod.rs\n",
+                    "status": "running"
+                })
+                .to_string(),
+            },
+            CodexConversationItem {
+                role: "item/completed".to_string(),
+                text: "/bin/zsh -lc 'git status --short'".to_string(),
+            },
+            CodexConversationItem {
+                role: "item/agentMessage".to_string(),
+                text: "Done.".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            text,
+            "commandExecution: /bin/zsh -lc 'git status --short'\n\ncommandExecution/output: \" M app/src/codex_app_server/mod.rs\\n\"\n\nDone."
+        );
     }
 
     #[test]
