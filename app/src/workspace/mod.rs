@@ -1120,11 +1120,11 @@ pub fn init(app: &mut AppContext) {
 
     if FeatureFlag::Changelog.is_enabled() {
         app.register_editable_bindings([
-            // Always show the "View latest changelog" action in the command palette,
+            // Always show the "View GitHub releases" action in the command palette,
             // but without a keybinding when the update toast is not visible.
             EditableBinding::new(
                 "workspace:view_changelog",
-                "View latest changelog",
+                "View GitHub releases",
                 WorkspaceAction::ViewLatestChangelog,
             )
             .with_context_predicate(id!("Workspace") & !id!("UpdateToastVisible"))
@@ -1135,7 +1135,7 @@ pub fn init(app: &mut AppContext) {
             // When the update toast is visible, register the keybinding as well.
             EditableBinding::new(
                 "workspace:view_changelog",
-                "View latest changelog",
+                "View GitHub releases",
                 WorkspaceAction::ViewLatestChangelog,
             )
             .with_context_predicate(id!("Workspace") & id!("UpdateToastVisible"))

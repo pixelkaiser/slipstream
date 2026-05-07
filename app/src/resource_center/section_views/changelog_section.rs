@@ -18,6 +18,7 @@ use crate::{
     changelog_model::{ChangelogHeader, ChangelogModel, ChangelogState, Event as ChangelogEvent},
     themes::theme::Fill,
     ui_components::icons,
+    util::links,
 };
 use crate::{send_telemetry_from_ctx, server::telemetry::TelemetryEvent};
 
@@ -365,8 +366,8 @@ impl SectionView for ChangelogSectionView {
             appearance
                 .ui_builder()
                 .link(
-                    "Read all changelogs".into(),
-                    Some("https://docs.warp.dev/changelog".into()),
+                    "GitHub releases".into(),
+                    Some(links::GITHUB_RELEASES_URL.into()),
                     None,
                     self.changelog_button_mouse_states
                         .view_changelogs_mouse_state
