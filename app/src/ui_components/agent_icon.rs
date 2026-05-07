@@ -17,6 +17,9 @@ use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationProvenance, AgentConversationsModel,
     AgentRunDisplayStatus,
 };
+use crate::ai::blocklist::BlocklistAIHistoryModel;
+#[cfg(not(target_family = "wasm"))]
+use crate::codex_app_server::CodexAppServerModel;
 use crate::terminal::cli_agent_sessions::listener::agent_supports_rich_status;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::view::TerminalView;
@@ -67,6 +70,14 @@ pub(crate) fn terminal_view_agent_icon_variant(
     }
 
     let is_ambient = terminal_view.is_ambient_agent_session(app) || ambient_task_id.is_some();
+    #[cfg(not(target_family = "wasm"))]
+    let selected_codex_conversation = terminal_view
+        .active_conversation_id(app)
+        .is_some_and(|conversation_id| {
+            CodexAppServerModel::as_ref(app).is_codex_conversation(conversation_id)
+        });
+    #[cfg(target_family = "wasm")]
+    let selected_codex_conversation = false;
     let inputs = TerminalIconInputs {
         is_ambient,
         cli_session: cli_agent_session.map(|session| CLISessionInputs {
@@ -79,6 +90,7 @@ pub(crate) fn terminal_view_agent_icon_variant(
             .ambient_agent_view_model()
             .and_then(|model| model.as_ref(app).selected_third_party_cli_agent()),
         selected_conversation_status: terminal_view.selected_conversation_status_for_display(app),
+        selected_codex_conversation,
         has_selected_conversation: terminal_view
             .selected_conversation_display_title(app)
             .is_some(),
@@ -110,6 +122,8 @@ struct TerminalIconInputs {
     selected_third_party_cli_agent: Option<CLIAgent>,
     /// The conversation status that the terminal view would surface in its status-icon slot.
     selected_conversation_status: Option<ConversationStatus>,
+    /// Whether the selected conversation is backed by the native Codex app-server integration.
+    selected_codex_conversation: bool,
     /// Whether the terminal view currently has a selected conversation (ambient or local).
     has_selected_conversation: bool,
 }
@@ -147,7 +161,17 @@ fn agent_icon_variant_from_terminal_inputs(
         });
     }
 
-    // 2. Live ambient run with a third-party harness selected, before task data is
+    // 2. Native app-server Codex conversations have no CLI session and no server metadata, but
+    //    they should still render with the Codex/OpenAI treatment in terminal chrome.
+    if inputs.selected_codex_conversation {
+        return Some(IconWithStatusVariant::CLIAgent {
+            agent: CLIAgent::Codex,
+            status: inputs.selected_conversation_status.clone(),
+            is_ambient: inputs.is_ambient,
+        });
+    }
+
+    // 3. Live ambient run with a third-party harness selected, before task data is
     //    available (e.g. Claude pre-dispatch). `Unknown` is filtered so an unrecognized
     //    harness doesn't render as an unbranded gray circle.
     if inputs.is_ambient {
@@ -163,7 +187,7 @@ fn agent_icon_variant_from_terminal_inputs(
         }
     }
 
-    // 3. Selected conversation OR ambient (Oz) terminal: Oz agent variant.
+    // 4. Selected conversation OR ambient (Oz) terminal: Oz agent variant.
     if inputs.has_selected_conversation || inputs.is_ambient {
         return Some(IconWithStatusVariant::OzAgent {
             status: inputs.selected_conversation_status.clone(),

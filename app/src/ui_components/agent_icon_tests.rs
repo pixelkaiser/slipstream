@@ -86,6 +86,8 @@ enum CanonicalRunState {
     /// model exists, so the harness comes from the conversation's server metadata; the icon
     /// must still render as cloud Codex.
     ViewingCloudCodexTranscript,
+    /// Native Codex app-server conversation opened locally from the Codex conversations panel.
+    LocalCodexAppServerConversation,
     /// Local Claude CLI session with a plugin listener (rich status), in-progress.
     LocalClaudePluginInProgress,
     /// Local Claude CLI session with a plugin listener (rich status), blocked.
@@ -104,6 +106,7 @@ impl CanonicalRunState {
             CloudClaudePreDispatch,
             CloudClaudeInProgress,
             ViewingCloudCodexTranscript,
+            LocalCodexAppServerConversation,
             LocalClaudePluginInProgress,
             LocalClaudePluginBlocked,
             LocalClaudeCommandDetected,
@@ -146,6 +149,12 @@ impl CanonicalRunState {
                 status: Some(ConversationStatus::Success),
                 is_ambient: true,
             }),
+            LocalCodexAppServerConversation => Some(AgentIconFields {
+                is_cli: true,
+                cli_agent: Some(CLIAgent::Codex),
+                status: Some(ConversationStatus::InProgress),
+                is_ambient: false,
+            }),
             LocalClaudePluginInProgress => Some(AgentIconFields {
                 is_cli: true,
                 cli_agent: Some(CLIAgent::Claude),
@@ -178,6 +187,7 @@ impl CanonicalRunState {
                 cli_session: None,
                 selected_third_party_cli_agent: None,
                 selected_conversation_status: None,
+                selected_codex_conversation: false,
                 has_selected_conversation: false,
             },
             LocalOzInProgress => TerminalIconInputs {
@@ -185,6 +195,7 @@ impl CanonicalRunState {
                 cli_session: None,
                 selected_third_party_cli_agent: None,
                 selected_conversation_status: Some(ConversationStatus::InProgress),
+                selected_codex_conversation: false,
                 has_selected_conversation: true,
             },
             CloudOzInProgress => TerminalIconInputs {
@@ -192,6 +203,7 @@ impl CanonicalRunState {
                 cli_session: None,
                 selected_third_party_cli_agent: None,
                 selected_conversation_status: Some(ConversationStatus::InProgress),
+                selected_codex_conversation: false,
                 has_selected_conversation: false,
             },
             CloudClaudePreDispatch => TerminalIconInputs {
@@ -199,6 +211,7 @@ impl CanonicalRunState {
                 cli_session: None,
                 selected_third_party_cli_agent: Some(CLIAgent::Claude),
                 selected_conversation_status: None,
+                selected_codex_conversation: false,
                 has_selected_conversation: false,
             },
             CloudClaudeInProgress => TerminalIconInputs {
@@ -206,6 +219,7 @@ impl CanonicalRunState {
                 cli_session: None,
                 selected_third_party_cli_agent: Some(CLIAgent::Claude),
                 selected_conversation_status: Some(ConversationStatus::InProgress),
+                selected_codex_conversation: false,
                 has_selected_conversation: false,
             },
             ViewingCloudCodexTranscript => TerminalIconInputs {
@@ -215,6 +229,15 @@ impl CanonicalRunState {
                 cli_session: None,
                 selected_third_party_cli_agent: Some(CLIAgent::Codex),
                 selected_conversation_status: Some(ConversationStatus::Success),
+                selected_codex_conversation: false,
+                has_selected_conversation: true,
+            },
+            LocalCodexAppServerConversation => TerminalIconInputs {
+                is_ambient: false,
+                cli_session: None,
+                selected_third_party_cli_agent: None,
+                selected_conversation_status: Some(ConversationStatus::InProgress),
+                selected_codex_conversation: true,
                 has_selected_conversation: true,
             },
             LocalClaudePluginInProgress => TerminalIconInputs {
@@ -227,6 +250,7 @@ impl CanonicalRunState {
                 }),
                 selected_third_party_cli_agent: None,
                 selected_conversation_status: None,
+                selected_codex_conversation: false,
                 has_selected_conversation: false,
             },
             LocalClaudePluginBlocked => TerminalIconInputs {
@@ -241,6 +265,7 @@ impl CanonicalRunState {
                 }),
                 selected_third_party_cli_agent: None,
                 selected_conversation_status: None,
+                selected_codex_conversation: false,
                 has_selected_conversation: false,
             },
             LocalClaudeCommandDetected => TerminalIconInputs {
@@ -253,6 +278,7 @@ impl CanonicalRunState {
                 }),
                 selected_third_party_cli_agent: None,
                 selected_conversation_status: None,
+                selected_codex_conversation: false,
                 has_selected_conversation: false,
             },
         }
@@ -272,6 +298,7 @@ impl CanonicalRunState {
             }
             PlainTerminal
             | LocalOzInProgress
+            | LocalCodexAppServerConversation
             | LocalClaudePluginInProgress
             | LocalClaudePluginBlocked
             | LocalClaudeCommandDetected => None,

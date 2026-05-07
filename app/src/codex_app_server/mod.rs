@@ -168,6 +168,7 @@ pub struct CodexAppServerModel {
     selected_model_id: Option<String>,
     project_roots: Vec<PathBuf>,
     opening_thread_id: Option<String>,
+    started_thread: Option<CodexStartedThread>,
     conversation_id_by_thread_id: HashMap<String, AIConversationId>,
     thread_id_by_conversation_id: HashMap<AIConversationId, String>,
 }
@@ -179,9 +180,19 @@ struct CodexActiveTurn {
     pending_approval: CodexPendingApproval,
 }
 
+struct CodexStartedThread {
+    thread_id: String,
+    client: JsonRpcSocket,
+}
+
 struct CodexTurnProgress {
     items: Vec<CodexConversationItem>,
     active_turn: Option<CodexActiveTurn>,
+}
+
+struct CodexThreadStart {
+    detail: CodexThreadDetail,
+    client: JsonRpcSocket,
 }
 
 struct CodexRefreshSnapshot {
@@ -213,6 +224,7 @@ impl CodexAppServerModel {
             selected_model_id: None,
             project_roots: Vec::new(),
             opening_thread_id: None,
+            started_thread: None,
             conversation_id_by_thread_id: HashMap::new(),
             thread_id_by_conversation_id: HashMap::new(),
         };
@@ -322,6 +334,7 @@ impl CodexAppServerModel {
             self.models.clear();
             self.selected_model_id = None;
             self.opening_thread_id = None;
+            self.started_thread = None;
             self.conversation_id_by_thread_id.clear();
             self.thread_id_by_conversation_id.clear();
             ctx.emit(CodexAppServerModelEvent::StatusChanged);
@@ -341,6 +354,7 @@ impl CodexAppServerModel {
                 self.active_thread = None;
                 self.active_turn = None;
                 self.models.clear();
+                self.started_thread = None;
                 ctx.emit(CodexAppServerModelEvent::StatusChanged);
                 ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
                 ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
@@ -394,6 +408,7 @@ impl CodexAppServerModel {
                         model.active_thread = None;
                         model.active_turn = None;
                         model.models.clear();
+                        model.started_thread = None;
                         ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
                         ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
                         ctx.emit(CodexAppServerModelEvent::ModelsChanged);
@@ -426,6 +441,7 @@ impl CodexAppServerModel {
             .find(|thread| thread.id == thread_id)
             .cloned();
         self.active_turn = None;
+        self.started_thread = None;
 
         let _ = ctx.spawn(
             async move { read_thread(&config, &thread_id, fallback_summary).await },
@@ -478,6 +494,7 @@ impl CodexAppServerModel {
         self.opening_thread_id = Some(thread_id.clone());
         self.active_thread = None;
         self.active_turn = None;
+        self.started_thread = None;
         ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
 
         let _ = ctx.spawn(
@@ -537,12 +554,14 @@ impl CodexAppServerModel {
         let cwd = self.project_roots.first().cloned();
         self.active_thread = None;
         self.active_turn = None;
+        self.started_thread = None;
         ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
 
         let _ = ctx.spawn(
             async move { start_thread(&config, model_id.as_deref(), cwd.as_ref()).await },
             move |model, result, ctx| match result {
-                Ok(mut detail) => {
+                Ok(started_thread) => {
+                    let mut detail = started_thread.detail;
                     if detail.summary.title == detail.summary.id {
                         detail.summary.title = "New Codex conversation".to_string();
                     }
@@ -562,6 +581,10 @@ impl CodexAppServerModel {
                         .insert(conversation_id, thread_id.clone());
                     upsert_thread_summary(&mut model.threads, detail.summary.clone());
                     model.active_thread = Some(detail);
+                    model.started_thread = Some(CodexStartedThread {
+                        thread_id: thread_id.clone(),
+                        client: started_thread.client,
+                    });
                     model.status = CodexAppServerStatus::Connected;
                     ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
                     ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
@@ -622,9 +645,17 @@ impl CodexAppServerModel {
 
         let turn_thread_id = active_thread_id.clone();
         let model_id = self.selected_model_id.clone();
+        let started_thread = self.take_started_thread(&turn_thread_id);
         let _ = ctx.spawn(
             async move {
-                continue_thread(&config, &turn_thread_id, &prompt, model_id.as_deref()).await
+                continue_thread(
+                    &config,
+                    &turn_thread_id,
+                    &prompt,
+                    model_id.as_deref(),
+                    started_thread,
+                )
+                .await
             },
             move |model, result, ctx| {
                 model.apply_turn_progress(&active_thread_id, result, ctx);
@@ -692,9 +723,17 @@ impl CodexAppServerModel {
         self.active_turn = None;
         let callback_thread_id = thread_id.clone();
         let model_id = self.selected_model_id.clone();
+        let started_thread = self.take_started_thread(&thread_id);
         let _ = ctx.spawn(
             async move {
-                continue_thread(&config, &thread_id, &prompt, model_id.as_deref()).await
+                continue_thread(
+                    &config,
+                    &thread_id,
+                    &prompt,
+                    model_id.as_deref(),
+                    started_thread,
+                )
+                .await
             },
             move |model, result, ctx| {
                 let (output_text, is_finished, is_error, active_turn) = match result {
@@ -743,6 +782,18 @@ impl CodexAppServerModel {
             },
         );
         true
+    }
+
+    fn take_started_thread(&mut self, thread_id: &str) -> Option<CodexStartedThread> {
+        if should_resume_thread(
+            self.started_thread
+                .as_ref()
+                .map(|started_thread| started_thread.thread_id.as_str()),
+            thread_id,
+        ) {
+            return None;
+        }
+        self.started_thread.take()
     }
 
     #[allow(dead_code)]
@@ -1092,6 +1143,10 @@ fn upsert_thread_summary(threads: &mut Vec<CodexThreadSummary>, summary: CodexTh
     }
 }
 
+fn should_resume_thread(started_thread_id: Option<&str>, thread_id: &str) -> bool {
+    started_thread_id != Some(thread_id)
+}
+
 async fn read_thread(
     config: &CodexAppServerConfig,
     thread_id: &str,
@@ -1113,10 +1168,16 @@ async fn start_thread(
     config: &CodexAppServerConfig,
     model_id: Option<&str>,
     cwd: Option<&PathBuf>,
-) -> Result<CodexThreadDetail> {
-    let result =
-        json_rpc_request(config, "thread/start", thread_start_params(model_id, cwd)).await?;
-    Ok(parse_thread_detail(&result, None, "new-codex-thread"))
+) -> Result<CodexThreadStart> {
+    let mut client = JsonRpcSocket::connect(config).await?;
+    client.initialize().await?;
+    let result = client
+        .request("thread/start", thread_start_params(model_id, cwd))
+        .await?;
+    Ok(CodexThreadStart {
+        detail: parse_thread_detail(&result, None, "new-codex-thread"),
+        client,
+    })
 }
 
 async fn continue_thread(
@@ -1124,12 +1185,18 @@ async fn continue_thread(
     thread_id: &str,
     prompt: &str,
     model_id: Option<&str>,
+    started_thread: Option<CodexStartedThread>,
 ) -> Result<CodexTurnProgress> {
-    let mut client = JsonRpcSocket::connect(config).await?;
-    client.initialize().await?;
-    let _ = client
-        .request("thread/resume", thread_resume_params(thread_id, model_id))
-        .await?;
+    let mut client = if let Some(started_thread) = started_thread {
+        started_thread.client
+    } else {
+        let mut client = JsonRpcSocket::connect(config).await?;
+        client.initialize().await?;
+        let _ = client
+            .request("thread/resume", thread_resume_params(thread_id, model_id))
+            .await?;
+        client
+    };
     let _ = client
         .request("turn/start", turn_start_params(thread_id, prompt, model_id))
         .await?;
@@ -1957,6 +2024,7 @@ mod tests {
             selected_model_id: None,
             project_roots: Vec::new(),
             opening_thread_id: None,
+            started_thread: None,
             conversation_id_by_thread_id: HashMap::new(),
             thread_id_by_conversation_id: HashMap::new(),
         };
@@ -1992,6 +2060,13 @@ mod tests {
                 }],
             })
         );
+    }
+
+    #[test]
+    fn first_turn_on_newly_started_thread_does_not_resume() {
+        assert!(!should_resume_thread(Some("thread-1"), "thread-1"));
+        assert!(should_resume_thread(Some("thread-2"), "thread-1"));
+        assert!(should_resume_thread(None, "thread-1"));
     }
 
     #[test]
