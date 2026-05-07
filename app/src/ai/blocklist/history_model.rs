@@ -812,6 +812,141 @@ impl BlocklistAIHistoryModel {
             .insert(conversation.id(), conversation);
     }
 
+    pub(crate) fn refresh_cached_codex_conversation(
+        &mut self,
+        incoming_conversation: AIConversation,
+        ctx: &mut ModelContext<Self>,
+    ) -> bool {
+        let conversation_id = incoming_conversation.id();
+        let incoming_exchanges = codex_exchange_snapshots(&incoming_conversation);
+        if incoming_exchanges.is_empty() {
+            return false;
+        }
+
+        let Some(terminal_view_id) = self.live_terminal_view_id_for_conversation(conversation_id)
+        else {
+            self.cache_external_conversation(incoming_conversation);
+            return true;
+        };
+
+        let Some(existing_conversation) = self.conversations_by_id.get_mut(&conversation_id)
+        else {
+            let new_status = incoming_conversation.status().clone();
+            self.conversations_by_id
+                .insert(conversation_id, incoming_conversation);
+            ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                conversation_id,
+                terminal_view_id,
+                update: ConversationStatusUpdate::Restored,
+                new_status,
+            });
+            ctx.emit(BlocklistAIHistoryEvent::RestoredConversations {
+                terminal_view_id,
+                conversation_ids: vec![conversation_id],
+            });
+            return true;
+        };
+
+        let existing_exchanges = codex_exchange_snapshots(existing_conversation);
+        if incoming_exchanges.len() < existing_exchanges.len()
+            || !existing_exchanges
+                .iter()
+                .zip(&incoming_exchanges)
+                .all(|(existing, incoming)| existing.query == incoming.query)
+        {
+            return false;
+        }
+
+        let mut changed = false;
+        for (existing, incoming) in existing_exchanges.iter().zip(&incoming_exchanges) {
+            if !should_update_codex_cached_output(&existing.output, &incoming.output) {
+                continue;
+            }
+
+            let prev_status = existing_conversation.status().clone();
+            if existing_conversation
+                .update_codex_exchange_output(
+                    existing.exchange_id,
+                    incoming.output.clone(),
+                    true,
+                    false,
+                )
+                .is_ok()
+            {
+                ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
+                    exchange_id: existing.exchange_id,
+                    terminal_view_id,
+                    conversation_id,
+                    is_hidden: false,
+                });
+                if prev_status != *existing_conversation.status() {
+                    ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                        conversation_id,
+                        terminal_view_id,
+                        update: ConversationStatusUpdate::Changed { prev_status },
+                        new_status: existing_conversation.status().clone(),
+                    });
+                }
+                changed = true;
+            }
+        }
+
+        let new_exchanges = incoming_exchanges
+            .into_iter()
+            .skip(existing_exchanges.len())
+            .collect::<Vec<_>>();
+        for incoming in new_exchanges {
+            if incoming.query.is_none() && incoming.output.trim().is_empty() {
+                continue;
+            }
+
+            let prev_status = existing_conversation.status().clone();
+            let task_id = existing_conversation.get_root_task_id().clone();
+            let is_streaming = incoming.output.trim().is_empty();
+            let output_text = (!incoming.output.trim().is_empty()).then_some(incoming.output);
+            if let Ok(exchange_id) = existing_conversation.append_codex_exchange(
+                incoming.query,
+                output_text,
+                incoming.working_directory,
+                is_streaming,
+                incoming.start_time,
+            ) {
+                ctx.emit(BlocklistAIHistoryEvent::AppendedExchange {
+                    exchange_id,
+                    task_id,
+                    terminal_view_id,
+                    conversation_id,
+                    is_hidden: false,
+                    response_stream_id: None,
+                });
+                if prev_status != *existing_conversation.status() {
+                    ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
+                        conversation_id,
+                        terminal_view_id,
+                        update: ConversationStatusUpdate::Changed { prev_status },
+                        new_status: existing_conversation.status().clone(),
+                    });
+                }
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
+    fn live_terminal_view_id_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> Option<EntityId> {
+        self.live_conversation_ids_for_terminal_view
+            .iter()
+            .find_map(|(terminal_view_id, conversation_ids)| {
+                conversation_ids
+                    .contains(&conversation_id)
+                    .then_some(*terminal_view_id)
+            })
+    }
+
     /// Sets the active conversation ID, transferring ownership from any other
     /// terminal view that currently holds it.
     ///
@@ -2297,6 +2432,39 @@ impl BlocklistAIHistoryModel {
 /// conversation.
 fn agent_id_key(conversation: &AIConversation) -> Option<String> {
     conversation.orchestration_agent_id()
+}
+
+#[derive(Debug, Clone)]
+struct CodexExchangeSnapshot {
+    exchange_id: AIAgentExchangeId,
+    query: Option<String>,
+    output: String,
+    working_directory: Option<String>,
+    start_time: DateTime<Local>,
+}
+
+fn codex_exchange_snapshots(conversation: &AIConversation) -> Vec<CodexExchangeSnapshot> {
+    conversation
+        .root_task_exchanges()
+        .map(|exchange| {
+            let query = exchange.format_input_for_copy();
+            CodexExchangeSnapshot {
+                exchange_id: exchange.id,
+                query: (!query.trim().is_empty()).then_some(query),
+                output: exchange.format_output_for_copy(None),
+                working_directory: exchange.working_directory.clone(),
+                start_time: exchange.start_time,
+            }
+        })
+        .collect()
+}
+
+fn should_update_codex_cached_output(existing: &str, incoming: &str) -> bool {
+    let incoming = incoming.trim();
+    if incoming.is_empty() || existing.trim() == incoming {
+        return false;
+    }
+    existing.trim().is_empty() || incoming.len() >= existing.trim().len()
 }
 
 /// Whether an `UpdatedConversationStatus` event represents a restoration

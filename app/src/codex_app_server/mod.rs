@@ -27,6 +27,7 @@ const RECONNECT_BACKOFF: [Duration; 3] = [
     Duration::from_millis(500),
     Duration::from_secs(1),
 ];
+const ACTIVE_THREAD_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodexAppServerStatus {
@@ -164,10 +165,12 @@ pub struct CodexAppServerModel {
     threads: Vec<CodexThreadSummary>,
     active_thread: Option<CodexThreadDetail>,
     active_turn: Option<CodexActiveTurn>,
+    local_turn_thread_id: Option<String>,
     models: Vec<CodexModelInfo>,
     selected_model_id: Option<String>,
     project_roots: Vec<PathBuf>,
     opening_thread_id: Option<String>,
+    active_thread_poll_generation: u64,
     started_thread: Option<CodexStartedThread>,
     conversation_id_by_thread_id: HashMap<String, AIConversationId>,
     thread_id_by_conversation_id: HashMap<AIConversationId, String>,
@@ -200,6 +203,17 @@ struct CodexRefreshSnapshot {
     models: Vec<CodexModelInfo>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexPromptCollaborationMode {
+    Plan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexPromptRequest {
+    prompt: String,
+    collaboration_mode: Option<CodexPromptCollaborationMode>,
+}
+
 impl CodexAppServerModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(
@@ -220,10 +234,12 @@ impl CodexAppServerModel {
             threads: Vec::new(),
             active_thread: None,
             active_turn: None,
+            local_turn_thread_id: None,
             models: Vec::new(),
             selected_model_id: None,
             project_roots: Vec::new(),
             opening_thread_id: None,
+            active_thread_poll_generation: 0,
             started_thread: None,
             conversation_id_by_thread_id: HashMap::new(),
             thread_id_by_conversation_id: HashMap::new(),
@@ -327,10 +343,12 @@ impl CodexAppServerModel {
     pub fn refresh(&mut self, ctx: &mut ModelContext<Self>) {
         let settings = CodexAppServerSettings::as_ref(ctx);
         if !*settings.enabled {
+            self.stop_active_thread_polling();
             self.status = CodexAppServerStatus::Disabled;
             self.threads.clear();
             self.active_thread = None;
             self.active_turn = None;
+            self.local_turn_thread_id = None;
             self.models.clear();
             self.selected_model_id = None;
             self.opening_thread_id = None;
@@ -347,12 +365,14 @@ impl CodexAppServerModel {
         let config = match CodexAppServerConfig::from_settings(settings) {
             Ok(config) => config,
             Err(error) => {
+                self.stop_active_thread_polling();
                 self.status = CodexAppServerStatus::Disconnected {
                     message: error.to_string(),
                 };
                 self.threads.clear();
                 self.active_thread = None;
                 self.active_turn = None;
+                self.local_turn_thread_id = None;
                 self.models.clear();
                 self.started_thread = None;
                 ctx.emit(CodexAppServerModelEvent::StatusChanged);
@@ -401,12 +421,14 @@ impl CodexAppServerModel {
                         ctx.emit(CodexAppServerModelEvent::ModelsChanged);
                     }
                     Err(error) => {
+                        model.stop_active_thread_polling();
                         model.status = CodexAppServerStatus::Disconnected {
                             message: format!("{error:#}"),
                         };
                         model.threads.clear();
                         model.active_thread = None;
                         model.active_turn = None;
+                        model.local_turn_thread_id = None;
                         model.models.clear();
                         model.started_thread = None;
                         ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
@@ -440,14 +462,18 @@ impl CodexAppServerModel {
             .iter()
             .find(|thread| thread.id == thread_id)
             .cloned();
+        self.stop_active_thread_polling();
         self.active_turn = None;
+        self.local_turn_thread_id = None;
         self.started_thread = None;
 
         let _ = ctx.spawn(
             async move { read_thread(&config, &thread_id, fallback_summary).await },
             |model, result, ctx| match result {
                 Ok(detail) => {
+                    let thread_id = detail.summary.id.clone();
                     model.active_thread = Some(detail);
+                    model.start_active_thread_polling(thread_id, ctx);
                     ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
                 }
                 Err(error) => {
@@ -492,8 +518,10 @@ impl CodexAppServerModel {
         self.thread_id_by_conversation_id
             .insert(conversation_id, thread_id.clone());
         self.opening_thread_id = Some(thread_id.clone());
+        self.stop_active_thread_polling();
         self.active_thread = None;
         self.active_turn = None;
+        self.local_turn_thread_id = None;
         self.started_thread = None;
         ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
 
@@ -504,18 +532,9 @@ impl CodexAppServerModel {
                 match result {
                     Ok(detail) => {
                         let thread_id = detail.summary.id.clone();
-                        let conversation =
-                            codex_thread_detail_to_ai_conversation(conversation_id, &detail);
-                        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
-                            history.cache_external_conversation(conversation);
-                        });
+                        model.cache_thread_detail_as_conversation(conversation_id, &detail, ctx);
                         model.active_thread = Some(detail);
-                        model
-                            .conversation_id_by_thread_id
-                            .insert(thread_id.clone(), conversation_id);
-                        model
-                            .thread_id_by_conversation_id
-                            .insert(conversation_id, thread_id.clone());
+                        model.start_active_thread_polling(thread_id.clone(), ctx);
                         ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
                         ctx.emit(CodexAppServerModelEvent::OpenConversation {
                             conversation_id,
@@ -552,8 +571,10 @@ impl CodexAppServerModel {
 
         let model_id = self.selected_model_id.clone();
         let cwd = self.project_roots.first().cloned();
+        self.stop_active_thread_polling();
         self.active_thread = None;
         self.active_turn = None;
+        self.local_turn_thread_id = None;
         self.started_thread = None;
         ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
 
@@ -571,14 +592,7 @@ impl CodexAppServerModel {
                         .entry(thread_id.clone())
                         .or_insert_with(AIConversationId::new)
                         .to_owned();
-                    let conversation =
-                        codex_thread_detail_to_ai_conversation(conversation_id, &detail);
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
-                        history.cache_external_conversation(conversation);
-                    });
-                    model
-                        .thread_id_by_conversation_id
-                        .insert(conversation_id, thread_id.clone());
+                    model.cache_thread_detail_as_conversation(conversation_id, &detail, ctx);
                     upsert_thread_summary(&mut model.threads, detail.summary.clone());
                     model.active_thread = Some(detail);
                     model.started_thread = Some(CodexStartedThread {
@@ -607,10 +621,9 @@ impl CodexAppServerModel {
 
     #[allow(dead_code)]
     pub fn submit_prompt(&mut self, prompt: String, ctx: &mut ModelContext<Self>) {
-        let prompt = prompt.trim().to_string();
-        if prompt.is_empty() {
+        let Some(prompt_request) = parse_codex_prompt_request(&prompt) else {
             return;
-        }
+        };
         let Some(active_thread_id) = self
             .active_thread
             .as_ref()
@@ -618,10 +631,11 @@ impl CodexAppServerModel {
         else {
             return;
         };
+        let display_prompt = display_codex_prompt_request(&prompt_request);
         if let Some(active_thread) = &mut self.active_thread {
             active_thread.items.push(CodexConversationItem {
                 role: "user".to_string(),
-                text: prompt.clone(),
+                text: display_prompt,
             });
             active_thread.items.push(CodexConversationItem {
                 role: "codex".to_string(),
@@ -630,6 +644,7 @@ impl CodexAppServerModel {
         }
         ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
         self.active_turn = None;
+        self.local_turn_thread_id = Some(active_thread_id.clone());
 
         let settings = CodexAppServerSettings::as_ref(ctx);
         let config = match CodexAppServerConfig::from_settings(settings) {
@@ -645,14 +660,18 @@ impl CodexAppServerModel {
 
         let turn_thread_id = active_thread_id.clone();
         let model_id = self.selected_model_id.clone();
+        let collaboration_mode = prompt_request.collaboration_mode;
+        let collaboration_mode_model_id = self.collaboration_mode_model_id();
         let started_thread = self.take_started_thread(&turn_thread_id);
         let _ = ctx.spawn(
             async move {
                 continue_thread(
                     &config,
                     &turn_thread_id,
-                    &prompt,
+                    &prompt_request.prompt,
                     model_id.as_deref(),
+                    collaboration_mode,
+                    collaboration_mode_model_id.as_deref(),
                     started_thread,
                 )
                 .await
@@ -670,10 +689,9 @@ impl CodexAppServerModel {
         terminal_view_id: warpui::EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
-        let prompt = prompt.trim().to_string();
-        if prompt.is_empty() {
+        let Some(prompt_request) = parse_codex_prompt_request(&prompt) else {
             return false;
-        }
+        };
         let Some(thread_id) = self
             .thread_id_by_conversation_id
             .get(&conversation_id)
@@ -705,7 +723,7 @@ impl CodexAppServerModel {
         let exchange_id = match BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             history.append_codex_exchange(
                 conversation_id,
-                Some(prompt.clone()),
+                Some(display_codex_prompt_request(&prompt_request)),
                 None,
                 working_directory,
                 true,
@@ -721,16 +739,21 @@ impl CodexAppServerModel {
         };
 
         self.active_turn = None;
+        self.local_turn_thread_id = Some(thread_id.clone());
         let callback_thread_id = thread_id.clone();
         let model_id = self.selected_model_id.clone();
+        let collaboration_mode = prompt_request.collaboration_mode;
+        let collaboration_mode_model_id = self.collaboration_mode_model_id();
         let started_thread = self.take_started_thread(&thread_id);
         let _ = ctx.spawn(
             async move {
                 continue_thread(
                     &config,
                     &thread_id,
-                    &prompt,
+                    &prompt_request.prompt,
                     model_id.as_deref(),
+                    collaboration_mode,
+                    collaboration_mode_model_id.as_deref(),
                     started_thread,
                 )
                 .await
@@ -755,6 +778,10 @@ impl CodexAppServerModel {
                 };
 
                 model.active_turn = active_turn;
+                model.local_turn_thread_id = None;
+                if model.active_turn.is_none() {
+                    model.start_active_thread_polling(callback_thread_id.clone(), ctx);
+                }
                 let update_result =
                     BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
                         history.update_codex_exchange_output(
@@ -814,6 +841,7 @@ impl CodexAppServerModel {
             }],
         );
         ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
+        self.local_turn_thread_id = Some(thread_id.clone());
         let callback_thread_id = thread_id.clone();
 
         let _ = ctx.spawn(
@@ -852,7 +880,11 @@ impl CodexAppServerModel {
         };
 
         self.active_turn = active_turn;
+        self.local_turn_thread_id = None;
         self.append_items(active_thread_id, items);
+        if self.active_turn.is_none() {
+            self.start_active_thread_polling(active_thread_id.to_string(), ctx);
+        }
         ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
     }
 
@@ -870,6 +902,166 @@ impl CodexAppServerModel {
                 active_thread.items.extend(items);
             }
         }
+    }
+
+    fn stop_active_thread_polling(&mut self) {
+        self.active_thread_poll_generation = self.active_thread_poll_generation.wrapping_add(1);
+    }
+
+    fn start_active_thread_polling(&mut self, thread_id: String, ctx: &mut ModelContext<Self>) {
+        self.stop_active_thread_polling();
+        let generation = self.active_thread_poll_generation;
+        self.schedule_active_thread_poll(thread_id, generation, ctx);
+    }
+
+    fn schedule_active_thread_poll(
+        &mut self,
+        thread_id: String,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let _ = ctx.spawn(
+            async move {
+                Timer::after(ACTIVE_THREAD_POLL_INTERVAL).await;
+                thread_id
+            },
+            move |model, thread_id, ctx| {
+                if model.should_poll_active_thread(&thread_id, generation) {
+                    model.poll_active_thread(thread_id, generation, ctx);
+                }
+            },
+        );
+    }
+
+    fn should_poll_active_thread(&self, thread_id: &str, generation: u64) -> bool {
+        self.active_thread_poll_generation == generation
+            && self
+                .active_thread
+                .as_ref()
+                .is_some_and(|thread| thread.summary.id == thread_id)
+    }
+
+    fn poll_active_thread(
+        &mut self,
+        thread_id: String,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if self
+            .active_turn
+            .as_ref()
+            .is_some_and(|active_turn| active_turn.thread_id == thread_id)
+            || self.local_turn_thread_id.as_deref() == Some(thread_id.as_str())
+        {
+            self.schedule_active_thread_poll(thread_id, generation, ctx);
+            return;
+        }
+
+        let settings = CodexAppServerSettings::as_ref(ctx);
+        if !*settings.enabled {
+            return;
+        }
+        let config = match CodexAppServerConfig::from_settings(settings) {
+            Ok(config) => config,
+            Err(error) => {
+                self.status = CodexAppServerStatus::Disconnected {
+                    message: error.to_string(),
+                };
+                ctx.emit(CodexAppServerModelEvent::StatusChanged);
+                return;
+            }
+        };
+        let fallback_summary = self
+            .active_thread
+            .as_ref()
+            .filter(|thread| thread.summary.id == thread_id)
+            .map(|thread| thread.summary.clone())
+            .or_else(|| {
+                self.threads
+                    .iter()
+                    .find(|thread| thread.id == thread_id)
+                    .cloned()
+            });
+        let read_thread_id = thread_id.clone();
+
+        let _ = ctx.spawn(
+            async move { read_thread(&config, &read_thread_id, fallback_summary).await },
+            move |model, result, ctx| {
+                if !model.should_poll_active_thread(&thread_id, generation) {
+                    return;
+                }
+                match result {
+                    Ok(detail) => model.apply_polled_thread_detail(detail, ctx),
+                    Err(error) => {
+                        log::warn!("Codex app-server thread/read poll failed: {error:#}");
+                    }
+                }
+                if model.should_poll_active_thread(&thread_id, generation) {
+                    model.schedule_active_thread_poll(thread_id, generation, ctx);
+                }
+            },
+        );
+    }
+
+    fn apply_polled_thread_detail(
+        &mut self,
+        detail: CodexThreadDetail,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let thread_id = detail.summary.id.clone();
+        let summary_changed = upsert_thread_summary(&mut self.threads, detail.summary.clone());
+        if !should_apply_polled_thread_detail(self.active_thread.as_ref(), &detail) {
+            if summary_changed {
+                ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
+            }
+            return;
+        }
+
+        let active_thread_changed = self.active_thread.as_ref() != Some(&detail);
+        if active_thread_changed {
+            if let Some(conversation_id) = self
+                .conversation_id_by_thread_id
+                .get(&thread_id)
+                .copied()
+            {
+                let conversation = codex_thread_detail_to_ai_conversation(conversation_id, &detail);
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                    history.refresh_cached_codex_conversation(conversation, ctx);
+                });
+            }
+            self.active_thread = Some(detail);
+            ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
+        }
+        if summary_changed {
+            ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
+        }
+    }
+
+    fn cache_thread_detail_as_conversation(
+        &mut self,
+        conversation_id: AIConversationId,
+        detail: &CodexThreadDetail,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let thread_id = detail.summary.id.clone();
+        let conversation = codex_thread_detail_to_ai_conversation(conversation_id, detail);
+        BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
+            history.cache_external_conversation(conversation);
+        });
+        self.conversation_id_by_thread_id
+            .insert(thread_id.clone(), conversation_id);
+        self.thread_id_by_conversation_id
+            .insert(conversation_id, thread_id);
+    }
+
+    fn collaboration_mode_model_id(&self) -> Option<String> {
+        self.selected_model_id.clone().or_else(|| {
+            self.models
+                .iter()
+                .find(|model| model.is_default)
+                .or_else(|| self.models.first())
+                .map(|model| model.id.clone())
+        })
     }
 }
 
@@ -1135,16 +1327,71 @@ fn dedupe_project_roots(
     project_roots
 }
 
-fn upsert_thread_summary(threads: &mut Vec<CodexThreadSummary>, summary: CodexThreadSummary) {
+fn upsert_thread_summary(
+    threads: &mut Vec<CodexThreadSummary>,
+    summary: CodexThreadSummary,
+) -> bool {
     if let Some(existing) = threads.iter_mut().find(|thread| thread.id == summary.id) {
-        *existing = summary;
+        if *existing == summary {
+            false
+        } else {
+            *existing = summary;
+            true
+        }
     } else {
         threads.insert(0, summary);
+        true
     }
 }
 
 fn should_resume_thread(started_thread_id: Option<&str>, thread_id: &str) -> bool {
     started_thread_id != Some(thread_id)
+}
+
+fn should_apply_polled_thread_detail(
+    current: Option<&CodexThreadDetail>,
+    next: &CodexThreadDetail,
+) -> bool {
+    !next.items.is_empty() || current.is_none_or(|current| current.items.is_empty())
+}
+
+fn parse_codex_prompt_request(prompt: &str) -> Option<CodexPromptRequest> {
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return None;
+    }
+
+    strip_codex_command(prompt, "/plan")
+        .or_else(|| strip_codex_command(prompt, "/codex-plan"))
+        .map(|prompt| CodexPromptRequest {
+            prompt: prompt.trim_start().to_string(),
+            collaboration_mode: Some(CodexPromptCollaborationMode::Plan),
+        })
+        .or_else(|| {
+            Some(CodexPromptRequest {
+                prompt: prompt.to_string(),
+                collaboration_mode: None,
+            })
+        })
+}
+
+fn strip_codex_command<'a>(prompt: &'a str, command: &str) -> Option<&'a str> {
+    let rest = prompt.strip_prefix(command)?;
+    if rest.is_empty() || rest.chars().next().is_some_and(char::is_whitespace) {
+        Some(rest)
+    } else {
+        None
+    }
+}
+
+fn display_codex_prompt_request(request: &CodexPromptRequest) -> String {
+    match request.collaboration_mode {
+        Some(CodexPromptCollaborationMode::Plan) if request.prompt.is_empty() => {
+            "/plan".to_string()
+        }
+        Some(CodexPromptCollaborationMode::Plan) => format!("/plan {}", request.prompt),
+        None => request.prompt.clone(),
+    }
 }
 
 async fn read_thread(
@@ -1185,6 +1432,8 @@ async fn continue_thread(
     thread_id: &str,
     prompt: &str,
     model_id: Option<&str>,
+    collaboration_mode: Option<CodexPromptCollaborationMode>,
+    collaboration_mode_model_id: Option<&str>,
     started_thread: Option<CodexStartedThread>,
 ) -> Result<CodexTurnProgress> {
     let mut client = if let Some(started_thread) = started_thread {
@@ -1198,7 +1447,16 @@ async fn continue_thread(
         client
     };
     let _ = client
-        .request("turn/start", turn_start_params(thread_id, prompt, model_id))
+        .request(
+            "turn/start",
+            turn_start_params(
+                thread_id,
+                prompt,
+                model_id,
+                collaboration_mode,
+                collaboration_mode_model_id,
+            ),
+        )
         .await?;
 
     client.collect_turn_progress(thread_id.to_string()).await
@@ -1224,11 +1482,25 @@ fn thread_resume_params(thread_id: &str, model_id: Option<&str>) -> Value {
     Value::Object(params)
 }
 
-fn turn_start_params(thread_id: &str, prompt: &str, model_id: Option<&str>) -> Value {
+fn turn_start_params(
+    thread_id: &str,
+    prompt: &str,
+    model_id: Option<&str>,
+    collaboration_mode: Option<CodexPromptCollaborationMode>,
+    collaboration_mode_model_id: Option<&str>,
+) -> Value {
     let mut params = serde_json::Map::new();
     params.insert("threadId".to_string(), json!(thread_id));
     if let Some(model_id) = model_id {
         params.insert("model".to_string(), json!(model_id));
+    }
+    if let Some(collaboration_mode) = collaboration_mode {
+        if let Some(model_id) = collaboration_mode_model_id.or(model_id) {
+            params.insert(
+                "collaborationMode".to_string(),
+                codex_collaboration_mode_params(collaboration_mode, model_id),
+            );
+        }
     }
     params.insert(
         "input".to_string(),
@@ -1240,6 +1512,22 @@ fn turn_start_params(thread_id: &str, prompt: &str, model_id: Option<&str>) -> V
         ]),
     );
     Value::Object(params)
+}
+
+fn codex_collaboration_mode_params(
+    collaboration_mode: CodexPromptCollaborationMode,
+    model_id: &str,
+) -> Value {
+    match collaboration_mode {
+        CodexPromptCollaborationMode::Plan => json!({
+            "mode": "plan",
+            "settings": {
+                "model": model_id,
+                "developer_instructions": null,
+                "reasoning_effort": null,
+            },
+        }),
+    }
 }
 
 async fn json_rpc_request(
@@ -2016,6 +2304,7 @@ mod tests {
             threads: Vec::new(),
             active_thread: None,
             active_turn: None,
+            local_turn_thread_id: None,
             models: vec![CodexModelInfo {
                 id: "gpt-5.4-codex".to_string(),
                 display_name: "GPT-5.4 Codex".to_string(),
@@ -2024,6 +2313,7 @@ mod tests {
             selected_model_id: None,
             project_roots: Vec::new(),
             opening_thread_id: None,
+            active_thread_poll_generation: 0,
             started_thread: None,
             conversation_id_by_thread_id: HashMap::new(),
             thread_id_by_conversation_id: HashMap::new(),
@@ -2050,7 +2340,7 @@ mod tests {
             })
         );
         assert_eq!(
-            turn_start_params("thread-1", "hello", Some("gpt-5.4-codex")),
+            turn_start_params("thread-1", "hello", Some("gpt-5.4-codex"), None, None),
             json!({
                 "threadId": "thread-1",
                 "model": "gpt-5.4-codex",
@@ -2063,10 +2353,84 @@ mod tests {
     }
 
     #[test]
+    fn parses_codex_plan_prompt_commands() {
+        assert_eq!(
+            parse_codex_prompt_request("/plan inspect the diff"),
+            Some(CodexPromptRequest {
+                prompt: "inspect the diff".to_string(),
+                collaboration_mode: Some(CodexPromptCollaborationMode::Plan),
+            })
+        );
+        assert_eq!(
+            parse_codex_prompt_request("/codex-plan\ninspect the diff"),
+            Some(CodexPromptRequest {
+                prompt: "inspect the diff".to_string(),
+                collaboration_mode: Some(CodexPromptCollaborationMode::Plan),
+            })
+        );
+        assert_eq!(
+            parse_codex_prompt_request("/planetary work").unwrap().collaboration_mode,
+            None
+        );
+    }
+
+    #[test]
+    fn codex_plan_turn_params_include_collaboration_mode() {
+        assert_eq!(
+            turn_start_params(
+                "thread-1",
+                "inspect the diff",
+                None,
+                Some(CodexPromptCollaborationMode::Plan),
+                Some("gpt-5.4-codex"),
+            ),
+            json!({
+                "threadId": "thread-1",
+                "collaborationMode": {
+                    "mode": "plan",
+                    "settings": {
+                        "model": "gpt-5.4-codex",
+                        "developer_instructions": null,
+                        "reasoning_effort": null,
+                    },
+                },
+                "input": [{
+                    "type": "text",
+                    "text": "inspect the diff",
+                }],
+            })
+        );
+    }
+
+    #[test]
     fn first_turn_on_newly_started_thread_does_not_resume() {
         assert!(!should_resume_thread(Some("thread-1"), "thread-1"));
         assert!(should_resume_thread(Some("thread-2"), "thread-1"));
         assert!(should_resume_thread(None, "thread-1"));
+    }
+
+    #[test]
+    fn polled_empty_thread_detail_does_not_replace_existing_items() {
+        let current = CodexThreadDetail {
+            summary: CodexThreadSummary {
+                id: "thread-1".to_string(),
+                title: "Existing thread".to_string(),
+                cwd: None,
+                updated_at: None,
+                source_kind: None,
+            },
+            items: vec![CodexConversationItem {
+                role: "agentMessage".to_string(),
+                text: "Existing response".to_string(),
+            }],
+        };
+        let next = CodexThreadDetail {
+            summary: current.summary.clone(),
+            items: Vec::new(),
+        };
+
+        assert!(!should_apply_polled_thread_detail(Some(&current), &next));
+        assert!(should_apply_polled_thread_detail(None, &next));
     }
 
     #[test]
