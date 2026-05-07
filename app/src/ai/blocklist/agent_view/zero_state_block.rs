@@ -44,12 +44,12 @@ use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDisp
 use crate::terminal::view::ambient_agent::{AmbientAgentViewModel, AmbientAgentViewModelEvent};
 use crate::terminal::view::TerminalAction;
 use crate::terminal::{self, prompt, TerminalModel};
-use crate::util::time_format::format_approx_duration_from_now_utc;
+use crate::util::{links, time_format::format_approx_duration_from_now_utc};
 
 const CLOUD_AGENT_DOCS_URL: &str = "https://docs.warp.dev/agent-platform/cloud-agents/overview";
-const OZ_UPDATES_SECTION_HEADER: &str = "What's new in Oz";
+const OZ_UPDATES_SECTION_HEADER: &str = "What's new";
 
-// The maximum number of Oz updates from the changelog rendered in-line in the 'What's new in Oz section'.
+// The maximum number of updates from the changelog rendered in-line in the "What's new" section.
 const MAX_OZ_UPDATE_COUNT: usize = 4;
 
 const MAX_RECENT_CONVERSATION_COUNT: usize = 3;
@@ -399,7 +399,7 @@ impl View for AgentViewZeroStateBlock {
 
         let header_props = if self.origin.is_cloud_agent() {
             HeaderProps {
-                title: "New Oz cloud agent conversation".into(),
+                title: "New cloud agent conversation".into(),
                 description: AgentViewDescription::CloudModeWithDocsLink,
                 icon: Icon::OzCloud,
             }
@@ -415,7 +415,7 @@ impl View for AgentViewZeroStateBlock {
             }
 
             HeaderProps {
-                title: "New Oz agent conversation".into(),
+                title: "New agent conversation".into(),
                 description: AgentViewDescription::PlainText(vec![local_description.into()]),
                 icon: Icon::Oz,
             }
@@ -1107,7 +1107,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                                 .with_child(
                                     Container::new(
                                         Text::new(
-                                            "View changelog",
+                                            "GitHub releases",
                                             appearance.ui_font_family(),
                                             appearance.monospace_font_size() - 2.,
                                         )
@@ -1133,8 +1133,7 @@ fn render_oz_updates(props: OzUpdatesProps<'_>, app: &AppContext) -> Option<Box<
                         })
                         .with_reset_cursor_after_click()
                         .on_click(|_, app, _| {
-                            const CHANGELOG_URL: &str = "https://docs.warp.dev/changelog";
-                            app.open_url(CHANGELOG_URL);
+                            app.open_url(links::GITHUB_RELEASES_URL);
                         })
                         .with_cursor(Cursor::PointingHand)
                         .finish(),

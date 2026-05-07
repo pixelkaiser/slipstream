@@ -5,7 +5,7 @@ use futures::channel::oneshot;
 use parking_lot::FairMutex;
 use warpui::{App, EntityId};
 
-use super::{BlockSelector, ShellCommandExecutor};
+use super::{command_may_invoke_pager, BlockSelector, ShellCommandExecutor};
 use crate::terminal::event::{BlockMetadataReceivedEvent, BlockWorkingDirectoryUpdatedEvent};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -88,4 +88,32 @@ fn block_working_directory_updated_does_not_drain_finish_senders() {
             "BlockMetadataReceived should drain the finish senders"
         );
     });
+}
+
+#[test]
+fn detects_git_commands_that_use_pagers() {
+    assert!(command_may_invoke_pager(
+        "git show f11fbcb -- flows/restatement.py helper/utils.py initialize_variables.py"
+    ));
+    assert!(command_may_invoke_pager(
+        "cd /tmp && git show f11fbcb -- flows/restatement.py"
+    ));
+    assert!(command_may_invoke_pager("git log --oneline -5"));
+    assert!(command_may_invoke_pager("git -C /tmp show HEAD"));
+    assert!(command_may_invoke_pager("git stash show --stat"));
+}
+
+#[test]
+fn respects_explicit_pager_opt_outs() {
+    assert!(!command_may_invoke_pager("git --no-pager show HEAD"));
+    assert!(!command_may_invoke_pager("PAGER=cat git show HEAD"));
+    assert!(!command_may_invoke_pager("GIT_PAGER=cat git log --oneline"));
+    assert!(!command_may_invoke_pager("git -c core.pager=cat show HEAD"));
+}
+
+#[test]
+fn ignores_commands_that_do_not_page() {
+    assert!(!command_may_invoke_pager("echo hello"));
+    assert!(!command_may_invoke_pager("git status --short"));
+    assert!(!command_may_invoke_pager("git config --get core.pager"));
 }
