@@ -23,6 +23,7 @@ use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
 use crate::themes::theme::Fill;
 use crate::ui_components::icons;
+use crate::util::links;
 
 #[derive(Default)]
 struct ChangelogMouseStateHandles {
@@ -366,8 +367,8 @@ impl SectionView for ChangelogSectionView {
             appearance
                 .ui_builder()
                 .link(
-                    "Read all changelogs".into(),
-                    Some("https://docs.warp.dev/changelog".into()),
+                    "GitHub releases".into(),
+                    Some(links::GITHUB_RELEASES_URL.into()),
                     None,
                     self.changelog_button_mouse_states
                         .view_changelogs_mouse_state

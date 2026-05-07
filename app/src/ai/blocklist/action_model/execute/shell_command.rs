@@ -35,6 +35,64 @@ use crate::terminal::shell::ShellType;
 use crate::terminal::TerminalModel;
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
+fn command_may_invoke_pager(command: &str) -> bool {
+    let tokens = command
+        .split(|ch: char| ch.is_whitespace() || matches!(ch, ';' | '&' | '|' | '(' | ')'))
+        .map(|token| {
+            token
+                .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`' | '{' | '}' | '[' | ']'))
+                .to_ascii_lowercase()
+        })
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+
+    if tokens.iter().any(|token| {
+        token == "--no-pager"
+            || token.starts_with("git_pager=")
+            || token.starts_with("pager=")
+            || token.starts_with("core.pager=")
+    }) {
+        return false;
+    }
+
+    for (index, token) in tokens.iter().enumerate() {
+        if matches!(token.as_str(), "less" | "more" | "most" | "man") {
+            return true;
+        }
+
+        if token != "git" {
+            continue;
+        }
+
+        let mut skip_next = false;
+        for candidate in tokens.iter().skip(index + 1) {
+            if skip_next {
+                skip_next = false;
+                continue;
+            }
+
+            match candidate.as_str() {
+                "-c" | "--git-dir" | "--work-tree" | "--namespace" => {
+                    skip_next = true;
+                    continue;
+                }
+                "-p" | "--paginate" => return true,
+                "--no-pager" => return false,
+                _ if candidate.starts_with('-') => continue,
+                "log" | "show" | "diff" | "blame" | "grep" | "shortlog" | "reflog" => {
+                    return true;
+                }
+                "stash" => {
+                    return tokens.iter().skip(index + 1).any(|token| token == "show");
+                }
+                _ => break,
+            }
+        }
+    }
+
+    false
+}
+
 pub struct ShellCommandExecutor {
     active_session: ModelHandle<ActiveSession>,
     block_finished_senders: HashMap<BlockSelector, oneshot::Sender<()>>,
@@ -256,12 +314,14 @@ impl ShellCommandExecutor {
                 // If the command might use pager and can't be interacted with,
                 // we pipe its output to cat so we can prevent activating the altscreen.
                 // The parentheses here ensures the command always gets evaluated first.
-                let decorated_command =
-                    if uses_pager.is_some_and(|uses_pager| uses_pager) && *wait_until_completion {
-                        self.turn_off_pager_for_command(command, ctx)
-                    } else {
-                        command.clone()
-                    };
+                let should_disable_pager = *wait_until_completion
+                    && (uses_pager.is_some_and(|uses_pager| uses_pager)
+                        || command_may_invoke_pager(command));
+                let decorated_command = if should_disable_pager {
+                    self.turn_off_pager_for_command(command, ctx)
+                } else {
+                    command.clone()
+                };
                 ctx.emit(ShellCommandExecutorEvent::ExecuteCommand {
                     action_id: action_id.clone(),
                     command: decorated_command,
