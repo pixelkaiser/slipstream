@@ -9,7 +9,9 @@ use crate::{
     ai::{
         agent::{
             api::ServerConversationToken,
-            conversation::{AIAgentHarness, AIConversationId, ServerAIConversationMetadata},
+            conversation::{
+                AIAgentHarness, AIConversation, AIConversationId, ServerAIConversationMetadata,
+            },
             AIAgentExchange, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
             FinishedAIAgentOutput, Shared, UserQueryMode,
         },
@@ -87,6 +89,91 @@ fn create_exchange_with_query(
         computer_use_model_id: LLMId::from("test-computer-use-model"),
         response_initiator: None,
     }
+}
+
+#[test]
+fn refresh_cached_codex_conversation_preserves_existing_exchange_ids() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(Vec::new(), &[]));
+        let terminal_view_id = EntityId::new();
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, ctx)
+        });
+        let existing_exchange_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model
+                .append_codex_exchange(
+                    conversation_id,
+                    Some("external prompt".to_string()),
+                    Some("old output".to_string()),
+                    None,
+                    false,
+                    terminal_view_id,
+                    ctx,
+                )
+                .unwrap()
+        });
+
+        let mut incoming = AIConversation::new_with_id(conversation_id, false);
+        incoming
+            .append_codex_exchange(
+                Some("external prompt".to_string()),
+                Some("new output".to_string()),
+                None,
+                false,
+                Local::now(),
+            )
+            .unwrap();
+
+        history_model.update(&mut app, |history_model, ctx| {
+            assert!(history_model.refresh_cached_codex_conversation(incoming, ctx));
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let conversation = history_model.conversation(&conversation_id).unwrap();
+            let exchanges = conversation.root_task_exchanges().collect_vec();
+            assert_eq!(exchanges.len(), 1);
+            assert_eq!(exchanges[0].id, existing_exchange_id);
+            assert_eq!(exchanges[0].format_output_for_copy(None), "new output");
+        });
+    });
+}
+
+#[test]
+fn refresh_cached_codex_conversation_rejects_empty_incoming_snapshot() {
+    App::test((), |mut app| async move {
+        let history_model =
+            app.add_singleton_model(|_| BlocklistAIHistoryModel::new(Vec::new(), &[]));
+        let terminal_view_id = EntityId::new();
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, ctx)
+        });
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model
+                .append_codex_exchange(
+                    conversation_id,
+                    Some("external prompt".to_string()),
+                    Some("old output".to_string()),
+                    None,
+                    false,
+                    terminal_view_id,
+                    ctx,
+                )
+                .unwrap();
+        });
+
+        let incoming = AIConversation::new_with_id(conversation_id, false);
+        history_model.update(&mut app, |history_model, ctx| {
+            assert!(!history_model.refresh_cached_codex_conversation(incoming, ctx));
+        });
+
+        history_model.read(&app, |history_model, _| {
+            let conversation = history_model.conversation(&conversation_id).unwrap();
+            let exchanges = conversation.root_task_exchanges().collect_vec();
+            assert_eq!(exchanges.len(), 1);
+            assert_eq!(exchanges[0].format_output_for_copy(None), "old output");
+        });
+    });
 }
 
 #[test]
