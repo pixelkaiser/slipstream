@@ -170,3 +170,56 @@ async fn save_carries_forward_refresh_token_and_preserves_received_at() {
         "prior refresh token carried forward"
     );
 }
+
+#[test]
+fn invalid_redirect_uri_registration_error_triggers_loopback_retry() {
+    let error = AuthError::RegistrationFailed(
+        r#"HTTP 400 Bad Request: {"error":"invalid_redirect_uri","error_description":"redirect URI scheme \"slipstream\" is not supported"}"#.to_string(),
+    );
+
+    assert!(should_retry_with_loopback_redirect(&error));
+}
+
+#[test]
+fn unrelated_registration_error_does_not_trigger_loopback_retry() {
+    let error =
+        AuthError::RegistrationFailed("HTTP 400 Bad Request: unsupported grant type".to_string());
+
+    assert!(!should_retry_with_loopback_redirect(&error));
+}
+
+#[test]
+fn callback_result_from_url_extracts_code_and_state() {
+    let url =
+        Url::parse("http://127.0.0.1:54321/oauth2callback?code=AUTH_CODE&state=CSRF_STATE")
+            .unwrap();
+
+    let (state, result) = callback_result_from_url(&url).unwrap();
+
+    assert_eq!(state, "CSRF_STATE");
+    match result {
+        CallbackResult::Success { code, csrf_token } => {
+            assert_eq!(code, "AUTH_CODE");
+            assert_eq!(csrf_token, "CSRF_STATE");
+        }
+        CallbackResult::Error { .. } => panic!("expected success callback"),
+    }
+}
+
+#[test]
+fn parse_loopback_callback_request_accepts_origin_form_target() {
+    let request =
+        "GET /oauth2callback?code=AUTH_CODE&state=CSRF_STATE HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+
+    let (state, result) =
+        parse_loopback_callback_request(request, "http://127.0.0.1:54321").unwrap();
+
+    assert_eq!(state, "CSRF_STATE");
+    match result {
+        CallbackResult::Success { code, csrf_token } => {
+            assert_eq!(code, "AUTH_CODE");
+            assert_eq!(csrf_token, "CSRF_STATE");
+        }
+        CallbackResult::Error { .. } => panic!("expected success callback"),
+    }
+}
