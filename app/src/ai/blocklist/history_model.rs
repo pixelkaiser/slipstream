@@ -679,9 +679,7 @@ impl BlocklistAIHistoryModel {
         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
             conversation_id,
             terminal_view_id,
-            update: ConversationStatusUpdate::Changed {
-                prev_status,
-            },
+            update: ConversationStatusUpdate::Changed { prev_status },
             new_status: conversation.status().clone(),
         });
         Ok(exchange_id)
@@ -702,7 +700,12 @@ impl BlocklistAIHistoryModel {
             .get_mut(&conversation_id)
             .ok_or(UpdateHistoryError::ConversationNotFound(conversation_id))?;
         let prev_status = conversation.status().clone();
-        conversation.update_codex_exchange_output(exchange_id, output_text, is_finished, is_error)?;
+        conversation.update_codex_exchange_output(
+            exchange_id,
+            output_text,
+            is_finished,
+            is_error,
+        )?;
         ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
             exchange_id,
             terminal_view_id,
@@ -799,8 +802,7 @@ impl BlocklistAIHistoryModel {
             return true;
         };
 
-        let Some(existing_conversation) = self.conversations_by_id.get_mut(&conversation_id)
-        else {
+        let Some(existing_conversation) = self.conversations_by_id.get_mut(&conversation_id) else {
             let new_status = incoming_conversation.status().clone();
             self.conversations_by_id
                 .insert(conversation_id, incoming_conversation);
@@ -2348,7 +2350,7 @@ fn codex_exchange_snapshots(conversation: &AIConversation) -> Vec<CodexExchangeS
             CodexExchangeSnapshot {
                 exchange_id: exchange.id,
                 query: (!query.trim().is_empty()).then_some(query),
-                output: exchange.format_output_for_copy(None),
+                output: exchange.format_codex_output_for_refresh(),
                 working_directory: exchange.working_directory.clone(),
                 start_time: exchange.start_time,
             }

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use super::{
-    artifact_from_fork_proto, codex_output_status, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId,
+    artifact_from_fork_proto, codex_output_status, AIConversation, AIConversationAutoexecuteMode,
+    AIConversationId,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -244,9 +244,7 @@ fn fork_artifacts_adds_file_artifacts_to_conversation() {
 fn codex_output_converts_command_execution_to_command_action() {
     let task_id = TaskId::new("root-task".to_string());
     let (status, action_results) = codex_output_status(
-        Some(
-            "Before\n\ncommandExecution: /bin/zsh -lc 'rg foo'\n\nAfter".to_string(),
-        ),
+        Some("Before\n\ncommandExecution: /bin/zsh -lc 'rg foo'\n\nAfter".to_string()),
         false,
         &task_id,
     );
@@ -291,6 +289,43 @@ fn codex_output_converts_command_execution_to_command_action() {
     assert_eq!(command, "/bin/zsh -lc 'rg foo'");
     assert_eq!(output, "");
     assert!(exit_code.was_successful());
+}
+
+#[test]
+fn codex_output_attaches_command_output_to_command_action() {
+    let task_id = TaskId::new("root-task".to_string());
+    let (status, action_results) = codex_output_status(
+        Some(
+            "Before\n\ncommandExecution: /bin/zsh -lc 'git status --short'\n\ncommandExecution/output: \" M app/src/codex_app_server/mod.rs\\n\"\n\nAfter".to_string(),
+        ),
+        false,
+        &task_id,
+    );
+
+    let output = match status {
+        AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success { output },
+        } => output,
+        _ => panic!("expected finished successful output"),
+    };
+    let messages = &output.get().messages;
+
+    assert_eq!(messages.len(), 3);
+    assert!(matches!(
+        messages[1].message,
+        AIAgentOutputMessageType::Action(_)
+    ));
+    assert_eq!(action_results.len(), 1);
+    let AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
+        command,
+        output,
+        ..
+    }) = &action_results[0].result
+    else {
+        panic!("expected completed command result");
+    };
+    assert_eq!(command, "/bin/zsh -lc 'git status --short'");
+    assert_eq!(output, " M app/src/codex_app_server/mod.rs\n");
 }
 
 #[test]
