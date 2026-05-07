@@ -6,8 +6,8 @@ use settings::Setting as _;
 use warpui::{
     elements::{
         Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement,
-        Radius, Shrinkable, Text,
+        Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, Padding,
+        ParentElement, Radius, Shrinkable, Text,
     },
     fonts::{Properties, Weight},
     platform::Cursor,
@@ -32,6 +32,7 @@ use crate::{
         TextOptions,
     },
     settings::CodexAppServerSettings,
+    ui_components::icons::Icon,
     util::time_format::format_approx_duration_from_now_utc,
     workspace::{RestoreConversationLayout, WorkspaceAction},
 };
@@ -39,6 +40,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub enum CodexConversationsAction {
     Refresh,
+    NewConversation,
     OpenThread(String),
     ResolveApproval(CodexApprovalDecision),
 }
@@ -47,6 +49,7 @@ pub struct CodexConversationsView {
     model: ModelHandle<CodexAppServerModel>,
     query_editor: ViewHandle<EditorView>,
     refresh_button: MouseStateHandle,
+    new_conversation_button: MouseStateHandle,
     thread_buttons: RefCell<HashMap<String, MouseStateHandle>>,
     approval_buttons: RefCell<HashMap<CodexApprovalDecision, MouseStateHandle>>,
 }
@@ -77,7 +80,8 @@ impl CodexConversationsView {
             }
             CodexAppServerModelEvent::StatusChanged
             | CodexAppServerModelEvent::ThreadsChanged
-            | CodexAppServerModelEvent::ActiveThreadChanged => {
+            | CodexAppServerModelEvent::ActiveThreadChanged
+            | CodexAppServerModelEvent::ModelsChanged => {
                 ctx.notify();
             }
         });
@@ -107,6 +111,7 @@ impl CodexConversationsView {
             model,
             query_editor,
             refresh_button: Default::default(),
+            new_conversation_button: Default::default(),
             thread_buttons: Default::default(),
             approval_buttons: Default::default(),
         }
@@ -193,6 +198,55 @@ impl CodexConversationsView {
             .on_click(|ctx, _, _| ctx.dispatch_typed_action(CodexConversationsAction::Refresh))
             .with_cursor(Cursor::PointingHand)
             .finish()
+    }
+
+    fn render_new_conversation_button(&self, app: &AppContext) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let theme = appearance.theme();
+        let mouse_state = self.new_conversation_button.clone();
+
+        Hoverable::new(mouse_state, move |state| {
+            let label = Text::new_inline(
+                "New conversation",
+                appearance.ui_font_family(),
+                appearance.ui_font_size() + 1.,
+            )
+            .with_color(theme.main_text_color(theme.background()).into())
+            .finish();
+
+            let icon = ConstrainedBox::new(
+                Icon::Plus
+                    .to_warpui_icon(theme.main_text_color(theme.background()))
+                    .finish(),
+            )
+            .with_width(appearance.ui_font_size())
+            .with_height(appearance.ui_font_size())
+            .finish();
+
+            let row = Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(8.)
+                .with_child(icon)
+                .with_child(label)
+                .finish();
+
+            let mut container = Container::new(row)
+                .with_padding(Padding::uniform(0.).with_left(12.).with_right(12.))
+                .with_border(Border::all(1.).with_border_fill(theme.outline()))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)));
+            if state.is_hovered() {
+                container = container.with_background(theme.surface_2());
+            }
+
+            ConstrainedBox::new(container.finish())
+                .with_min_height(34.)
+                .finish()
+        })
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(CodexConversationsAction::NewConversation);
+        })
+        .with_cursor(Cursor::PointingHand)
+        .finish()
     }
 
     fn render_pending_approval(
@@ -444,6 +498,10 @@ impl TypedActionView for CodexConversationsView {
             CodexConversationsAction::Refresh => {
                 self.model.update(ctx, |model, ctx| model.refresh(ctx));
             }
+            CodexConversationsAction::NewConversation => {
+                self.model
+                    .update(ctx, |model, ctx| model.start_new_conversation(ctx));
+            }
             CodexConversationsAction::OpenThread(thread_id) => {
                 self.model.update(ctx, |model, ctx| {
                     model.open_thread_as_conversation(thread_id.clone(), ctx);
@@ -481,6 +539,7 @@ impl View for CodexConversationsView {
                     .finish(),
             )
             .with_child(self.render_search(appearance))
+            .with_child(self.render_new_conversation_button(app))
             .with_child(self.render_threads(app, appearance));
         let column = if let Some(approval) = self.model.as_ref(app).pending_approval() {
             column.with_child(self.render_pending_approval(approval, appearance))

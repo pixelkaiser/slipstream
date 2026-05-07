@@ -11,6 +11,11 @@ use rmcp::transport::{
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    task::JoinHandle,
+};
 use url::Url;
 use uuid::Uuid;
 use warp_core::channel::ChannelState;
@@ -22,6 +27,9 @@ use {crate::ai::mcp::FileBasedMCPManager, warpui::SingletonEntity};
 
 pub(crate) const TEMPLATABLE_MCP_CREDENTIALS_KEY: &str = "TemplatableMcpCredentials";
 pub(crate) const FILE_BASED_MCP_CREDENTIALS_KEY: &str = "FileBasedMcpCredentials";
+const LOOPBACK_OAUTH_HOST: &str = "127.0.0.1";
+const LOOPBACK_OAUTH_CALLBACK_PATH: &str = "/oauth2callback";
+const LOOPBACK_OAUTH_MAX_REQUEST_BYTES: usize = 8192;
 
 /// The issuer URL for GitHub's OAuth provider.
 const GITHUB_ISSUER: &str = "https://github.com/login/oauth";
@@ -182,6 +190,7 @@ async fn install_persisting_credential_store(
 
 /// Context for OAuth authentication flows.
 pub struct AuthContext {
+    pub oauth_result_tx: async_channel::Sender<CallbackResult>,
     pub oauth_result_rx: async_channel::Receiver<CallbackResult>,
     pub spawner: ModelSpawner<TemplatableMCPServerManager>,
     pub uuid: Uuid,
@@ -199,6 +208,245 @@ pub enum CallbackResult {
     Error { error: Option<String> },
 }
 
+struct AuthorizationFlow {
+    oauth_state: OAuthState,
+    auth_url: String,
+}
+
+struct LoopbackOAuthCallbackServer {
+    redirect_uri: String,
+    task: JoinHandle<()>,
+}
+
+impl LoopbackOAuthCallbackServer {
+    async fn start(
+        oauth_result_tx: async_channel::Sender<CallbackResult>,
+    ) -> Result<Self, AuthError> {
+        let listener = TcpListener::bind((LOOPBACK_OAUTH_HOST, 0))
+            .await
+            .map_err(|err| {
+                AuthError::InternalError(format!(
+                    "Failed to bind MCP OAuth loopback callback listener: {err}"
+                ))
+            })?;
+        let local_addr = listener.local_addr().map_err(|err| {
+            AuthError::InternalError(format!(
+                "Failed to inspect MCP OAuth loopback callback listener: {err}"
+            ))
+        })?;
+        let origin = format!("http://{}:{}", LOOPBACK_OAUTH_HOST, local_addr.port());
+        let redirect_uri = format!("{origin}{LOOPBACK_OAUTH_CALLBACK_PATH}");
+
+        let task = tokio::spawn(async move {
+            if let Err(err) =
+                receive_loopback_oauth_callback(listener, origin, oauth_result_tx).await
+            {
+                log::warn!("Failed to receive MCP OAuth loopback callback: {err:#}");
+            }
+        });
+
+        Ok(Self { redirect_uri, task })
+    }
+
+    fn redirect_uri(&self) -> &str {
+        &self.redirect_uri
+    }
+}
+
+impl Drop for LoopbackOAuthCallbackServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+async fn receive_loopback_oauth_callback(
+    listener: TcpListener,
+    origin: String,
+    oauth_result_tx: async_channel::Sender<CallbackResult>,
+) -> anyhow::Result<()> {
+    let (mut socket, _addr) = listener.accept().await?;
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        let bytes_read = socket.read(&mut buffer).await?;
+        if bytes_read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..bytes_read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n")
+            || request.len() >= LOOPBACK_OAUTH_MAX_REQUEST_BYTES
+        {
+            break;
+        }
+    }
+
+    let request = String::from_utf8_lossy(&request);
+    let (status, reason, body) = match parse_loopback_callback_request(&request, &origin) {
+        Ok((_state, result)) => {
+            oauth_result_tx.send(result).await.map_err(|_| {
+                anyhow!("OAuth callback receiver dropped before callback could be delivered")
+            })?;
+            (
+                200,
+                "OK",
+                "Authentication complete. You can close this tab and return to Warp.",
+            )
+        }
+        Err(err) => {
+            let _ = oauth_result_tx
+                .send(CallbackResult::Error {
+                    error: Some(err.to_string()),
+                })
+                .await;
+            (
+                400,
+                "Bad Request",
+                "Authentication failed. Return to Warp and try again.",
+            )
+        }
+    };
+
+    let response = http_response(status, reason, body);
+    socket.write_all(response.as_bytes()).await?;
+    socket.shutdown().await?;
+    Ok(())
+}
+
+fn parse_loopback_callback_request(
+    request: &str,
+    origin: &str,
+) -> anyhow::Result<(String, CallbackResult)> {
+    let request_line = request
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow!("Missing HTTP request line"))?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| anyhow!("Missing HTTP method in OAuth callback"))?;
+    let target = parts
+        .next()
+        .ok_or_else(|| anyhow!("Missing HTTP target in OAuth callback"))?;
+
+    if method != "GET" {
+        bail!("Unsupported OAuth callback method: {method}");
+    }
+
+    let url = if target.starts_with("http://") || target.starts_with("https://") {
+        Url::parse(target)?
+    } else {
+        Url::parse(&format!("{origin}{target}"))?
+    };
+
+    callback_result_from_url(&url)
+}
+
+fn callback_result_from_url(url: &Url) -> anyhow::Result<(String, CallbackResult)> {
+    if url.path() != LOOPBACK_OAUTH_CALLBACK_PATH {
+        bail!(
+            "Invalid OAuth callback path: expected '{}', got '{}'",
+            LOOPBACK_OAUTH_CALLBACK_PATH,
+            url.path()
+        );
+    }
+
+    let query_params: HashMap<_, _> = url.query_pairs().collect();
+
+    let Some(state) = query_params.get("state") else {
+        bail!("Missing 'state' parameter in OAuth callback");
+    };
+
+    let code = query_params.get("code");
+    let error = query_params.get("error");
+
+    let result = match code {
+        Some(code) => CallbackResult::Success {
+            code: code.to_string(),
+            // Pass the state value through as the CSRF token; rmcp will validate it
+            // against the token it stored when generating the authorization URL.
+            csrf_token: state.to_string(),
+        },
+        None => CallbackResult::Error {
+            error: error.map(|e| e.to_string()),
+        },
+    };
+
+    Ok((state.to_string(), result))
+}
+
+fn http_response(status: u16, reason: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+fn should_retry_with_loopback_redirect(error: &AuthError) -> bool {
+    let AuthError::RegistrationFailed(message) = error else {
+        return false;
+    };
+
+    let message = message.to_ascii_lowercase();
+    message.contains("invalid_redirect_uri")
+        || message.contains("invalid redirect uri")
+        || message.contains("redirect uri scheme")
+}
+
+async fn start_authorization_flow(
+    mut auth_manager: AuthorizationManager,
+    redirect_uri: &str,
+) -> Result<AuthorizationFlow, AuthError> {
+    let metadata = auth_manager.discover_metadata().await?;
+
+    // Configure the auth manager's OAuth client using dynamic or static client registration.
+    let oauth_state = if let Some(provider) = metadata
+        .issuer
+        .as_deref()
+        .and_then(ChannelState::mcp_oauth_provider_by_issuer)
+    {
+        // Configure the auth manager based on the static MCP configuration for this
+        // issuer.
+        auth_manager.set_metadata(metadata);
+
+        let scopes = if provider.issuer == GITHUB_ISSUER {
+            GITHUB_OAUTH_SCOPES
+                .into_iter()
+                .map(ToString::to_string)
+                .collect()
+        } else {
+            vec![]
+        };
+        auth_manager.configure_client(
+            OAuthClientConfig::new(provider.client_id, redirect_uri.to_owned())
+                .with_client_secret(provider.client_secret)
+                .with_scopes(scopes),
+        )?;
+
+        // We do a scope "upgrade" with no additional scopes here as it's the easiest way
+        // to construct an auth URL.
+        let auth_url = auth_manager.request_scope_upgrade("").await?;
+        OAuthState::Session(AuthorizationSession::for_scope_upgrade(
+            auth_manager,
+            auth_url,
+            redirect_uri,
+        ))
+    } else {
+        // Try dynamic client registration.
+        let mut oauth_state = OAuthState::Unauthorized(auth_manager);
+        oauth_state
+            .start_authorization(&[], redirect_uri, Some("Warp"))
+            .await?;
+        oauth_state
+    };
+
+    let auth_url = oauth_state.get_authorization_url().await?;
+
+    Ok(AuthorizationFlow {
+        oauth_state,
+        auth_url,
+    })
+}
+
 /// Makes an authenticated client for the given authorization server.
 ///
 /// This takes in the URL of the resource to authenticate for, and uses that
@@ -211,6 +459,7 @@ pub async fn make_authenticated_client(
     auth_context: AuthContext,
 ) -> Result<(AuthClient<reqwest::Client>, bool), AuthError> {
     let AuthContext {
+        oauth_result_tx,
         oauth_result_rx,
         spawner,
         uuid,
@@ -224,6 +473,8 @@ pub async fn make_authenticated_client(
     // of the redirect URI so that the URI exactly matches what is registered during
     // Dynamic Client Registration, satisfying RFC 6749 §3.1.2.2 exact-match validation.
     let redirect_uri = format!("{}://mcp/oauth2callback", ChannelState::url_scheme());
+
+    let persisted_credentials_for_retry = persisted_credentials.clone();
 
     // Create the auth manager and initialize it with a backing credential store that persists
     // new credentials to secure storage.
@@ -273,55 +524,38 @@ pub async fn make_authenticated_client(
         ));
     }
 
-    let metadata = auth_manager.discover_metadata().await?;
-
-    // Configure the auth manager's OAuth client using dynamic or static client registration.
-    let mut oauth_state = if let Some(provider) = metadata
-        .issuer
-        .as_deref()
-        .and_then(ChannelState::mcp_oauth_provider_by_issuer)
-    {
-        // Configure the auth manager based on the static MCP configuration for this
-        // issuer.
-        auth_manager.set_metadata(metadata);
-
-        let scopes = if provider.issuer == GITHUB_ISSUER {
-            GITHUB_OAUTH_SCOPES
-                .into_iter()
-                .map(ToString::to_string)
-                .collect()
-        } else {
-            vec![]
-        };
-        auth_manager.configure_client(
-            OAuthClientConfig::new(provider.client_id, redirect_uri.clone())
-                .with_client_secret(provider.client_secret)
-                .with_scopes(scopes),
-        )?;
-
-        // We do a scope "upgrade" with no additional scopes here as it's the easiest way
-        // to construct an auth URL.
-        let auth_url = auth_manager.request_scope_upgrade("").await?;
-        OAuthState::Session(AuthorizationSession::for_scope_upgrade(
-            auth_manager,
-            auth_url,
-            &redirect_uri,
-        ))
-    } else {
-        // Try dynamic client registration.
-        let mut oauth_state = OAuthState::Unauthorized(auth_manager);
-        oauth_state
-            .start_authorization(&[], &redirect_uri, Some("Warp"))
-            .await?;
-        oauth_state
+    let mut loopback_callback_server = None;
+    let AuthorizationFlow {
+        mut oauth_state,
+        auth_url,
+    } = match start_authorization_flow(auth_manager, &redirect_uri).await {
+        Ok(flow) => flow,
+        Err(err) if should_retry_with_loopback_redirect(&err) => {
+            log::info!(
+                "MCP OAuth redirect URI {redirect_uri} was rejected; retrying with loopback redirect"
+            );
+            let callback_server = LoopbackOAuthCallbackServer::start(oauth_result_tx).await?;
+            let mut retry_auth_manager = AuthorizationManager::new(resource_url).await?;
+            install_persisting_credential_store(
+                &mut retry_auth_manager,
+                persisted_credentials_for_retry,
+                spawner.clone(),
+                uuid,
+            )
+            .await;
+            let flow = start_authorization_flow(retry_auth_manager, callback_server.redirect_uri())
+                .await?;
+            loopback_callback_server = Some(callback_server);
+            flow
+        }
+        Err(err) => return Err(err),
     };
-
-    let auth_url = oauth_state.get_authorization_url().await?;
 
     // Extract the CSRF token that rmcp embedded as the `state` query parameter in the
     // authorization URL. We register a csrf→uuid mapping on the manager so that
     // `handle_oauth_callback` can route the callback to the right server without
     // relying on `server_id` being present in the redirect URI.
+    let uses_loopback_callback = loopback_callback_server.is_some();
     let csrf_state = Url::parse(&auth_url)
         .ok()
         .and_then(|u| {
@@ -333,7 +567,7 @@ pub async fn make_authenticated_client(
 
     if let Err(e) = spawner
         .spawn(move |manager, ctx| {
-            if !csrf_state.is_empty() {
+            if !uses_loopback_callback && !csrf_state.is_empty() {
                 manager.pending_oauth_csrf.insert(csrf_state, uuid);
             }
             ctx.open_url(&auth_url);
@@ -343,6 +577,8 @@ pub async fn make_authenticated_client(
     {
         log::warn!("Failed to emit RequiresAuthentication state: {e:?}");
     }
+
+    let _loopback_callback_server = loopback_callback_server;
 
     // Wait for the authorization code from the OAuth callback channel.
     let oauth_result = oauth_result_rx
@@ -376,36 +612,9 @@ impl TemplatableMCPServerManager {
     /// parameter (the CSRF token that rmcp embedded in the authorization URL). This avoids
     /// encoding routing data in the redirect URI, keeping it RFC 6749 §3.1.2.2 compliant.
     pub fn handle_oauth_callback(&mut self, url: &Url) -> anyhow::Result<()> {
-        // Ensure the URL has the expected path
-        if url.path() != "/oauth2callback" {
-            bail!(
-                "Invalid OAuth callback path: expected '/oauth2callback', got '{}'",
-                url.path()
-            );
-        }
+        let (state, result) = callback_result_from_url(url)?;
 
-        let query_params: HashMap<_, _> = url.query_pairs().collect();
-
-        let Some(state) = query_params.get("state") else {
-            bail!("Missing 'state' parameter in OAuth callback");
-        };
-
-        let code = query_params.get("code");
-        let error = query_params.get("error");
-
-        let result = match code {
-            Some(code) => CallbackResult::Success {
-                code: code.to_string(),
-                // Pass the state value through as the CSRF token; rmcp will validate it
-                // against the token it stored when generating the authorization URL.
-                csrf_token: state.to_string(),
-            },
-            None => CallbackResult::Error {
-                error: error.map(|e| e.to_string()),
-            },
-        };
-
-        let Some(&server_uuid) = self.pending_oauth_csrf.get(state.as_ref() as &str) else {
+        let Some(&server_uuid) = self.pending_oauth_csrf.get(&state) else {
             bail!("No active OAuth flow found for state={state}");
         };
 
@@ -417,7 +626,7 @@ impl TemplatableMCPServerManager {
             anyhow!("Failed to send OAuth result to server {server_uuid} - receiver dropped")
         })?;
 
-        self.pending_oauth_csrf.remove(state.as_ref() as &str);
+        self.pending_oauth_csrf.remove(&state);
         Ok(())
     }
 
