@@ -6042,7 +6042,7 @@ impl Workspace {
             );
             ctx.notify();
         });
-        self.check_for_changelog(ChangelogRequestType::UserAction, ctx);
+        ctx.open_url(links::GITHUB_RELEASES_URL);
     }
 
     fn view_privacy_policy(&mut self, ctx: &mut ViewContext<Self>) {
@@ -12813,7 +12813,7 @@ impl Workspace {
                                 .find(|binding| binding.name == "workspace:view_changelog")
                                 .and_then(|binding| trigger_to_keystroke(binding.trigger));
 
-                            let mut link = ToastLink::new("View changelog".to_owned())
+                            let mut link = ToastLink::new("View releases".to_owned())
                                 .with_onclick_action(WorkspaceAction::ViewLatestChangelog);
                             if let Some(keystroke) = keystroke {
                                 link = link.with_keystroke(keystroke);
