@@ -16,7 +16,7 @@ use super::{
     AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
     BlockVisibilitySettings, ChangelogSettings, CodeSettings, CodexAppServerSettings, DebugSettings,
     EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType,
-    InputModeSettings, InputSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
+    OpenCodeServerSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
     SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
@@ -68,6 +68,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     AliasExpansionSettings::register(ctx);
     CodeSettings::register(ctx);
     CodexAppServerSettings::register(ctx);
+    OpenCodeServerSettings::register(ctx);
     LigatureSettings::register(ctx);
     GPUSettings::register(ctx);
     ChangelogSettings::register(ctx);

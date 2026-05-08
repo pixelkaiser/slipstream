@@ -11,6 +11,8 @@ pub mod global_search;
 pub(crate) mod launch_modal;
 pub(crate) mod left_panel;
 pub(crate) mod onboarding;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod opencode_conversations;
 pub(crate) mod openwarp_launch_modal;
 pub(crate) mod orchestration_launch_modal;
 pub(crate) mod right_panel;
@@ -329,7 +331,10 @@ use crate::settings::{
     ThemeSettings,
 };
 #[cfg(not(target_family = "wasm"))]
-use crate::settings::{CodexAppServerSettings, CodexAppServerSettingsChangedEvent};
+use crate::settings::{
+    CodexAppServerSettings, CodexAppServerSettingsChangedEvent, OpenCodeServerSettings,
+    OpenCodeServerSettingsChangedEvent,
+};
 use crate::settings_view::environments_page::EnvironmentsPage;
 use crate::settings_view::handoff_environment_creation_modal::{
     HandoffEnvironmentCreationModal, HandoffEnvironmentCreationModalEvent,
@@ -3053,6 +3058,23 @@ impl Workspace {
             },
         );
 
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_model(
+            &OpenCodeServerSettings::handle(ctx),
+            |me, _, event, ctx| match event {
+                OpenCodeServerSettingsChangedEvent::OpenCodeServerEnabled { .. } => {
+                    me.update_left_panel_available_views(ctx);
+                    ctx.notify();
+                }
+                OpenCodeServerSettingsChangedEvent::OpenCodeServerUrl { .. }
+                | OpenCodeServerSettingsChangedEvent::OpenCodeServerUsername { .. }
+                | OpenCodeServerSettingsChangedEvent::OpenCodeServerPassword { .. }
+                | OpenCodeServerSettingsChangedEvent::OpenCodeImportedProjectPaths { .. } => {
+                    ctx.notify();
+                }
+            },
+        );
+
         ctx.subscribe_to_model(&WarpDriveSettings::handle(ctx), |me, _, event, ctx| {
             if let WarpDriveSettingsChangedEvent::EnableWarpDrive { .. } = event {
                 me.update_left_panel_available_views(ctx);
@@ -4002,6 +4024,10 @@ impl Workspace {
                 LeftPanelDisplayedTab::ConversationListView => ToolPanelView::ConversationListView,
                 #[cfg(not(target_family = "wasm"))]
                 LeftPanelDisplayedTab::CodexConversations => ToolPanelView::CodexConversations,
+                #[cfg(not(target_family = "wasm"))]
+                LeftPanelDisplayedTab::OpenCodeConversations => {
+                    ToolPanelView::OpenCodeConversations
+                }
             };
             lp.restore_active_view_from_snapshot(active_view, ctx);
             lp.set_active_pane_group(pane_group.clone(), &self.working_directories_model, ctx);
@@ -18955,6 +18981,8 @@ impl Workspace {
                         ToolPanelView::ConversationListView => "Agent conversations",
                         #[cfg(not(target_family = "wasm"))]
                         ToolPanelView::CodexConversations => "Codex conversations",
+                        #[cfg(not(target_family = "wasm"))]
+                        ToolPanelView::OpenCodeConversations => "OpenCode conversations",
                     }
                 } else {
                     "Tools panel"
@@ -19011,6 +19039,8 @@ impl Workspace {
                 ToolPanelView::ConversationListView => "Agent conversations",
                 #[cfg(not(target_family = "wasm"))]
                 ToolPanelView::CodexConversations => "Codex conversations",
+                #[cfg(not(target_family = "wasm"))]
+                ToolPanelView::OpenCodeConversations => "OpenCode conversations",
             }
         } else {
             "Tools panel"
@@ -22178,6 +22208,10 @@ impl Workspace {
         #[cfg(not(target_family = "wasm"))]
         if *CodexAppServerSettings::as_ref(ctx).enabled.value() {
             views.push(ToolPanelView::CodexConversations);
+        }
+        #[cfg(not(target_family = "wasm"))]
+        if *OpenCodeServerSettings::as_ref(ctx).enabled.value() {
+            views.push(ToolPanelView::OpenCodeConversations);
         }
 
         if cfg!(feature = "local_fs")

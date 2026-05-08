@@ -36,8 +36,9 @@ pub fn initialize_settings_for_tests_with_mode(
         AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
         CloudPreferencesSettings, CodeSettings, CodexAppServerSettings, DebugSettings,
         EmacsBindingsSettings, FontSettings, GPUSettings, InputModeSettings, InputSettings,
-        NativePreferenceSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
-        SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings,
+        NativePreferenceSettings, OpenCodeServerSettings, PaneSettings,
+        SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
+        VimBannerSettings,
     };
     use crate::terminal::general_settings::GeneralSettings;
     use crate::terminal::keys_settings::KeysSettings;
@@ -112,6 +113,7 @@ pub fn initialize_settings_for_tests_with_mode(
     SharedSessionSettings::register(app);
     CodeSettings::register(app);
     CodexAppServerSettings::register(app);
+    OpenCodeServerSettings::register(app);
     SemanticSelection::register(app);
 
     app.update(|ctx| {
