@@ -36,7 +36,7 @@ pub fn initialize_settings_for_tests_with_mode(
         AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
         CloudPreferencesSettings, CodeSettings, CodexAppServerSettings, DebugSettings,
         EmacsBindingsSettings, FontSettings, GPUSettings, InputModeSettings, InputSettings,
-        LocalControlSettings, NativePreferenceSettings, PaneSettings,
+        LocalControlSettings, NativePreferenceSettings, OpenCodeServerSettings, PaneSettings,
         SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
         VimBannerSettings,
     };
@@ -120,6 +120,7 @@ pub fn initialize_settings_for_tests_with_mode(
     SharedSessionSettings::register(app);
     CodeSettings::register(app);
     CodexAppServerSettings::register(app);
+    OpenCodeServerSettings::register(app);
     SemanticSelection::register(app);
 
     app.update(|ctx| {
