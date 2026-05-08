@@ -37,7 +37,6 @@ use crate::ui_components::icon_with_status::render_icon_with_status;
 use crate::ui_components::icons;
 use crate::workspace::tab_settings::TabSettings;
 use settings::Setting as _;
-use warp_core::ui::Icon as WarpIcon;
 use warp_core::{channel::ChannelState, context_flag::ContextFlag};
 use warpui::elements::{
     ConstrainedBox, CrossAxisAlignment, Empty, Flex, MainAxisAlignment, MainAxisSize,

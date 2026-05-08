@@ -1402,7 +1402,7 @@ dependencies = [
  "pin-project-lite",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls 0.26.4",
+ "tokio-rustls",
  "tungstenite 0.24.0",
 ]
 
@@ -7461,12 +7461,12 @@ dependencies = [
  "diesel",
  "futures",
  "futures-util",
- "http 1.1.0",
+ "http 1.4.0",
  "log",
  "prost 0.14.3",
  "prost-types",
  "reqwest",
- "rustls 0.23.39",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
@@ -13761,7 +13761,7 @@ checksum = "4793cb5e56680ecbb1d843515b23b6de9a75eb04b66643e256a396d43be33c13"
 dependencies = [
  "bytes",
  "data-encoding",
- "http 1.1.0",
+ "http 1.4.0",
  "httparse",
  "log",
  "rand 0.9.4",
