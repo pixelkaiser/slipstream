@@ -18,6 +18,7 @@ use super::{
     EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType,
     InputModeSettings, InputSettings, LocalControlSettings, PaneSettings,
     SameLinePromptBlockSettings, ScrollSettings,
+    OpenCodeServerSettings,
     SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;
@@ -69,6 +70,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     AliasExpansionSettings::register(ctx);
     CodeSettings::register(ctx);
     CodexAppServerSettings::register(ctx);
+    OpenCodeServerSettings::register(ctx);
     LigatureSettings::register(ctx);
     GPUSettings::register(ctx);
     ChangelogSettings::register(ctx);
