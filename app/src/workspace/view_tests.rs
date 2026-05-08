@@ -2208,6 +2208,45 @@ fn compute_left_panel_views_shows_codex_conversations_when_enabled() {
     });
 }
 
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn compute_left_panel_views_hides_opencode_conversations_when_disabled() {
+    let _conversation_list_guard =
+        FeatureFlag::AgentViewConversationListView.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        app.update(|ctx| {
+            let views = Workspace::compute_left_panel_views(ctx);
+            assert!(!views.contains(&ToolPanelView::OpenCodeConversations));
+        });
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[test]
+fn compute_left_panel_views_shows_opencode_conversations_when_enabled() {
+    use ::settings::Setting as _;
+    use warpui::SingletonEntity as _;
+
+    let _conversation_list_guard =
+        FeatureFlag::AgentViewConversationListView.override_enabled(false);
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        app.update(|ctx| {
+            crate::settings::OpenCodeServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+                settings.enabled.set_value(true, ctx).unwrap();
+            });
+
+            let views = Workspace::compute_left_panel_views(ctx);
+            assert!(views.contains(&ToolPanelView::OpenCodeConversations));
+        });
+    });
+}
+
 #[test]
 fn test_left_panel_window_scoped_reconciles_between_terminal_tabs_when_enabled() {
     let _conversation_list_guard =

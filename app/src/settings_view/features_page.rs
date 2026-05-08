@@ -38,6 +38,10 @@ use crate::editor::{
     Event as EditorEvent, SingleLineEditorOptions, TextOptions,
     ACCEPT_AUTOSUGGESTION_KEYBINDING_NAME,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::opencode_server::{
+    normalize_opencode_server_url, opencode_start_command, OpenCodeServerModel,
+};
 use crate::search::command_search::settings::{
     CommandSearchSettings, ShowGlobalWorkflowsInUniversalSearch,
 };
@@ -63,6 +67,7 @@ use crate::settings::{
 #[cfg(not(target_family = "wasm"))]
 use crate::settings::{
     CodexAppServerEnabled, CodexAppServerSettings, CodexAppServerSettingsChangedEvent,
+    OpenCodeServerEnabled, OpenCodeServerSettings, OpenCodeServerSettingsChangedEvent,
 };
 use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
@@ -664,6 +669,16 @@ pub enum FeaturesPageAction {
     SetCodexBearerToken,
     #[cfg(not(target_family = "wasm"))]
     RefreshCodexConnection,
+    #[cfg(not(target_family = "wasm"))]
+    ToggleOpenCode,
+    #[cfg(not(target_family = "wasm"))]
+    SetOpenCodeServerUrl,
+    #[cfg(not(target_family = "wasm"))]
+    SetOpenCodeUsername,
+    #[cfg(not(target_family = "wasm"))]
+    SetOpenCodePassword,
+    #[cfg(not(target_family = "wasm"))]
+    RefreshOpenCodeConnection,
     MakeWarpDefaultTerminal,
 }
 
@@ -1198,6 +1213,34 @@ impl FeaturesPageAction {
                 action: "RefreshCodexConnection".to_string(),
                 value: String::new(),
             },
+            #[cfg(not(target_family = "wasm"))]
+            Self::ToggleOpenCode => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleOpenCode".to_string(),
+                value: to_string(*OpenCodeServerSettings::as_ref(ctx).enabled.value()),
+            },
+            #[cfg(not(target_family = "wasm"))]
+            Self::SetOpenCodeServerUrl => TelemetryEvent::FeaturesPageAction {
+                action: "SetOpenCodeServerUrl".to_string(),
+                value: OpenCodeServerSettings::as_ref(ctx)
+                    .server_url
+                    .value()
+                    .clone(),
+            },
+            #[cfg(not(target_family = "wasm"))]
+            Self::SetOpenCodeUsername => TelemetryEvent::FeaturesPageAction {
+                action: "SetOpenCodeUsername".to_string(),
+                value: OpenCodeServerSettings::as_ref(ctx).username.value().clone(),
+            },
+            #[cfg(not(target_family = "wasm"))]
+            Self::SetOpenCodePassword => TelemetryEvent::FeaturesPageAction {
+                action: "SetOpenCodePassword".to_string(),
+                value: "set".to_string(),
+            },
+            #[cfg(not(target_family = "wasm"))]
+            Self::RefreshOpenCodeConnection => TelemetryEvent::FeaturesPageAction {
+                action: "RefreshOpenCodeConnection".to_string(),
+                value: String::new(),
+            },
         }
     }
 }
@@ -1275,6 +1318,16 @@ pub struct FeaturesPageView {
     codex_import_thread_editor: ViewHandle<SubmittableTextInput>,
     #[cfg(not(target_family = "wasm"))]
     valid_codex_server_url: bool,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_server_url_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_username_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_password_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_import_project_editor: ViewHandle<SubmittableTextInput>,
+    #[cfg(not(target_family = "wasm"))]
+    valid_opencode_server_url: bool,
 
     // Whether or not the SSH wrapper value was changed while the page has been
     // open.
@@ -1687,6 +1740,26 @@ impl TypedActionView for FeaturesPageView {
             #[cfg(not(target_family = "wasm"))]
             RefreshCodexConnection => {
                 CodexAppServerModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.refresh(ctx);
+                });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            ToggleOpenCode => {
+                OpenCodeServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.enabled.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            SetOpenCodeServerUrl => self.set_opencode_server_url(ctx),
+            #[cfg(not(target_family = "wasm"))]
+            SetOpenCodeUsername => self.set_opencode_username(ctx),
+            #[cfg(not(target_family = "wasm"))]
+            SetOpenCodePassword => self.set_opencode_password(ctx),
+            #[cfg(not(target_family = "wasm"))]
+            RefreshOpenCodeConnection => {
+                OpenCodeServerModel::handle(ctx).update(ctx, |model, ctx| {
                     model.refresh(ctx);
                 });
                 ctx.notify();
@@ -2180,6 +2253,39 @@ impl FeaturesPageView {
             ctx.subscribe_to_model(&CodexAppServerModel::handle(ctx), |_, _, _, ctx| {
                 ctx.notify();
             });
+
+            ctx.subscribe_to_model(&OpenCodeServerSettings::handle(ctx), |me, _, event, ctx| {
+                match event {
+                    OpenCodeServerSettingsChangedEvent::OpenCodeServerUrl { .. } => {
+                        let url = OpenCodeServerSettings::as_ref(ctx)
+                            .server_url
+                            .value()
+                            .clone();
+                        me.opencode_server_url_editor
+                            .update(ctx, move |editor, ctx| {
+                                editor.set_buffer_text(&url, ctx);
+                            });
+                    }
+                    OpenCodeServerSettingsChangedEvent::OpenCodeServerUsername { .. } => {
+                        let username = OpenCodeServerSettings::as_ref(ctx).username.value().clone();
+                        me.opencode_username_editor.update(ctx, move |editor, ctx| {
+                            editor.set_buffer_text(&username, ctx);
+                        });
+                    }
+                    OpenCodeServerSettingsChangedEvent::OpenCodeServerPassword { .. } => {
+                        let password = OpenCodeServerSettings::as_ref(ctx).password.value().clone();
+                        me.opencode_password_editor.update(ctx, move |editor, ctx| {
+                            editor.set_buffer_text(&password, ctx);
+                        });
+                    }
+                    _ => {}
+                }
+                ctx.notify();
+            });
+
+            ctx.subscribe_to_model(&OpenCodeServerModel::handle(ctx), |_, _, _, ctx| {
+                ctx.notify();
+            });
         }
 
         let pin_position_dropdown = ctx.add_typed_action_view(|ctx| {
@@ -2476,6 +2582,70 @@ impl FeaturesPageView {
             me.handle_codex_import_thread_event(event, ctx);
         });
 
+        #[cfg(not(target_family = "wasm"))]
+        let opencode_server_url_editor = ctx.add_typed_action_view(|ctx| {
+            let mut editor = EditorView::single_line(width_and_height_editor_options.clone(), ctx);
+            editor.set_placeholder_text("http://127.0.0.1:4096", ctx);
+            editor
+        });
+        #[cfg(not(target_family = "wasm"))]
+        opencode_server_url_editor.update(ctx, |editor, ctx| {
+            let url = OpenCodeServerSettings::as_ref(ctx)
+                .server_url
+                .value()
+                .clone();
+            editor.set_buffer_text(&url, ctx);
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&opencode_server_url_editor, |me, _, event, ctx| {
+            me.handle_opencode_server_url_editor_event(event, ctx);
+        });
+
+        #[cfg(not(target_family = "wasm"))]
+        let opencode_username_editor = ctx.add_typed_action_view(|ctx| {
+            let mut editor = EditorView::single_line(width_and_height_editor_options.clone(), ctx);
+            editor.set_placeholder_text("opencode", ctx);
+            editor
+        });
+        #[cfg(not(target_family = "wasm"))]
+        opencode_username_editor.update(ctx, |editor, ctx| {
+            let username = OpenCodeServerSettings::as_ref(ctx).username.value().clone();
+            editor.set_buffer_text(&username, ctx);
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&opencode_username_editor, |me, _, event, ctx| {
+            me.handle_opencode_username_editor_event(event, ctx);
+        });
+
+        #[cfg(not(target_family = "wasm"))]
+        let opencode_password_editor = ctx.add_typed_action_view(|ctx| {
+            let mut editor = EditorView::single_line(width_and_height_editor_options.clone(), ctx);
+            editor.set_placeholder_text("Optional password", ctx);
+            editor
+        });
+        #[cfg(not(target_family = "wasm"))]
+        opencode_password_editor.update(ctx, |editor, ctx| {
+            let password = OpenCodeServerSettings::as_ref(ctx).password.value().clone();
+            editor.set_buffer_text(&password, ctx);
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&opencode_password_editor, |me, _, event, ctx| {
+            me.handle_opencode_password_editor_event(event, ctx);
+        });
+
+        #[cfg(not(target_family = "wasm"))]
+        let opencode_import_project_editor = ctx.add_typed_action_view(|ctx| {
+            let mut input =
+                SubmittableTextInput::new(ctx).validate_on_submit(|value| !value.trim().is_empty());
+            input.set_placeholder_text("Import project path", ctx);
+            input.set_outer_margins(8., 0., ctx);
+            input
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&opencode_import_project_editor, |me, _, event, ctx| {
+            me.handle_opencode_import_project_event(event, ctx);
+        });
+
         let notifications_long_running_threshold_editor = {
             ctx.add_typed_action_view(|ctx| {
                 let options = SingleLineEditorOptions {
@@ -2597,6 +2767,16 @@ impl FeaturesPageView {
             codex_import_thread_editor,
             #[cfg(not(target_family = "wasm"))]
             valid_codex_server_url: true,
+            #[cfg(not(target_family = "wasm"))]
+            opencode_server_url_editor,
+            #[cfg(not(target_family = "wasm"))]
+            opencode_username_editor,
+            #[cfg(not(target_family = "wasm"))]
+            opencode_password_editor,
+            #[cfg(not(target_family = "wasm"))]
+            opencode_import_project_editor,
+            #[cfg(not(target_family = "wasm"))]
+            valid_opencode_server_url: true,
 
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             force_x11_changed: false,
@@ -2926,6 +3106,9 @@ impl FeaturesPageView {
         #[cfg(not(target_family = "wasm"))]
         let codex_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
             vec![Box::new(CodexWidget::default())];
+        #[cfg(not(target_family = "wasm"))]
+        let opencode_widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
+            vec![Box::new(OpenCodeWidget::default())];
 
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         {
@@ -2948,6 +3131,8 @@ impl FeaturesPageView {
             ),
             #[cfg(not(target_family = "wasm"))]
             Category::new("Codex", codex_widgets),
+            #[cfg(not(target_family = "wasm"))]
+            Category::new("OpenCode", opencode_widgets),
             Category::new("System", system_widgets),
         ];
 
@@ -3329,6 +3514,116 @@ impl FeaturesPageView {
                     if !thread_ids.contains(&thread_id) {
                         thread_ids.push(thread_id);
                         report_if_error!(settings.imported_thread_ids.set_value(thread_ids, ctx));
+                    }
+                });
+            }
+            SubmittableTextInputEvent::Escape => ctx.emit(FeaturesSettingsPageEvent::FocusModal),
+        }
+        ctx.notify();
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_opencode_server_url_editor_event(
+        &mut self,
+        event: &EditorEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            EditorEvent::Edited(_) => {
+                let input = self.opencode_server_url_editor.as_ref(ctx).buffer_text(ctx);
+                self.valid_opencode_server_url = normalize_opencode_server_url(&input).is_ok();
+                ctx.notify();
+            }
+            EditorEvent::Enter | EditorEvent::Blurred => self.set_opencode_server_url(ctx),
+            EditorEvent::Escape => ctx.emit(FeaturesSettingsPageEvent::FocusModal),
+            _ => {}
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn set_opencode_server_url(&mut self, ctx: &mut ViewContext<Self>) {
+        let input = self.opencode_server_url_editor.as_ref(ctx).buffer_text(ctx);
+        let normalized = match normalize_opencode_server_url(&input) {
+            Ok(url) => url.to_string(),
+            Err(_) => {
+                self.valid_opencode_server_url = false;
+                ctx.notify();
+                return;
+            }
+        };
+
+        self.valid_opencode_server_url = true;
+        self.opencode_server_url_editor.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(&normalized, ctx);
+        });
+        OpenCodeServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+            report_if_error!(settings.server_url.set_value(normalized, ctx));
+        });
+        ctx.notify();
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_opencode_username_editor_event(
+        &mut self,
+        event: &EditorEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            EditorEvent::Enter | EditorEvent::Blurred => self.set_opencode_username(ctx),
+            EditorEvent::Escape => ctx.emit(FeaturesSettingsPageEvent::FocusModal),
+            _ => {}
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn set_opencode_username(&mut self, ctx: &mut ViewContext<Self>) {
+        let username = self.opencode_username_editor.as_ref(ctx).buffer_text(ctx);
+        OpenCodeServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+            report_if_error!(settings
+                .username
+                .set_value(username.trim().to_string(), ctx));
+        });
+        ctx.notify();
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_opencode_password_editor_event(
+        &mut self,
+        event: &EditorEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            EditorEvent::Enter | EditorEvent::Blurred => self.set_opencode_password(ctx),
+            EditorEvent::Escape => ctx.emit(FeaturesSettingsPageEvent::FocusModal),
+            _ => {}
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn set_opencode_password(&mut self, ctx: &mut ViewContext<Self>) {
+        let password = self.opencode_password_editor.as_ref(ctx).buffer_text(ctx);
+        OpenCodeServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+            report_if_error!(settings
+                .password
+                .set_value(password.trim().to_string(), ctx));
+        });
+        ctx.notify();
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_opencode_import_project_event(
+        &mut self,
+        event: &SubmittableTextInputEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            SubmittableTextInputEvent::Submit(path) => {
+                let path = PathBuf::from(path.trim());
+                OpenCodeServerSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut paths = settings.imported_project_paths.value().clone();
+                    if !paths.contains(&path) {
+                        paths.push(path);
+                        report_if_error!(settings.imported_project_paths.set_value(paths, ctx));
                     }
                 });
             }
@@ -4684,6 +4979,233 @@ impl SettingsWidget for CodexWidget {
             )
             .with_child(url_row)
             .with_child(token_row)
+            .with_child(start_command)
+            .with_child(self.render_imports(view, appearance))
+            .with_child(imports_summary)
+            .finish()
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Default)]
+struct OpenCodeWidget {
+    switch_state: SwitchStateHandle,
+    refresh_button: MouseStateHandle,
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl OpenCodeWidget {
+    fn render_editor_row(
+        &self,
+        label: &'static str,
+        editor: ViewHandle<EditorView>,
+        appearance: &Appearance,
+        border_color: Option<Fill>,
+    ) -> Box<dyn Element> {
+        let input = appearance
+            .ui_builder()
+            .text_input(editor)
+            .with_style(UiComponentStyles {
+                padding: Some(Coords::uniform(8.)),
+                background: Some(appearance.theme().surface_2().into()),
+                border_color,
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        Flex::column()
+            .with_spacing(6.)
+            .with_child(
+                Text::new_inline(label, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                    .with_color(appearance.theme().foreground().into_solid())
+                    .finish(),
+            )
+            .with_child(input)
+            .finish()
+    }
+
+    fn render_imports(&self, view: &FeaturesPageView, appearance: &Appearance) -> Box<dyn Element> {
+        Flex::column()
+            .with_spacing(8.)
+            .with_child(
+                Text::new_inline("Imports", appearance.ui_font_family(), CONTENT_FONT_SIZE)
+                    .with_color(appearance.theme().foreground().into_solid())
+                    .finish(),
+            )
+            .with_child(ChildView::new(&view.opencode_import_project_editor).finish())
+            .finish()
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl SettingsWidget for OpenCodeWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "opencode server conversations sessions http import project provider model"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let settings = OpenCodeServerSettings::as_ref(app);
+        let enabled = *settings.enabled.value();
+        let toggle = render_body_item::<FeaturesPageAction>(
+            "OpenCode conversations".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                OpenCodeServerEnabled::storage_key(),
+                OpenCodeServerEnabled::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(enabled)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleOpenCode);
+                })
+                .finish(),
+            Some(
+                "Show OpenCode server conversations from one configured server as a separate Tools panel view."
+                    .to_string(),
+            ),
+        );
+
+        if !enabled {
+            return toggle;
+        }
+
+        let status = OpenCodeServerModel::as_ref(app).status().label();
+        let status_text = appearance
+            .ui_builder()
+            .wrappable_text(status, true)
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                font_color: Some(
+                    appearance
+                        .theme()
+                        .sub_text_color(appearance.theme().background())
+                        .into_solid(),
+                ),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        let refresh = appearance
+            .ui_builder()
+            .button(ButtonVariant::Secondary, self.refresh_button.clone())
+            .with_text_label("Check".to_string())
+            .with_style(UiComponentStyles {
+                padding: Some(Coords::default().top(6.).bottom(6.).left(12.).right(12.)),
+                ..Default::default()
+            })
+            .build()
+            .on_click(|ctx, _, _| {
+                ctx.dispatch_typed_action(FeaturesPageAction::RefreshOpenCodeConnection);
+            })
+            .finish();
+
+        let border_color =
+            (!view.valid_opencode_server_url).then(|| themes::theme::Fill::error().into());
+        let url_row = self.render_editor_row(
+            "Server URL",
+            view.opencode_server_url_editor.clone(),
+            appearance,
+            border_color,
+        );
+        let username_row = self.render_editor_row(
+            "Username",
+            view.opencode_username_editor.clone(),
+            appearance,
+            None,
+        );
+        let password_row = self.render_editor_row(
+            "Password",
+            view.opencode_password_editor.clone(),
+            appearance,
+            None,
+        );
+        let start_command = appearance
+            .ui_builder()
+            .wrappable_text(
+                format!(
+                    "Start command: {}",
+                    opencode_start_command(settings.server_url.value())
+                ),
+                true,
+            )
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                font_color: Some(
+                    appearance
+                        .theme()
+                        .sub_text_color(appearance.theme().background())
+                        .into_solid(),
+                ),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        let imported_projects = settings
+            .imported_project_paths
+            .value()
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let imports_summary = appearance
+            .ui_builder()
+            .wrappable_text(
+                format!(
+                    "Imported projects:\n{}",
+                    if imported_projects.is_empty() {
+                        "None"
+                    } else {
+                        imported_projects.as_str()
+                    },
+                ),
+                true,
+            )
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                font_color: Some(
+                    appearance
+                        .theme()
+                        .sub_text_color(appearance.theme().background())
+                        .into_solid(),
+                ),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+
+        Flex::column()
+            .with_child(toggle)
+            .with_spacing(12.)
+            .with_child(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_child(Shrinkable::new(1., status_text).finish())
+                    .with_child(refresh)
+                    .finish(),
+            )
+            .with_child(url_row)
+            .with_child(username_row)
+            .with_child(password_row)
             .with_child(start_command)
             .with_child(self.render_imports(view, appearance))
             .with_child(imports_summary)

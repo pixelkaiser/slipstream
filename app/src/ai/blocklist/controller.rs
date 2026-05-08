@@ -39,6 +39,8 @@ use crate::ai::document::ai_document_model::{
 use crate::ai::llms::LLMId;
 #[cfg(not(target_family = "wasm"))]
 use crate::codex_app_server::CodexAppServerModel;
+#[cfg(not(target_family = "wasm"))]
+use crate::opencode_server::OpenCodeServerModel;
 use crate::ai::{
     agent::{
         conversation::AIConversationId, extract_user_query_mode, AIAgentActionResultType,
@@ -1121,6 +1123,31 @@ impl BlocklistAIController {
                     contains_user_query: true,
                     is_queued_prompt,
                     model_id: LLMId::from("codex"),
+                    stream_id: ResponseStreamId::new_local(),
+                });
+            }
+            return;
+        }
+        #[cfg(not(target_family = "wasm"))]
+        if OpenCodeServerModel::as_ref(ctx).is_opencode_conversation(conversation_id) {
+            if !additional_attachments.is_empty() {
+                log::warn!(
+                    "Ignoring attachments for OpenCode server conversation {conversation_id:?}"
+                );
+            }
+            let submitted = OpenCodeServerModel::handle(ctx).update(ctx, |opencode_model, ctx| {
+                opencode_model.submit_conversation_prompt(
+                    conversation_id,
+                    query,
+                    self.terminal_view_id,
+                    ctx,
+                )
+            });
+            if submitted {
+                ctx.emit(BlocklistAIControllerEvent::SentRequest {
+                    contains_user_query: true,
+                    is_queued_prompt,
+                    model_id: LLMId::from("opencode"),
                     stream_id: ResponseStreamId::new_local(),
                 });
             }
