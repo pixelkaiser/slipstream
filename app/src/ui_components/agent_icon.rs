@@ -17,7 +17,6 @@ use crate::ai::agent_conversations_model::{
     AgentConversationEntry, AgentConversationProvenance, AgentConversationsModel,
     AgentRunDisplayStatus,
 };
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 #[cfg(not(target_family = "wasm"))]
 use crate::codex_app_server::CodexAppServerModel;
 #[cfg(not(target_family = "wasm"))]

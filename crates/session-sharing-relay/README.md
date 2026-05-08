@@ -41,4 +41,3 @@ The existing local multi-agent service remains separate on port `8787`.
 - The relay is trusted infrastructure operated by the user or team.
 - TLS is expected to be terminated by a reverse proxy for internet deployments.
 - Sessions do not survive relay restarts.
-
