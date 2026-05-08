@@ -124,6 +124,8 @@ pub mod keyboard;
 pub mod launch_configs;
 #[cfg(not(target_family = "wasm"))]
 pub mod local_multi_agent;
+#[cfg(not(target_family = "wasm"))]
+mod opencode_server;
 pub mod pane_group;
 pub mod resource_center;
 pub mod root_view;
@@ -140,6 +142,8 @@ use crate::ai::mcp::FileBasedMCPManager;
 use crate::ai::mcp::FileMCPWatcher;
 #[cfg(not(target_family = "wasm"))]
 use crate::codex_app_server::CodexAppServerModel;
+#[cfg(not(target_family = "wasm"))]
+use crate::opencode_server::OpenCodeServerModel;
 use crate::uri::web_intent_parser::maybe_rewrite_web_url_to_intent;
 use ::ai::index::full_source_code_embedding::manager::CodebaseIndexManager;
 use ::ai::index::full_source_code_embedding::SyncTask;
@@ -1323,6 +1327,8 @@ pub(crate) fn initialize_app(
 
     #[cfg(not(target_family = "wasm"))]
     ctx.add_singleton_model(CodexAppServerModel::new);
+    #[cfg(not(target_family = "wasm"))]
+    ctx.add_singleton_model(OpenCodeServerModel::new);
 
     ctx.add_singleton_model(AntivirusInfo::new);
 
