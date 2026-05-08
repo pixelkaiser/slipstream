@@ -303,6 +303,8 @@ pub enum LeftPanelDisplayedTab {
     ConversationListView,
     #[cfg(not(target_family = "wasm"))]
     CodexConversations,
+    #[cfg(not(target_family = "wasm"))]
+    OpenCodeConversations,
 }
 
 impl From<ToolPanelView> for LeftPanelDisplayedTab {
@@ -314,6 +316,8 @@ impl From<ToolPanelView> for LeftPanelDisplayedTab {
             ToolPanelView::ConversationListView => LeftPanelDisplayedTab::ConversationListView,
             #[cfg(not(target_family = "wasm"))]
             ToolPanelView::CodexConversations => LeftPanelDisplayedTab::CodexConversations,
+            #[cfg(not(target_family = "wasm"))]
+            ToolPanelView::OpenCodeConversations => LeftPanelDisplayedTab::OpenCodeConversations,
         }
     }
 }

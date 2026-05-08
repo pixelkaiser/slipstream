@@ -25,6 +25,8 @@ use crate::code::file_tree::FileTreeEvent;
 use crate::codex_app_server::CodexAppServerModel;
 use crate::coding_panel_enablement_state::CodingPanelEnablementState;
 use crate::drive::panel::{DrivePanel, DrivePanelEvent};
+#[cfg(not(target_family = "wasm"))]
+use crate::opencode_server::OpenCodeServerModel;
 use crate::pane_group::working_directories::WorkingDirectory;
 use crate::pane_group::{PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesModel};
 #[cfg(feature = "local_fs")]
@@ -44,6 +46,8 @@ use crate::workspace::view::conversation_list::view::{
 use crate::workspace::view::global_search::view::{
     Event as GlobalSearchViewEvent, GlobalSearchEntryFocus, GlobalSearchView,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::workspace::view::opencode_conversations::OpenCodeConversationsView;
 use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
     LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
@@ -74,6 +78,8 @@ struct MouseStateHandles {
     conversation_list_view_button: MouseStateHandle,
     #[cfg(not(target_family = "wasm"))]
     codex_conversations_button: MouseStateHandle,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_conversations_button: MouseStateHandle,
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +92,8 @@ pub enum LeftPanelAction {
     ConversationListView,
     #[cfg(not(target_family = "wasm"))]
     CodexConversations,
+    #[cfg(not(target_family = "wasm"))]
+    OpenCodeConversations,
 }
 
 pub enum LeftPanelEvent {
@@ -116,6 +124,8 @@ pub enum ToolPanelView {
     ConversationListView,
     #[cfg(not(target_family = "wasm"))]
     CodexConversations,
+    #[cfg(not(target_family = "wasm"))]
+    OpenCodeConversations,
 }
 
 /// Encapsulates the active view state to enforce that all mutations go through
@@ -184,6 +194,8 @@ pub struct LeftPanelView {
     conversation_list_view: ViewHandle<ConversationListView>,
     #[cfg(not(target_family = "wasm"))]
     codex_conversations_view: ViewHandle<CodexConversationsView>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_conversations_view: ViewHandle<OpenCodeConversationsView>,
     active_view: active_view_state::ActiveViewState,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
     active_pane_group: Option<WeakViewHandle<PaneGroup>>,
@@ -230,6 +242,8 @@ impl LeftPanelView {
         let conversation_list_view = ctx.add_typed_action_view(ConversationListView::new);
         #[cfg(not(target_family = "wasm"))]
         let codex_conversations_view = ctx.add_typed_action_view(CodexConversationsView::new);
+        #[cfg(not(target_family = "wasm"))]
+        let opencode_conversations_view = ctx.add_typed_action_view(OpenCodeConversationsView::new);
 
         ctx.subscribe_to_view(&warp_drive_view, |_me, _, event, ctx| {
             ctx.emit(LeftPanelEvent::WarpDrive(event.clone()));
@@ -305,6 +319,13 @@ impl LeftPanelView {
                         model_ctx,
                     );
                 });
+                #[cfg(not(target_family = "wasm"))]
+                OpenCodeServerModel::handle(ctx).update(ctx, |model, model_ctx| {
+                    model.set_project_roots(
+                        directories.iter().map(|dir| dir.path.clone()).collect(),
+                        model_ctx,
+                    );
+                });
 
                 let directories: Vec<PathBuf> =
                     directories.iter().map(|dir| dir.path.clone()).collect();
@@ -337,6 +358,8 @@ impl LeftPanelView {
             conversation_list_view,
             #[cfg(not(target_family = "wasm"))]
             codex_conversations_view,
+            #[cfg(not(target_family = "wasm"))]
+            opencode_conversations_view,
             active_view: active_view_state::new(active_view),
             toolbelt_buttons,
             active_pane_group: None,
@@ -478,6 +501,20 @@ impl LeftPanelView {
                     active_icon: Some(Icon::OpenAILogo),
                     tooltip_text: "Codex conversations".to_string(),
                     action: LeftPanelAction::CodexConversations,
+                    render_with_active_state: false,
+                    tooltip_keybinding: None,
+                    tooltip_keybinding_names,
+                }
+            }
+            #[cfg(not(target_family = "wasm"))]
+            ToolPanelView::OpenCodeConversations => {
+                let tooltip_keybinding_names = vec![];
+
+                ToolbeltButtonConfig {
+                    icon: Icon::OpenCodeLogo,
+                    active_icon: Some(Icon::OpenCodeLogo),
+                    tooltip_text: "OpenCode conversations".to_string(),
+                    action: LeftPanelAction::OpenCodeConversations,
                     render_with_active_state: false,
                     tooltip_keybinding: None,
                     tooltip_keybinding_names,
@@ -652,6 +689,16 @@ impl LeftPanelView {
                 model_ctx,
             );
         });
+        #[cfg(not(target_family = "wasm"))]
+        OpenCodeServerModel::handle(ctx).update(ctx, |model, model_ctx| {
+            model.set_project_roots(
+                active_directories
+                    .iter()
+                    .map(|directory| directory.path.clone())
+                    .collect(),
+                model_ctx,
+            );
+        });
 
         let directories: Vec<PathBuf> = active_directories
             .iter()
@@ -739,6 +786,12 @@ impl LeftPanelView {
             #[cfg(not(target_family = "wasm"))]
             ToolPanelView::CodexConversations => {
                 self.codex_conversations_view.update(ctx, |view, ctx| {
+                    view.on_left_panel_focused(ctx);
+                });
+            }
+            #[cfg(not(target_family = "wasm"))]
+            ToolPanelView::OpenCodeConversations => {
+                self.opencode_conversations_view.update(ctx, |view, ctx| {
                     view.on_left_panel_focused(ctx);
                 });
             }
@@ -898,6 +951,10 @@ impl LeftPanelView {
                 LeftPanelAction::CodexConversations => {
                     self.active_view.get() == ToolPanelView::CodexConversations
                 }
+                #[cfg(not(target_family = "wasm"))]
+                LeftPanelAction::OpenCodeConversations => {
+                    self.active_view.get() == ToolPanelView::OpenCodeConversations
+                }
             };
         }
     }
@@ -966,6 +1023,31 @@ impl LeftPanelView {
         })
         .with_cursor(Cursor::PointingHand)
         .finish()
+    }
+
+    fn mouse_state_for_action(&self, action: &LeftPanelAction) -> MouseStateHandle {
+        match action {
+            LeftPanelAction::ProjectExplorer => {
+                self.mouse_state_handles.project_explorer_button.clone()
+            }
+            LeftPanelAction::GlobalSearch { .. } => {
+                self.mouse_state_handles.global_search_button.clone()
+            }
+            LeftPanelAction::WarpDrive => self.mouse_state_handles.warp_drive_button.clone(),
+            LeftPanelAction::ConversationListView => self
+                .mouse_state_handles
+                .conversation_list_view_button
+                .clone(),
+            #[cfg(not(target_family = "wasm"))]
+            LeftPanelAction::CodexConversations => {
+                self.mouse_state_handles.codex_conversations_button.clone()
+            }
+            #[cfg(not(target_family = "wasm"))]
+            LeftPanelAction::OpenCodeConversations => self
+                .mouse_state_handles
+                .opencode_conversations_button
+                .clone(),
+        }
     }
 }
 
@@ -1042,6 +1124,10 @@ impl LeftPanelView {
             #[cfg(not(target_family = "wasm"))]
             LeftPanelAction::CodexConversations => {
                 active_view_state::set(self, ToolPanelView::CodexConversations, ctx);
+            }
+            #[cfg(not(target_family = "wasm"))]
+            LeftPanelAction::OpenCodeConversations => {
+                active_view_state::set(self, ToolPanelView::OpenCodeConversations, ctx);
             }
         }
     }
@@ -1144,23 +1230,16 @@ impl View for LeftPanelView {
                 ToolPanelView::ConversationListView => ctx.focus(&self.conversation_list_view),
                 #[cfg(not(target_family = "wasm"))]
                 ToolPanelView::CodexConversations => ctx.focus(&self.codex_conversations_view),
+                #[cfg(not(target_family = "wasm"))]
+                ToolPanelView::OpenCodeConversations => {
+                    ctx.focus(&self.opencode_conversations_view)
+                }
             }
         }
     }
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-
-        let mut mouse_state_handles = vec![
-            self.mouse_state_handles.project_explorer_button.clone(),
-            self.mouse_state_handles.global_search_button.clone(),
-            self.mouse_state_handles.warp_drive_button.clone(),
-            self.mouse_state_handles
-                .conversation_list_view_button
-                .clone(),
-        ];
-        #[cfg(not(target_family = "wasm"))]
-        mouse_state_handles.push(self.mouse_state_handles.codex_conversations_button.clone());
 
         // If there is only one button in the toolbelt row,
         // there is no need to show it as it's a bit redundant.
@@ -1169,11 +1248,13 @@ impl View for LeftPanelView {
                 Flex::row()
                     .with_cross_axis_alignment(CrossAxisAlignment::Center)
                     .with_spacing(4.0)
-                    .with_children(self.toolbelt_buttons.iter().zip(&mouse_state_handles).map(
-                        |(button_config, mouse_state)| {
-                            Self::render_button(button_config, mouse_state.clone(), appearance)
-                        },
-                    ))
+                    .with_children(self.toolbelt_buttons.iter().map(|button_config| {
+                        Self::render_button(
+                            button_config,
+                            self.mouse_state_for_action(&button_config.action),
+                            appearance,
+                        )
+                    }))
                     .with_main_axis_size(MainAxisSize::Min)
                     .finish(),
             )
@@ -1223,6 +1304,12 @@ impl View for LeftPanelView {
                 Shrinkable::new(1.0, ChildView::new(&self.codex_conversations_view).finish())
                     .finish()
             }
+            #[cfg(not(target_family = "wasm"))]
+            ToolPanelView::OpenCodeConversations => Shrinkable::new(
+                1.0,
+                ChildView::new(&self.opencode_conversations_view).finish(),
+            )
+            .finish(),
         };
 
         let panel_content = Container::new({
