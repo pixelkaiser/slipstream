@@ -1841,18 +1841,7 @@ impl JsonRpcSocket {
     }
 
     async fn initialize(&mut self) -> Result<()> {
-        let _ = self
-            .request(
-                "initialize",
-                json!({
-                    "clientInfo": {
-                        "name": "Slipstream",
-                        "version": env!("CARGO_PKG_VERSION"),
-                    },
-                    "capabilities": {},
-                }),
-            )
-            .await?;
+        let _ = self.request("initialize", initialize_params()).await?;
         self.notify("initialized", json!({})).await?;
         Ok(())
     }
@@ -1988,6 +1977,18 @@ impl JsonRpcSocket {
             active_turn: None,
         })
     }
+}
+
+fn initialize_params() -> Value {
+    json!({
+        "clientInfo": {
+            "name": "Slipstream",
+            "version": env!("CARGO_PKG_VERSION"),
+        },
+        "capabilities": {
+            "experimentalApi": true,
+        },
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2450,6 +2451,22 @@ mod tests {
                     "type": "text",
                     "text": "hello",
                 }],
+            })
+        );
+    }
+
+    #[test]
+    fn codex_initialize_declares_experimental_api_capability() {
+        assert_eq!(
+            initialize_params(),
+            json!({
+                "clientInfo": {
+                    "name": "Slipstream",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+                "capabilities": {
+                    "experimentalApi": true,
+                },
             })
         );
     }
