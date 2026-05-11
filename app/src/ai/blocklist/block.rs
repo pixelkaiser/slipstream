@@ -43,6 +43,14 @@ use crate::code::editor::comment_editor::create_readonly_comment_markdown_editor
 use crate::code::editor::view::CodeEditorRenderOptions;
 use crate::code::editor_management::CodeSource;
 use crate::code_review::comment_rendering::{CommentViewCard, HeaderClickHandler};
+#[cfg(not(target_family = "wasm"))]
+use crate::codex_app_server::{
+    CodexAppServerModel, CodexAppServerModelEvent, CodexApprovalDecision,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::opencode_server::{
+    OpenCodePendingQuestion, OpenCodePermissionReply, OpenCodeServerModel, OpenCodeServerModelEvent,
+};
 use crate::terminal::model::BlockId;
 use crate::terminal::model_events::ModelEvent;
 use crate::terminal::model_events::ModelEventDispatcher;
@@ -52,6 +60,8 @@ use crate::view_components::action_button::{
     ActionButtonTheme, NakedTheme, PrimaryTheme, SecondaryTheme,
 };
 use crate::view_components::compactible_action_button::CompactibleActionButton;
+#[cfg(not(target_family = "wasm"))]
+use crate::view_components::{SubmittableTextInput, SubmittableTextInputEvent};
 use crate::AIAgentTodoList;
 use crate::FileEdit;
 use pathfinder_color::ColorU;
@@ -123,7 +133,10 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::{cell::OnceCell, sync::Arc};
+use std::{
+    cell::{OnceCell, RefCell},
+    sync::Arc,
+};
 use warp_util::path::ShellFamily;
 use warpui::elements::MainAxisAlignment;
 use warpui::elements::MainAxisSize;
@@ -437,6 +450,67 @@ pub(super) struct AIBlockStateHandles {
     /// Mouse state handle for 'open skill' button
     /// from a ReadFiles action banner
     read_from_skill_button_handle: MouseStateHandle,
+
+    #[cfg(not(target_family = "wasm"))]
+    codex_approval_button_handles: RefCell<HashMap<CodexApprovalDecision, MouseStateHandle>>,
+    #[cfg(not(target_family = "wasm"))]
+    codex_user_input_button_handles: RefCell<HashMap<(String, String), MouseStateHandle>>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_permission_button_handles:
+        RefCell<HashMap<(String, OpenCodePermissionReply), MouseStateHandle>>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_question_button_handles: RefCell<HashMap<(String, usize, String), MouseStateHandle>>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_question_custom_button_handles: RefCell<HashMap<(String, usize), MouseStateHandle>>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_question_submit_button_handles: RefCell<HashMap<String, MouseStateHandle>>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_question_reject_button_handles: RefCell<HashMap<String, MouseStateHandle>>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct OpenCodeCustomAnswerContext {
+    pub request_id: String,
+    pub question_index: usize,
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn current_opencode_pending_question(
+    ctx: &AppContext,
+    conversation_id: AIConversationId,
+    request_id: &str,
+) -> Option<OpenCodePendingQuestion> {
+    OpenCodeServerModel::as_ref(ctx)
+        .pending_question_for_conversation(conversation_id)
+        .filter(|question| question.id == request_id)
+        .cloned()
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn resize_opencode_question_answers(answers: &mut Vec<Vec<String>>, question_count: usize) {
+    answers.resize_with(question_count, Vec::new);
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn opencode_question_answers_complete(
+    question: &OpenCodePendingQuestion,
+    answers: &[Vec<String>],
+) -> bool {
+    !question.questions.is_empty()
+        && question
+            .questions
+            .iter()
+            .enumerate()
+            .all(|(index, _)| answers.get(index).is_some_and(|answer| !answer.is_empty()))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn opencode_question_has_multiple_choice(question: &OpenCodePendingQuestion) -> bool {
+    question
+        .questions
+        .iter()
+        .any(|question_info| question_info.multiple)
 }
 
 #[derive(Default, Clone, Debug)]
@@ -802,6 +876,12 @@ pub struct AIBlock {
     /// so the terminal view can read the updated value when the selection ends in the copy-on-select case.
     selected_text: Arc<RwLock<Option<String>>>,
     state_handles: AIBlockStateHandles,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_custom_answer_input: ViewHandle<SubmittableTextInput>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_custom_answer_context: Option<OpenCodeCustomAnswerContext>,
+    #[cfg(not(target_family = "wasm"))]
+    opencode_question_answers: HashMap<String, Vec<Vec<String>>>,
     controller: ModelHandle<BlocklistAIController>,
     active_session: ModelHandle<ActiveSession>,
     terminal_view_id: EntityId,
@@ -1167,6 +1247,20 @@ impl AIBlock {
             },
         );
 
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_model(&CodexAppServerModel::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, CodexAppServerModelEvent::ActiveThreadChanged) {
+                ctx.notify();
+            }
+        });
+
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_model(&OpenCodeServerModel::handle(ctx), |_, _, event, ctx| {
+            if matches!(event, OpenCodeServerModelEvent::PendingRequestsChanged) {
+                ctx.notify();
+            }
+        });
+
         ctx.subscribe_to_model(
             cli_subagent_controller,
             move |me, _, event, ctx| match event {
@@ -1294,6 +1388,19 @@ impl AIBlock {
                 })
         });
 
+        #[cfg(not(target_family = "wasm"))]
+        let opencode_custom_answer_input = ctx.add_typed_action_view(|ctx| {
+            let mut input =
+                SubmittableTextInput::new(ctx).validate_on_submit(|text| !text.trim().is_empty());
+            input.set_placeholder_text("Type a custom answer", ctx);
+            input.set_outer_margins(0., 0., ctx);
+            input
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&opencode_custom_answer_input, |me, _, event, ctx| {
+            me.handle_opencode_custom_answer_input_event(event, ctx);
+        });
+
         let comment_data = model
             .inputs_to_render(ctx)
             .iter()
@@ -1338,6 +1445,12 @@ impl AIBlock {
             selected_text: Arc::new(RwLock::new(None)),
             window_id: ctx.window_id(),
             state_handles: Default::default(),
+            #[cfg(not(target_family = "wasm"))]
+            opencode_custom_answer_input,
+            #[cfg(not(target_family = "wasm"))]
+            opencode_custom_answer_context: None,
+            #[cfg(not(target_family = "wasm"))]
+            opencode_question_answers: HashMap::new(),
             time_to_first_token: OnceCell::new(),
             time_to_last_token: None,
             num_attached_context_blocks,
@@ -3923,6 +4036,88 @@ impl AIBlock {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn handle_opencode_custom_answer_input_event(
+        &mut self,
+        event: &SubmittableTextInputEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            SubmittableTextInputEvent::Submit(text) => {
+                let pending_question = OpenCodeServerModel::as_ref(ctx)
+                    .pending_question_for_conversation(self.client_ids.conversation_id)
+                    .cloned();
+                let pending_question_id = pending_question
+                    .as_ref()
+                    .map(|question| question.id.as_str());
+                let context = self.opencode_custom_answer_context.take().or_else(|| {
+                    let question = pending_question.as_ref()?;
+                    let question_index = question
+                        .questions
+                        .iter()
+                        .position(|question_info| question_info.allows_custom_answer())?;
+                    Some(OpenCodeCustomAnswerContext {
+                        request_id: question.id.clone(),
+                        question_index,
+                    })
+                });
+                let Some(context) = context.filter(|context| {
+                    pending_question_id == Some(context.request_id.as_str())
+                        && pending_question.as_ref().is_some_and(|question| {
+                            question
+                                .questions
+                                .get(context.question_index)
+                                .is_some_and(|question_info| question_info.allows_custom_answer())
+                        })
+                }) else {
+                    ctx.notify();
+                    return;
+                };
+                let Some(pending_question) = pending_question else {
+                    ctx.notify();
+                    return;
+                };
+                let request_id = context.request_id;
+                let question_count = pending_question.questions.len();
+                if question_count == 1 {
+                    self.opencode_question_answers.remove(&request_id);
+                    OpenCodeServerModel::handle(ctx).update(ctx, |model, ctx| {
+                        model.resolve_pending_question(
+                            request_id.clone(),
+                            vec![vec![text.clone()]],
+                            ctx,
+                        );
+                    });
+                    ctx.emit(AIBlockEvent::FocusTerminal);
+                } else {
+                    let answers = self
+                        .opencode_question_answers
+                        .entry(request_id.clone())
+                        .or_default();
+                    resize_opencode_question_answers(answers, question_count);
+                    answers[context.question_index] = vec![text.clone()];
+                    if opencode_question_answers_complete(&pending_question, answers)
+                        && !opencode_question_has_multiple_choice(&pending_question)
+                    {
+                        let answers = self
+                            .opencode_question_answers
+                            .remove(&request_id)
+                            .unwrap_or_default();
+                        OpenCodeServerModel::handle(ctx).update(ctx, |model, ctx| {
+                            model.resolve_pending_question(request_id.clone(), answers, ctx);
+                        });
+                        ctx.emit(AIBlockEvent::FocusTerminal);
+                    }
+                }
+                ctx.notify();
+            }
+            SubmittableTextInputEvent::Escape => {
+                self.opencode_custom_answer_context = None;
+                ctx.notify();
+            }
+        }
+    }
+
     #[cfg(feature = "integration_tests")]
     pub fn selection_type(&self) -> SelectionType {
         self.state_handles.selection_handle.selection_type()
@@ -5801,6 +5996,43 @@ pub enum AIBlockAction {
     OpenCommentInGitHub {
         url: String,
     },
+    #[cfg(not(target_family = "wasm"))]
+    ResolveCodexApproval(CodexApprovalDecision),
+    #[cfg(not(target_family = "wasm"))]
+    ResolveCodexUserInput {
+        question_id: String,
+        answer: String,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    ResolveOpenCodePermission {
+        request_id: String,
+        reply: OpenCodePermissionReply,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    ResolveOpenCodeQuestion {
+        request_id: String,
+        answers: Vec<Vec<String>>,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    AnswerOpenCodeQuestion {
+        request_id: String,
+        question_index: usize,
+        answer: String,
+        multiple: bool,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    SubmitOpenCodeQuestion {
+        request_id: String,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    ShowOpenCodeCustomQuestionInput {
+        request_id: String,
+        question_index: usize,
+    },
+    #[cfg(not(target_family = "wasm"))]
+    RejectOpenCodeQuestion {
+        request_id: String,
+    },
 }
 
 impl TypedActionView for AIBlock {
@@ -6405,6 +6637,140 @@ impl TypedActionView for AIBlock {
             }
             AIBlockAction::OpenCommentInGitHub { url } => {
                 ctx.open_url(url);
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AIBlockAction::ResolveCodexApproval(decision) => {
+                CodexAppServerModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.resolve_pending_approval(*decision, ctx)
+                });
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AIBlockAction::ResolveCodexUserInput {
+                question_id,
+                answer,
+            } => {
+                CodexAppServerModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.resolve_pending_user_input(question_id.clone(), answer.clone(), ctx);
+                });
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AIBlockAction::ResolveOpenCodePermission { request_id, reply } => {
+                OpenCodeServerModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.resolve_pending_permission(request_id.clone(), *reply, ctx);
+                });
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AIBlockAction::ResolveOpenCodeQuestion {
+                request_id,
+                answers,
+            } => {
+                self.opencode_custom_answer_context = None;
+                self.opencode_question_answers.remove(request_id);
+                OpenCodeServerModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.resolve_pending_question(request_id.clone(), answers.clone(), ctx);
+                });
+                ctx.emit(AIBlockEvent::FocusTerminal);
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AIBlockAction::AnswerOpenCodeQuestion {
+                request_id,
+                question_index,
+                answer,
+                multiple,
+            } => {
+                let Some(pending_question) = current_opencode_pending_question(
+                    ctx,
+                    self.client_ids.conversation_id,
+                    request_id,
+                ) else {
+                    return;
+                };
+                if pending_question.questions.get(*question_index).is_none() {
+                    return;
+                }
+                let answers = self
+                    .opencode_question_answers
+                    .entry(request_id.clone())
+                    .or_default();
+                resize_opencode_question_answers(answers, pending_question.questions.len());
+                if *multiple {
+                    let question_answers = &mut answers[*question_index];
+                    if let Some(existing_index) = question_answers
+                        .iter()
+                        .position(|existing_answer| existing_answer == answer)
+                    {
+                        question_answers.remove(existing_index);
+                    } else {
+                        question_answers.push(answer.clone());
+                    }
+                } else {
+                    answers[*question_index] = vec![answer.clone()];
+                }
+                if self
+                    .opencode_custom_answer_context
+                    .as_ref()
+                    .is_some_and(|context| {
+                        context.request_id == *request_id
+                            && context.question_index == *question_index
+                    })
+                {
+                    self.opencode_custom_answer_context = None;
+                }
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AIBlockAction::SubmitOpenCodeQuestion { request_id } => {
+                let Some(pending_question) = current_opencode_pending_question(
+                    ctx,
+                    self.client_ids.conversation_id,
+                    request_id,
+                ) else {
+                    return;
+                };
+                let Some(mut answers) = self.opencode_question_answers.get(request_id).cloned()
+                else {
+                    return;
+                };
+                resize_opencode_question_answers(&mut answers, pending_question.questions.len());
+                if !opencode_question_answers_complete(&pending_question, &answers) {
+                    ctx.notify();
+                    return;
+                }
+                self.opencode_custom_answer_context = None;
+                self.opencode_question_answers.remove(request_id);
+                OpenCodeServerModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.resolve_pending_question(request_id.clone(), answers, ctx);
+                });
+                ctx.emit(AIBlockEvent::FocusTerminal);
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AIBlockAction::ShowOpenCodeCustomQuestionInput {
+                request_id,
+                question_index,
+            } => {
+                self.opencode_custom_answer_context = Some(OpenCodeCustomAnswerContext {
+                    request_id: request_id.clone(),
+                    question_index: *question_index,
+                });
+                self.opencode_custom_answer_input.update(ctx, |input, ctx| {
+                    input
+                        .editor()
+                        .update(ctx, |editor, ctx| editor.clear_buffer(ctx));
+                });
+                ctx.focus(&self.opencode_custom_answer_input);
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AIBlockAction::RejectOpenCodeQuestion { request_id } => {
+                self.opencode_custom_answer_context = None;
+                self.opencode_question_answers.remove(request_id);
+                OpenCodeServerModel::handle(ctx).update(ctx, |model, ctx| {
+                    model.reject_pending_question(request_id.clone(), ctx);
+                });
+                ctx.emit(AIBlockEvent::FocusTerminal);
+                ctx.notify();
             }
             AIBlockAction::ViewScreenshot { action_id } => {
                 // Collect all UseComputer action IDs across the entire conversation

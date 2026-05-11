@@ -1,0 +1,37 @@
+{
+  "method": "item/commandExecution/requestApproval",
+  "id": 7,
+  "params": {
+    "threadId": "019e145f-ac99-7702-8f7d-d47c86b5fd27",
+    "turnId": "019e145f-ae0b-7101-b384-9db27c9a6c32",
+    "itemId": "call_FeiVGDW3BjAFS6VbSFR4WrT6",
+    "startedAtMs": 1778458283987,
+    "reason": "capture Codex approval UI fixture",
+    "command": "/bin/zsh -lc \"/bin/zsh -lc 'printf slipstream-codex-approval-capture\\\\n'\"",
+    "cwd": "/Users/te/dev/warp",
+    "commandActions": [
+      {
+        "type": "unknown",
+        "command": "/bin/zsh -lc 'printf slipstream-codex-approval-capture\\n'"
+      }
+    ],
+    "proposedExecpolicyAmendment": [
+      "/bin/zsh",
+      "-lc",
+      "printf slipstream-codex-approval-capture\\n"
+    ],
+    "availableDecisions": [
+      "accept",
+      {
+        "acceptWithExecpolicyAmendment": {
+          "execpolicy_amendment": [
+            "/bin/zsh",
+            "-lc",
+            "printf slipstream-codex-approval-capture\\n"
+          ]
+        }
+      },
+      "cancel"
+    ]
+  }
+}
