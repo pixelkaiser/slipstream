@@ -1,0 +1,17 @@
+agent_text:
+  I will inspect the repo.
+
+  commandExecution: /bin/zsh -lc 'git status --short'
+
+  commandExecution/output: " M app/src/codex_app_server/mod.rs\n"
+
+  Done.
+render_model:
+- text:
+  I will inspect the repo.
+
+- action: request_command_output
+  command: /bin/zsh -lc 'git status --short'
+  result_output: " M app/src/codex_app_server/mod.rs\n"
+- text:
+  Done.

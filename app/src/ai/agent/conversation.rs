@@ -130,6 +130,11 @@ struct PendingCodexCommand {
     output: String,
 }
 
+struct CodexFormattedCommandOutput {
+    output: String,
+    command: Option<String>,
+}
+
 fn codex_output_status(
     text: Option<String>,
     is_streaming: bool,
@@ -180,14 +185,28 @@ fn codex_output_from_text(text: String, task_id: &TaskId) -> CodexOutputParts {
             );
 
             pending_command = Some(PendingCodexCommand {
-                command: command.to_string(),
+                command,
                 output: String::new(),
             });
         } else if let Some(output) = codex_command_output_from_formatted_line(line) {
-            if let Some(command) = pending_command.as_mut() {
-                command.output.push_str(&output);
-            } else {
+            let matches_pending_command = pending_command.as_ref().is_some_and(|command| {
+                output.command.as_ref().map_or(true, |target_command| {
+                    normalized_codex_command(target_command)
+                        == normalized_codex_command(&command.command)
+                })
+            });
+            if matches_pending_command {
+                if let Some(command) = pending_command.as_mut() {
+                    command.output.push_str(&output.output);
+                }
+            } else if let Some(command) = output.command.as_ref() {
+                if !append_output_to_codex_command(&mut action_results, command, &output.output) {
+                    text_buffer.push(line);
+                }
+            } else if !append_output_to_latest_codex_command(&mut action_results, &output.output) {
                 text_buffer.push(line);
+            } else {
+                continue;
             }
         } else {
             if pending_command.is_some() && line.trim().is_empty() {
@@ -257,7 +276,65 @@ fn flush_pending_codex_command(
     *command_index += 1;
 }
 
-fn codex_command_from_formatted_line(line: &str) -> Option<&str> {
+fn append_output_to_latest_codex_command(
+    action_results: &mut [AIAgentActionResult],
+    output: &str,
+) -> bool {
+    for result in action_results.iter_mut().rev() {
+        if !result
+            .id
+            .to_string()
+            .starts_with(CODEX_COMMAND_ACTION_ID_PREFIX)
+        {
+            continue;
+        }
+        if let AIAgentActionResultType::RequestCommandOutput(
+            RequestCommandOutputResult::Completed {
+                output: existing, ..
+            },
+        ) = &mut result.result
+        {
+            existing.push_str(output);
+            return true;
+        }
+    }
+    false
+}
+
+fn append_output_to_codex_command(
+    action_results: &mut [AIAgentActionResult],
+    target_command: &str,
+    output: &str,
+) -> bool {
+    for result in action_results.iter_mut().rev() {
+        if !result
+            .id
+            .to_string()
+            .starts_with(CODEX_COMMAND_ACTION_ID_PREFIX)
+        {
+            continue;
+        }
+        let command_result = match &mut result.result {
+            AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::Completed {
+                    command,
+                    output: existing,
+                    ..
+                },
+            ) => Some((command, existing)),
+            _ => None,
+        };
+        if let Some((command, existing)) = command_result {
+            if normalized_codex_command(command) == normalized_codex_command(target_command) {
+                existing.push_str(output);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn codex_command_from_formatted_line(line: &str) -> Option<String> {
     let (role, command) = line.trim_start().split_once(':')?;
     let normalized_role = role
         .chars()
@@ -265,11 +342,13 @@ fn codex_command_from_formatted_line(line: &str) -> Option<&str> {
         .collect::<String>()
         .to_ascii_lowercase();
 
-    (normalized_role.ends_with("commandexecution") && !command.trim().is_empty())
-        .then(|| command.trim())
+    (normalized_role.ends_with("commandexecution") && !command.trim().is_empty()).then(|| {
+        let command = command.trim();
+        serde_json::from_str::<String>(command).unwrap_or_else(|_| command.to_string())
+    })
 }
 
-fn codex_command_output_from_formatted_line(line: &str) -> Option<String> {
+fn codex_command_output_from_formatted_line(line: &str) -> Option<CodexFormattedCommandOutput> {
     let (role, output) = line.trim_start().split_once(':')?;
     let normalized_role = role
         .chars()
@@ -286,9 +365,67 @@ fn codex_command_output_from_formatted_line(line: &str) -> Option<String> {
     }
 
     let output = output.trim();
-    serde_json::from_str::<String>(output)
-        .ok()
-        .or_else(|| (!output.is_empty()).then(|| output.to_string()))
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(output) {
+        return match value {
+            serde_json::Value::String(output) => Some(CodexFormattedCommandOutput {
+                output,
+                command: None,
+            }),
+            serde_json::Value::Object(_) => {
+                let command = command_field_from_value(&value);
+                command_output_field_from_value(&value)
+                    .map(|output| CodexFormattedCommandOutput { output, command })
+            }
+            _ => None,
+        };
+    }
+
+    (!output.is_empty()).then(|| CodexFormattedCommandOutput {
+        output: output.to_string(),
+        command: None,
+    })
+}
+
+fn command_field_from_value(value: &serde_json::Value) -> Option<String> {
+    match value.get("command") {
+        Some(serde_json::Value::Array(parts)) => {
+            let command = parts
+                .iter()
+                .filter_map(|part| match part {
+                    serde_json::Value::String(value) => Some(value.clone()),
+                    serde_json::Value::Number(value) => Some(value.to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            (!command.trim().is_empty()).then_some(command)
+        }
+        Some(serde_json::Value::String(value)) if !value.trim().is_empty() => Some(value.clone()),
+        _ => None,
+    }
+}
+
+fn command_output_field_from_value(value: &serde_json::Value) -> Option<String> {
+    [
+        "body",
+        "output",
+        "aggregatedOutput",
+        "aggregated_output",
+        "delta",
+        "text",
+        "content",
+        "message",
+    ]
+    .iter()
+    .find_map(|key| match value.get(*key) {
+        Some(serde_json::Value::String(value)) => Some(value.clone()),
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        _ => None,
+    })
+}
+
+fn normalized_codex_command(command: &str) -> String {
+    command.split_whitespace().collect::<String>()
 }
 
 fn codex_command_message_and_result(
@@ -1882,16 +2019,14 @@ impl AIConversation {
         let (output_status, action_results) =
             codex_output_status(output_text, is_streaming, &root_task_id);
         let mut input: Vec<AIAgentInput> = input;
-        if !is_streaming {
-            input.extend(
-                action_results
-                    .into_iter()
-                    .map(|result| AIAgentInput::ActionResult {
-                        result,
-                        context: Arc::<[AIAgentContext]>::from([]),
-                    }),
-            );
-        }
+        input.extend(
+            action_results
+                .into_iter()
+                .map(|result| AIAgentInput::ActionResult {
+                    result,
+                    context: Arc::<[AIAgentContext]>::from([]),
+                }),
+        );
         let exchange = AIAgentExchange {
             id: exchange_id,
             input,
@@ -1933,7 +2068,7 @@ impl AIConversation {
         exchange
             .input
             .retain(|input| !is_codex_command_action_result(input));
-        if is_finished && !is_error {
+        if !is_error {
             exchange
                 .input
                 .extend(

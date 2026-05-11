@@ -1,0 +1,17 @@
+agent_text:
+  I will inspect the repo.
+
+  commandExecution: git status --short
+
+  commandExecution/output: " M app/src/opencode_server/mod.rs\n"
+
+  Done.
+render_model:
+- text:
+  I will inspect the repo.
+
+- action: request_command_output
+  command: git status --short
+  result_output: " M app/src/opencode_server/mod.rs\n"
+- text:
+  Done.
