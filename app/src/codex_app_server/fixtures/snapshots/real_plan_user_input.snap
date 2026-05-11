@@ -1,0 +1,6 @@
+title: Proceed?
+message: Do you want me to run this verification plan now without making code changes?
+controls:
+- option: verification_approval | Run verification (Recommended) | I will execute the non-mutating tests/capture and report results only.
+- option: verification_approval | Revise plan | I will adjust the plan before running anything.
+- option: verification_approval | Hold off | I will stop here and make no further checks.

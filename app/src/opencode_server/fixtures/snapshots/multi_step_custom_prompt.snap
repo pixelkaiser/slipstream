@@ -1,0 +1,20 @@
+title: OpenCode needs input
+message: OpenCode is waiting for your response.
+questions:
+- index: 0
+  header: Pick implementation
+  question: Which implementation should OpenCode use?
+  multiple: false
+  allows_custom_answer: false
+  options:
+  - Minimal |
+  - Complete |
+- index: 1
+  header: Add instruction
+  question: Any extra instructions?
+  multiple: false
+  allows_custom_answer: true
+  options:
+actions:
+- submit
+- reject

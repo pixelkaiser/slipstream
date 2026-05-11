@@ -1,0 +1,6 @@
+title: Codex needs input
+message: implement this plan
+controls:
+- approval: Accept
+- approval: Decline
+- approval: Cancel

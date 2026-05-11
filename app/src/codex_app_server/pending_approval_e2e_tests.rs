@@ -24,7 +24,11 @@ fn request_user_input_message_only_wire_request_stays_actionable() {
     }));
 
     assert!(approval.user_input_questions.is_empty());
-    assert_eq!(approval.message(), "Codex is requesting approval.");
+    assert_eq!(approval.title(), "Codex needs approval");
+    assert_eq!(
+        approval.message(),
+        "Approve Codex to continue with the proposed plan?"
+    );
     assert_eq!(
         approval.controls(),
         vec![
@@ -51,6 +55,11 @@ fn request_user_input_prompt_only_wire_request_stays_actionable() {
         }
     }));
 
+    assert_eq!(approval.title(), "Codex needs approval");
+    assert_eq!(
+        approval.message(),
+        "Approve Codex to continue with the proposed plan?"
+    );
     assert_eq!(
         approval.controls(),
         vec![
