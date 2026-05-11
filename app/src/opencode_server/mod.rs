@@ -30,6 +30,7 @@ const RECONNECT_BACKOFF: [Duration; 3] = [
     Duration::from_secs(1),
 ];
 const ACTIVE_SESSION_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const PENDING_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(750);
 const DEFAULT_SESSION_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,10 +84,97 @@ pub struct OpenCodeConversationItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCodePendingPermission {
+    pub id: String,
+    pub session_id: String,
+    pub permission: String,
+    pub patterns: Vec<String>,
+    pub always: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OpenCodePermissionReply {
+    Once,
+    Always,
+    Reject,
+}
+
+impl OpenCodePermissionReply {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Once => "Allow once",
+            Self::Always => "Always allow",
+            Self::Reject => "Reject",
+        }
+    }
+
+    fn wire_value(self) -> &'static str {
+        match self {
+            Self::Once => "once",
+            Self::Always => "always",
+            Self::Reject => "reject",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCodeQuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCodeQuestionInfo {
+    pub header: String,
+    pub question: String,
+    pub options: Vec<OpenCodeQuestionOption>,
+    pub multiple: bool,
+    pub custom: bool,
+}
+
+impl OpenCodeQuestionInfo {
+    pub fn allows_custom_answer(&self) -> bool {
+        self.custom || self.options.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCodePendingQuestion {
+    pub id: String,
+    pub session_id: String,
+    pub questions: Vec<OpenCodeQuestionInfo>,
+}
+
+impl OpenCodePendingQuestion {
+    pub fn title(&self) -> String {
+        self.single_question()
+            .map(|question| question.header.clone())
+            .filter(|header| !header.trim().is_empty())
+            .unwrap_or_else(|| "OpenCode needs input".to_string())
+    }
+
+    pub fn message(&self) -> String {
+        self.single_question()
+            .map(|question| question.question.clone())
+            .filter(|question| !question.trim().is_empty())
+            .unwrap_or_else(|| "OpenCode is waiting for your response.".to_string())
+    }
+
+    pub fn single_question(&self) -> Option<&OpenCodeQuestionInfo> {
+        if self.questions.len() == 1 {
+            self.questions.first()
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenCodeServerModelEvent {
     StatusChanged,
     SessionsChanged,
     ActiveSessionChanged,
+    PendingRequestsChanged,
     ModelsChanged,
     OpenConversation {
         conversation_id: AIConversationId,
@@ -99,6 +187,9 @@ pub struct OpenCodeServerModel {
     sessions: Vec<OpenCodeSessionSummary>,
     active_session: Option<OpenCodeSessionDetail>,
     local_turn_session_id: Option<String>,
+    pending_permissions: Vec<OpenCodePendingPermission>,
+    pending_questions: Vec<OpenCodePendingQuestion>,
+    pending_request_poll_generation: u64,
     models: Vec<OpenCodeModelInfo>,
     selected_model_id: Option<String>,
     project_roots: Vec<PathBuf>,
@@ -116,6 +207,12 @@ struct OpenCodeRefreshSnapshot {
 struct OpenCodePromptResult {
     output_items: Vec<OpenCodeConversationItem>,
     detail: Option<OpenCodeSessionDetail>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OpenCodePendingRequests {
+    permissions: Vec<OpenCodePendingPermission>,
+    questions: Vec<OpenCodePendingQuestion>,
 }
 
 impl OpenCodeServerModel {
@@ -138,6 +235,9 @@ impl OpenCodeServerModel {
             sessions: Vec::new(),
             active_session: None,
             local_turn_session_id: None,
+            pending_permissions: Vec::new(),
+            pending_questions: Vec::new(),
+            pending_request_poll_generation: 0,
             models: Vec::new(),
             selected_model_id: None,
             project_roots: Vec::new(),
@@ -160,6 +260,26 @@ impl OpenCodeServerModel {
 
     pub fn active_session(&self) -> Option<&OpenCodeSessionDetail> {
         self.active_session.as_ref()
+    }
+
+    pub fn pending_permission_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> Option<&OpenCodePendingPermission> {
+        let session_id = self.session_id_by_conversation_id.get(&conversation_id)?;
+        self.pending_permissions
+            .iter()
+            .find(|permission| permission.session_id == *session_id)
+    }
+
+    pub fn pending_question_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> Option<&OpenCodePendingQuestion> {
+        let session_id = self.session_id_by_conversation_id.get(&conversation_id)?;
+        self.pending_questions
+            .iter()
+            .find(|question| question.session_id == *session_id)
     }
 
     pub fn opening_session_id(&self) -> Option<&str> {
@@ -240,6 +360,8 @@ impl OpenCodeServerModel {
             self.sessions.clear();
             self.active_session = None;
             self.local_turn_session_id = None;
+            self.pending_permissions.clear();
+            self.pending_questions.clear();
             self.models.clear();
             self.selected_model_id = None;
             self.opening_session_id = None;
@@ -248,6 +370,7 @@ impl OpenCodeServerModel {
             ctx.emit(OpenCodeServerModelEvent::StatusChanged);
             ctx.emit(OpenCodeServerModelEvent::SessionsChanged);
             ctx.emit(OpenCodeServerModelEvent::ActiveSessionChanged);
+            ctx.emit(OpenCodeServerModelEvent::PendingRequestsChanged);
             ctx.emit(OpenCodeServerModelEvent::ModelsChanged);
             return;
         }
@@ -262,11 +385,14 @@ impl OpenCodeServerModel {
                 self.sessions.clear();
                 self.active_session = None;
                 self.local_turn_session_id = None;
+                self.pending_permissions.clear();
+                self.pending_questions.clear();
                 self.models.clear();
                 self.opening_session_id = None;
                 ctx.emit(OpenCodeServerModelEvent::StatusChanged);
                 ctx.emit(OpenCodeServerModelEvent::SessionsChanged);
                 ctx.emit(OpenCodeServerModelEvent::ActiveSessionChanged);
+                ctx.emit(OpenCodeServerModelEvent::PendingRequestsChanged);
                 ctx.emit(OpenCodeServerModelEvent::ModelsChanged);
                 return;
             }
@@ -311,9 +437,12 @@ impl OpenCodeServerModel {
                         model.sessions.clear();
                         model.active_session = None;
                         model.local_turn_session_id = None;
+                        model.pending_permissions.clear();
+                        model.pending_questions.clear();
                         model.models.clear();
                         ctx.emit(OpenCodeServerModelEvent::SessionsChanged);
                         ctx.emit(OpenCodeServerModelEvent::ActiveSessionChanged);
+                        ctx.emit(OpenCodeServerModelEvent::PendingRequestsChanged);
                         ctx.emit(OpenCodeServerModelEvent::ModelsChanged);
                     }
                 }
@@ -521,6 +650,7 @@ impl OpenCodeServerModel {
         self.local_turn_session_id = Some(session_id.clone());
         let selected_model = self.selected_model();
         let callback_session_id = session_id.clone();
+        self.start_pending_request_polling(session_id.clone(), ctx);
         let _ = ctx.spawn(
             async move {
                 prompt_session(
@@ -550,6 +680,7 @@ impl OpenCodeServerModel {
                 };
 
                 model.local_turn_session_id = None;
+                model.clear_pending_requests_for_session(&callback_session_id, ctx);
                 if let Some(detail) = detail {
                     model.apply_polled_session_detail(detail, ctx);
                 }
@@ -581,6 +712,127 @@ impl OpenCodeServerModel {
             },
         );
         true
+    }
+
+    pub fn resolve_pending_permission(
+        &mut self,
+        request_id: String,
+        reply: OpenCodePermissionReply,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(permission) = self
+            .pending_permissions
+            .iter()
+            .find(|permission| permission.id == request_id)
+            .cloned()
+        else {
+            return;
+        };
+        let settings = OpenCodeServerSettings::as_ref(ctx);
+        let config = match OpenCodeServerConfig::from_settings(settings) {
+            Ok(config) => config,
+            Err(error) => {
+                log::warn!("OpenCode permission reply skipped: {error:#}");
+                return;
+            }
+        };
+        let directory = self.directory_for_session(&permission.session_id);
+        self.pending_permissions
+            .retain(|pending| pending.id != request_id);
+        ctx.emit(OpenCodeServerModelEvent::PendingRequestsChanged);
+
+        let _ = ctx.spawn(
+            async move {
+                reply_permission(&config, &request_id, directory.as_deref(), reply).await
+            },
+            move |_, result, _| {
+                if let Err(error) = result {
+                    log::warn!("OpenCode permission reply failed: {error:#}");
+                }
+            },
+        );
+    }
+
+    pub fn resolve_pending_question(
+        &mut self,
+        request_id: String,
+        answers: Vec<Vec<String>>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(question) = self
+            .pending_questions
+            .iter()
+            .find(|question| question.id == request_id)
+            .cloned()
+        else {
+            return;
+        };
+        let settings = OpenCodeServerSettings::as_ref(ctx);
+        let config = match OpenCodeServerConfig::from_settings(settings) {
+            Ok(config) => config,
+            Err(error) => {
+                log::warn!("OpenCode question reply skipped: {error:#}");
+                return;
+            }
+        };
+        let directory = self.directory_for_session(&question.session_id);
+        self.pending_questions
+            .retain(|pending| pending.id != request_id);
+        ctx.emit(OpenCodeServerModelEvent::PendingRequestsChanged);
+
+        let _ = ctx.spawn(
+            async move { reply_question(&config, &request_id, directory.as_deref(), answers).await },
+            move |_, result, _| {
+                if let Err(error) = result {
+                    log::warn!("OpenCode question reply failed: {error:#}");
+                }
+            },
+        );
+    }
+
+    pub fn reject_pending_question(&mut self, request_id: String, ctx: &mut ModelContext<Self>) {
+        let Some(question) = self
+            .pending_questions
+            .iter()
+            .find(|question| question.id == request_id)
+            .cloned()
+        else {
+            return;
+        };
+        let settings = OpenCodeServerSettings::as_ref(ctx);
+        let config = match OpenCodeServerConfig::from_settings(settings) {
+            Ok(config) => config,
+            Err(error) => {
+                log::warn!("OpenCode question rejection skipped: {error:#}");
+                return;
+            }
+        };
+        let directory = self.directory_for_session(&question.session_id);
+        self.pending_questions
+            .retain(|pending| pending.id != request_id);
+        ctx.emit(OpenCodeServerModelEvent::PendingRequestsChanged);
+
+        let _ = ctx.spawn(
+            async move { reject_question(&config, &request_id, directory.as_deref()).await },
+            move |_, result, _| {
+                if let Err(error) = result {
+                    log::warn!("OpenCode question rejection failed: {error:#}");
+                }
+            },
+        );
+    }
+
+    fn directory_for_session(&self, session_id: &str) -> Option<PathBuf> {
+        self.active_session
+            .as_ref()
+            .filter(|session| session.summary.id == session_id)
+            .and_then(|session| session.summary.directory.clone())
+            .or_else(|| {
+                self.sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .and_then(|session| session.directory.clone())
+            })
     }
 
     fn selected_model(&self) -> Option<OpenCodeSelectedModel> {
@@ -689,6 +941,125 @@ impl OpenCodeServerModel {
                 }
             },
         );
+    }
+
+    fn start_pending_request_polling(&mut self, session_id: String, ctx: &mut ModelContext<Self>) {
+        self.pending_request_poll_generation = self.pending_request_poll_generation.wrapping_add(1);
+        let generation = self.pending_request_poll_generation;
+        self.poll_pending_requests(session_id, generation, ctx);
+    }
+
+    fn schedule_pending_request_poll(
+        &mut self,
+        session_id: String,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let _ = ctx.spawn(
+            async move {
+                Timer::after(PENDING_REQUEST_POLL_INTERVAL).await;
+            },
+            move |model, _, ctx| {
+                model.poll_pending_requests(session_id, generation, ctx);
+            },
+        );
+    }
+
+    fn should_poll_pending_requests(&self, session_id: &str, generation: u64) -> bool {
+        generation == self.pending_request_poll_generation
+            && (self.local_turn_session_id.as_deref() == Some(session_id)
+                || self
+                    .pending_permissions
+                    .iter()
+                    .any(|permission| permission.session_id == session_id)
+                || self
+                    .pending_questions
+                    .iter()
+                    .any(|question| question.session_id == session_id))
+    }
+
+    fn poll_pending_requests(
+        &mut self,
+        session_id: String,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self.should_poll_pending_requests(&session_id, generation) {
+            return;
+        }
+
+        let settings = OpenCodeServerSettings::as_ref(ctx);
+        let config = match OpenCodeServerConfig::from_settings(settings) {
+            Ok(config) => config,
+            Err(error) => {
+                log::warn!("OpenCode pending request poll skipped: {error:#}");
+                return;
+            }
+        };
+        let directory = self.directory_for_session(&session_id);
+        let callback_session_id = session_id.clone();
+
+        let _ = ctx.spawn(
+            async move { list_pending_requests(&config, directory.as_deref()).await },
+            move |model, result, ctx| {
+                if !model.should_poll_pending_requests(&callback_session_id, generation) {
+                    return;
+                }
+                match result {
+                    Ok(requests) => {
+                        model.apply_pending_requests(callback_session_id.clone(), requests, ctx);
+                    }
+                    Err(error) => {
+                        log::warn!("OpenCode pending request poll failed: {error:#}");
+                    }
+                }
+                if model.should_poll_pending_requests(&callback_session_id, generation) {
+                    model.schedule_pending_request_poll(callback_session_id, generation, ctx);
+                }
+            },
+        );
+    }
+
+    fn apply_pending_requests(
+        &mut self,
+        session_id: String,
+        requests: OpenCodePendingRequests,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let permissions = requests
+            .permissions
+            .into_iter()
+            .filter(|permission| permission.session_id == session_id)
+            .collect::<Vec<_>>();
+        let questions = requests
+            .questions
+            .into_iter()
+            .filter(|question| question.session_id == session_id)
+            .collect::<Vec<_>>();
+        if self.pending_permissions == permissions && self.pending_questions == questions {
+            return;
+        }
+        self.pending_permissions = permissions;
+        self.pending_questions = questions;
+        ctx.emit(OpenCodeServerModelEvent::PendingRequestsChanged);
+    }
+
+    fn clear_pending_requests_for_session(
+        &mut self,
+        session_id: &str,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let permission_count = self.pending_permissions.len();
+        let question_count = self.pending_questions.len();
+        self.pending_permissions
+            .retain(|permission| permission.session_id != session_id);
+        self.pending_questions
+            .retain(|question| question.session_id != session_id);
+        if self.pending_permissions.len() != permission_count
+            || self.pending_questions.len() != question_count
+        {
+            ctx.emit(OpenCodeServerModelEvent::PendingRequestsChanged);
+        }
     }
 
     fn apply_polled_session_detail(
@@ -1125,11 +1496,181 @@ async fn prompt_session(
     })
 }
 
+async fn list_pending_requests(
+    config: &OpenCodeServerConfig,
+    directory: Option<&Path>,
+) -> Result<OpenCodePendingRequests> {
+    let permissions: Vec<OpenCodePermissionRequestWire> = request_json(
+        config,
+        Method::GET,
+        directory_url(config, "/permission", directory),
+        None,
+    )
+    .await?;
+    let questions: Vec<OpenCodeQuestionRequestWire> = request_json(
+        config,
+        Method::GET,
+        directory_url(config, "/question", directory),
+        None,
+    )
+    .await?;
+    Ok(OpenCodePendingRequests {
+        permissions: permissions
+            .into_iter()
+            .map(OpenCodePermissionRequestWire::into_pending)
+            .collect(),
+        questions: questions
+            .into_iter()
+            .map(OpenCodeQuestionRequestWire::into_pending)
+            .collect(),
+    })
+}
+
+async fn reply_permission(
+    config: &OpenCodeServerConfig,
+    request_id: &str,
+    directory: Option<&Path>,
+    reply: OpenCodePermissionReply,
+) -> Result<bool> {
+    let path = format!("/permission/{request_id}/reply");
+    request_json(
+        config,
+        Method::POST,
+        directory_url(config, &path, directory),
+        Some(json!({ "reply": reply.wire_value() })),
+    )
+    .await
+}
+
+async fn reply_question(
+    config: &OpenCodeServerConfig,
+    request_id: &str,
+    directory: Option<&Path>,
+    answers: Vec<Vec<String>>,
+) -> Result<bool> {
+    let path = format!("/question/{request_id}/reply");
+    request_json(
+        config,
+        Method::POST,
+        directory_url(config, &path, directory),
+        Some(json!({ "answers": answers })),
+    )
+    .await
+}
+
+async fn reject_question(
+    config: &OpenCodeServerConfig,
+    request_id: &str,
+    directory: Option<&Path>,
+) -> Result<bool> {
+    let path = format!("/question/{request_id}/reject");
+    request_json(
+        config,
+        Method::POST,
+        directory_url(config, &path, directory),
+        None,
+    )
+    .await
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 struct OpenCodeProjectWire {
     #[allow(dead_code)]
     id: String,
     worktree: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct OpenCodePermissionRequestWire {
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    permission: String,
+    #[serde(default)]
+    patterns: Vec<String>,
+    #[serde(default)]
+    always: Vec<String>,
+}
+
+impl OpenCodePermissionRequestWire {
+    fn into_pending(self) -> OpenCodePendingPermission {
+        OpenCodePendingPermission {
+            id: self.id,
+            session_id: self.session_id,
+            permission: self.permission,
+            patterns: self.patterns,
+            always: self.always,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct OpenCodeQuestionRequestWire {
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    #[serde(default)]
+    questions: Vec<OpenCodeQuestionInfoWire>,
+}
+
+impl OpenCodeQuestionRequestWire {
+    fn into_pending(self) -> OpenCodePendingQuestion {
+        OpenCodePendingQuestion {
+            id: self.id,
+            session_id: self.session_id,
+            questions: self
+                .questions
+                .into_iter()
+                .map(OpenCodeQuestionInfoWire::into_info)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct OpenCodeQuestionInfoWire {
+    #[serde(default)]
+    header: String,
+    #[serde(default)]
+    question: String,
+    #[serde(default)]
+    options: Vec<OpenCodeQuestionOptionWire>,
+    #[serde(default)]
+    multiple: bool,
+    #[serde(default)]
+    custom: bool,
+}
+
+impl OpenCodeQuestionInfoWire {
+    fn into_info(self) -> OpenCodeQuestionInfo {
+        OpenCodeQuestionInfo {
+            header: self.header,
+            question: self.question,
+            options: self
+                .options
+                .into_iter()
+                .map(OpenCodeQuestionOptionWire::into_option)
+                .collect(),
+            multiple: self.multiple,
+            custom: self.custom,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+struct OpenCodeQuestionOptionWire {
+    label: String,
+    #[serde(default)]
+    description: String,
+}
+
+impl OpenCodeQuestionOptionWire {
+    fn into_option(self) -> OpenCodeQuestionOption {
+        OpenCodeQuestionOption {
+            label: self.label,
+            description: self.description,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
