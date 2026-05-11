@@ -78,6 +78,7 @@ impl OpenCodeConversationsView {
             OpenCodeServerModelEvent::StatusChanged
             | OpenCodeServerModelEvent::SessionsChanged
             | OpenCodeServerModelEvent::ActiveSessionChanged
+            | OpenCodeServerModelEvent::PendingRequestsChanged
             | OpenCodeServerModelEvent::ModelsChanged => {
                 ctx.notify();
             }
