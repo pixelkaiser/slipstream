@@ -1,0 +1,32 @@
+{
+  "method": "item/tool/requestUserInput",
+  "id": 9,
+  "params": {
+    "threadId": "019e1796-b7a2-7f00-aeda-5494efe54cd5",
+    "turnId": "019e1796-b8af-7c70-bca6-bbdbe705f71d",
+    "itemId": "call_SBfzxh83B855NAQBh967c328",
+    "questions": [
+      {
+        "id": "verification_approval",
+        "header": "Proceed?",
+        "question": "Do you want me to run this verification plan now without making code changes?",
+        "isOther": true,
+        "isSecret": false,
+        "options": [
+          {
+            "label": "Run verification (Recommended)",
+            "description": "I will execute the non-mutating tests/capture and report results only."
+          },
+          {
+            "label": "Revise plan",
+            "description": "I will adjust the plan before running anything."
+          },
+          {
+            "label": "Hold off",
+            "description": "I will stop here and make no further checks."
+          }
+        ]
+      }
+    ]
+  }
+}
