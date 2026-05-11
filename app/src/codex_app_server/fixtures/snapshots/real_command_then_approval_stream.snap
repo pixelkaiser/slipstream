@@ -1,0 +1,23 @@
+approval:
+  title: Codex needs approval
+  message: Do you want to allow the requested fixture command to create /tmp/slipstream-codex-approval-fixture?
+  command: /bin/zsh -lc "/bin/zsh -lc 'touch /tmp/slipstream-codex-approval-fixture'"
+  controls:
+  - approval: Accept
+  - approval: Accept for prefix
+  - approval: Cancel
+
+agent_text:
+  commandExecution: "/bin/zsh -lc \"/bin/zsh -lc 'printf slipstream-codex-readonly\n'\""
+
+  commandExecution/output: {"command":"/bin/zsh -lc \"/bin/zsh -lc 'printf slipstream-codex-readonly\n'\"","output":"slipstream-codex-readonly"}
+
+  commandExecution: /bin/zsh -lc "/bin/zsh -lc 'touch /tmp/slipstream-codex-approval-fixture'"
+streaming_render_model:
+- action: request_command_output
+  command: /bin/zsh -lc "/bin/zsh -lc 'printf slipstream-codex-readonly
+'"
+  result_output: "slipstream-codex-readonly"
+- action: request_command_output
+  command: /bin/zsh -lc "/bin/zsh -lc 'touch /tmp/slipstream-codex-approval-fixture'"
+  result_output: ""

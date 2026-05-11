@@ -1,8 +1,16 @@
+use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use chrono::Local;
 use serde_json::json;
 
 use super::*;
+use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::{
+    AIAgentActionResultType, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
+    RequestCommandOutputResult,
+};
 
 #[test]
 fn normalize_opencode_server_url_defaults_to_loopback_server() {
@@ -142,7 +150,10 @@ fn parses_message_parts_into_readable_items() {
     assert_eq!(items[0].text, "please inspect");
     assert_eq!(items[1].role, "assistant");
     assert!(items[1].text.contains("Sure."));
-    assert!(items[1].text.contains("Tool bash: ls"));
+    assert!(items[1].text.contains("commandExecution: ls"));
+    assert!(items[1]
+        .text
+        .contains("commandExecution/output: \"app\\ncrates\""));
     assert!(items[1].text.contains("Patch applied: app/src/lib.rs"));
     assert!(items[1].text.contains("Subtask (build): Run checks"));
 }
@@ -277,6 +288,73 @@ fn parses_multi_step_question_requests() {
     assert!(pending.questions[1].allows_custom_answer());
 }
 
+#[test]
+fn opencode_multi_step_custom_prompt_snapshot() {
+    let request: OpenCodeQuestionRequestWire = serde_json::from_value(json!({
+        "id": "question-plan-1",
+        "sessionID": "session-1",
+        "questions": [
+            {
+                "header": "Pick implementation",
+                "question": "Which implementation should OpenCode use?",
+                "options": [{ "label": "Minimal" }, { "label": "Complete" }]
+            },
+            {
+                "header": "Add instruction",
+                "question": "Any extra instructions?",
+                "custom": true
+            }
+        ]
+    }))
+    .unwrap();
+    let pending = request.into_pending();
+
+    assert_fixture_snapshot(
+        opencode_question_snapshot(&pending),
+        "src/opencode_server/fixtures/snapshots/multi_step_custom_prompt.snap",
+    );
+}
+
+#[test]
+fn opencode_shell_tool_snapshot_keeps_output_in_command_action() {
+    let messages = vec![
+        message(
+            "user",
+            vec![json!({"type": "text", "text": "inspect the repo"})],
+            None,
+            None,
+        ),
+        message(
+            "assistant",
+            vec![
+                json!({"type": "text", "text": "I will inspect the repo."}),
+                json!({
+                    "type": "tool",
+                    "tool": "bash",
+                    "state": {
+                        "status": "completed",
+                        "title": "git status --short",
+                        "output": " M app/src/opencode_server/mod.rs\n"
+                    }
+                }),
+                json!({"type": "text", "text": "Done."}),
+            ],
+            None,
+            None,
+        ),
+    ];
+    let items = messages_to_conversation_items(&messages);
+    let assistant_items = items
+        .into_iter()
+        .filter(|item| item.role != "user")
+        .collect::<Vec<_>>();
+
+    assert_fixture_snapshot(
+        opencode_agent_output_snapshot(&assistant_items),
+        "src/opencode_server/fixtures/snapshots/shell_tool_output.snap",
+    );
+}
+
 fn projects(paths: &[&str]) -> Vec<OpenCodeProjectWire> {
     paths
         .iter()
@@ -301,5 +379,138 @@ fn message(
             finish,
         },
         parts,
+    }
+}
+
+fn assert_fixture_snapshot(actual: String, relative_path: &str) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
+    let expected = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("Could not read snapshot {}: {error}", path.display()));
+    assert_eq!(actual.trim_end(), expected.trim_end(), "{}", path.display());
+}
+
+fn opencode_question_snapshot(question: &OpenCodePendingQuestion) -> String {
+    let mut snapshot = String::new();
+    writeln!(snapshot, "title: {}", question.title()).unwrap();
+    writeln!(snapshot, "message: {}", question.message()).unwrap();
+    writeln!(snapshot, "questions:").unwrap();
+    for (index, question_info) in question.questions.iter().enumerate() {
+        writeln!(snapshot, "- index: {index}").unwrap();
+        writeln!(snapshot, "  header: {}", question_info.header).unwrap();
+        writeln!(snapshot, "  question: {}", question_info.question).unwrap();
+        writeln!(snapshot, "  multiple: {}", question_info.multiple).unwrap();
+        writeln!(
+            snapshot,
+            "  allows_custom_answer: {}",
+            question_info.allows_custom_answer()
+        )
+        .unwrap();
+        writeln!(snapshot, "  options:").unwrap();
+        for option in &question_info.options {
+            if option.description.is_empty() {
+                writeln!(snapshot, "  - {} |", option.label).unwrap();
+            } else {
+                writeln!(snapshot, "  - {} | {}", option.label, option.description).unwrap();
+            }
+        }
+    }
+    writeln!(snapshot, "actions:").unwrap();
+    let needs_submit_button = question.questions.len() > 1
+        || question
+            .questions
+            .iter()
+            .any(|question_info| question_info.multiple);
+    if needs_submit_button {
+        writeln!(snapshot, "- submit").unwrap();
+    }
+    writeln!(snapshot, "- reject").unwrap();
+    snapshot
+}
+
+fn opencode_agent_output_snapshot(items: &[OpenCodeConversationItem]) -> String {
+    let output_text = items
+        .iter()
+        .map(|item| item.text.as_str())
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let mut snapshot = String::new();
+    writeln!(snapshot, "agent_text:").unwrap();
+    write_indented_block(&mut snapshot, &output_text);
+    writeln!(snapshot, "render_model:").unwrap();
+    snapshot.push_str(&agent_render_model_snapshot(output_text));
+    snapshot
+}
+
+fn agent_render_model_snapshot(output_text: String) -> String {
+    let mut conversation = AIConversation::new_with_id(AIConversationId::new(), false);
+    conversation
+        .append_codex_exchange(
+            Some("fixture prompt".to_string()),
+            Some(output_text),
+            Some("/Users/te/dev/warp".to_string()),
+            false,
+            Local::now(),
+        )
+        .unwrap();
+    let exchange = conversation.root_task_exchanges().next().unwrap();
+    let action_results = exchange
+        .input
+        .iter()
+        .filter_map(|input| match input {
+            AIAgentInput::ActionResult { result, .. } => Some((result.id.clone(), result)),
+            _ => None,
+        })
+        .collect::<HashMap<_, _>>();
+    let output = exchange.output_status.output().unwrap();
+    let output = output.get();
+
+    let mut snapshot = String::new();
+    for message in &output.messages {
+        match &message.message {
+            AIAgentOutputMessageType::Text(_) => {
+                writeln!(snapshot, "- text:").unwrap();
+                write_indented_block(&mut snapshot, &message.to_string());
+            }
+            AIAgentOutputMessageType::Action(action) => match &action.action {
+                AIAgentActionType::RequestCommandOutput { command, .. } => {
+                    writeln!(snapshot, "- action: request_command_output").unwrap();
+                    writeln!(snapshot, "  command: {command}").unwrap();
+                    match action_results.get(&action.id).map(|result| &result.result) {
+                        Some(AIAgentActionResultType::RequestCommandOutput(
+                            RequestCommandOutputResult::Completed { output, .. },
+                        )) => {
+                            writeln!(snapshot, "  result_output: {output:?}").unwrap();
+                        }
+                        Some(result) => {
+                            writeln!(snapshot, "  result: {result:?}").unwrap();
+                        }
+                        None => {
+                            writeln!(snapshot, "  result: <missing>").unwrap();
+                        }
+                    }
+                }
+                other => {
+                    writeln!(snapshot, "- action: {other:?}").unwrap();
+                }
+            },
+            other => {
+                writeln!(snapshot, "- message: {other:?}").unwrap();
+            }
+        }
+    }
+    snapshot
+}
+
+fn write_indented_block(snapshot: &mut String, text: &str) {
+    for line in text.lines() {
+        if line.is_empty() {
+            writeln!(snapshot).unwrap();
+        } else {
+            writeln!(snapshot, "  {line}").unwrap();
+        }
+    }
+    if text.ends_with('\n') {
+        writeln!(snapshot).unwrap();
     }
 }
