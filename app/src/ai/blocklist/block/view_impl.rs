@@ -1064,6 +1064,12 @@ impl View for AIBlock {
             output::Props {
                 model: self.model.as_ref(),
                 state_handles: &self.state_handles,
+                #[cfg(not(target_family = "wasm"))]
+                opencode_custom_answer_input: &self.opencode_custom_answer_input,
+                #[cfg(not(target_family = "wasm"))]
+                opencode_custom_answer_context: self.opencode_custom_answer_context.as_ref(),
+                #[cfg(not(target_family = "wasm"))]
+                opencode_question_answers: &self.opencode_question_answers,
                 action_buttons: &self.action_buttons,
                 view_screenshot_buttons: &self.view_screenshot_buttons,
                 action_model: &self.action_model,

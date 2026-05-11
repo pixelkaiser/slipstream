@@ -1,0 +1,9 @@
+{
+  "id": 7,
+  "method": "request_user_input",
+  "params": {
+    "thread_id": "thread-1",
+    "turn_id": "turn-1",
+    "message": "Codex is requesting approval."
+  }
+}

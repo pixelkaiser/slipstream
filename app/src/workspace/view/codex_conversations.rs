@@ -25,7 +25,7 @@ use crate::{
     codex_app_server::{
         codex_start_command, codex_thread_updated_at_utc, CodexAppServerModel,
         CodexAppServerModelEvent, CodexAppServerStatus, CodexApprovalDecision,
-        CodexPendingApproval, CodexThreadSummary,
+        CodexPendingApproval, CodexPendingApprovalControl, CodexThreadSummary,
     },
     editor::{
         EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
@@ -43,6 +43,7 @@ pub enum CodexConversationsAction {
     NewConversation,
     OpenThread(String),
     ResolveApproval(CodexApprovalDecision),
+    ResolveUserInput { question_id: String, answer: String },
 }
 
 pub struct CodexConversationsView {
@@ -52,6 +53,7 @@ pub struct CodexConversationsView {
     new_conversation_button: MouseStateHandle,
     thread_buttons: RefCell<HashMap<String, MouseStateHandle>>,
     approval_buttons: RefCell<HashMap<CodexApprovalDecision, MouseStateHandle>>,
+    user_input_buttons: RefCell<HashMap<(String, String), MouseStateHandle>>,
 }
 
 impl CodexConversationsView {
@@ -114,6 +116,7 @@ impl CodexConversationsView {
             new_conversation_button: Default::default(),
             thread_buttons: Default::default(),
             approval_buttons: Default::default(),
+            user_input_buttons: Default::default(),
         }
     }
 
@@ -257,7 +260,7 @@ impl CodexConversationsView {
         let theme = appearance.theme();
         let mut column = Flex::column().with_spacing(8.).with_child(
             Text::new_inline(
-                "Codex needs approval".to_string(),
+                approval.title(),
                 appearance.ui_font_family(),
                 appearance.ui_font_size() + 1.,
             )
@@ -269,7 +272,7 @@ impl CodexConversationsView {
         column.add_child(
             appearance
                 .ui_builder()
-                .wrappable_text(approval.reason.clone(), true)
+                .wrappable_text(approval.message(), true)
                 .with_style(UiComponentStyles {
                     font_size: Some(12.),
                     font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
@@ -309,32 +312,84 @@ impl CodexConversationsView {
             );
         }
 
-        let mut button_row = Flex::row().with_spacing(8.);
-        let mut buttons = self.approval_buttons.borrow_mut();
-        for decision in &approval.available_decisions {
-            let mouse_state = buttons.entry(*decision).or_default().clone();
-            let variant = if *decision == CodexApprovalDecision::Accept {
-                ButtonVariant::Accent
-            } else {
-                ButtonVariant::Secondary
-            };
-            let action = CodexConversationsAction::ResolveApproval(*decision);
-            button_row.add_child(
-                appearance
-                    .ui_builder()
-                    .button(variant, mouse_state)
-                    .with_text_label(decision.label().to_string())
-                    .with_style(UiComponentStyles {
-                        padding: Some(Coords::default().top(6.).bottom(6.).left(10.).right(10.)),
-                        ..Default::default()
-                    })
-                    .build()
-                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-                    .with_cursor(Cursor::PointingHand)
-                    .finish(),
-            );
+        let controls = approval.controls();
+        if !controls.is_empty() {
+            let mut button_row = Flex::row().with_spacing(8.);
+            for (index, control) in controls.into_iter().enumerate() {
+                match control {
+                    CodexPendingApprovalControl::ApprovalDecision(decision) => {
+                        let mouse_state = self
+                            .approval_buttons
+                            .borrow_mut()
+                            .entry(decision)
+                            .or_default()
+                            .clone();
+                        let variant = if decision == CodexApprovalDecision::Accept {
+                            ButtonVariant::Accent
+                        } else {
+                            ButtonVariant::Secondary
+                        };
+                        let action = CodexConversationsAction::ResolveApproval(decision);
+                        button_row.add_child(
+                            appearance
+                                .ui_builder()
+                                .button(variant, mouse_state)
+                                .with_text_label(decision.label().to_string())
+                                .with_style(UiComponentStyles {
+                                    padding: Some(
+                                        Coords::default().top(6.).bottom(6.).left(10.).right(10.),
+                                    ),
+                                    ..Default::default()
+                                })
+                                .build()
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(action.clone())
+                                })
+                                .with_cursor(Cursor::PointingHand)
+                                .finish(),
+                        );
+                    }
+                    CodexPendingApprovalControl::UserInputOption {
+                        question_id, label, ..
+                    } => {
+                        let mouse_state = self
+                            .user_input_buttons
+                            .borrow_mut()
+                            .entry((question_id.clone(), label.clone()))
+                            .or_default()
+                            .clone();
+                        let variant = if index == 0 {
+                            ButtonVariant::Accent
+                        } else {
+                            ButtonVariant::Secondary
+                        };
+                        let action = CodexConversationsAction::ResolveUserInput {
+                            question_id,
+                            answer: label.clone(),
+                        };
+                        button_row.add_child(
+                            appearance
+                                .ui_builder()
+                                .button(variant, mouse_state)
+                                .with_text_label(label)
+                                .with_style(UiComponentStyles {
+                                    padding: Some(
+                                        Coords::default().top(6.).bottom(6.).left(10.).right(10.),
+                                    ),
+                                    ..Default::default()
+                                })
+                                .build()
+                                .on_click(move |ctx, _, _| {
+                                    ctx.dispatch_typed_action(action.clone())
+                                })
+                                .with_cursor(Cursor::PointingHand)
+                                .finish(),
+                        );
+                    }
+                }
+            }
+            column.add_child(button_row.finish());
         }
-        column.add_child(button_row.finish());
 
         Container::new(column.finish())
             .with_background_color(theme.surface_2().into())
@@ -413,9 +468,9 @@ impl CodexConversationsView {
             };
             container.finish()
         })
-            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-            .with_cursor(Cursor::PointingHand)
-            .finish()
+        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+        .with_cursor(Cursor::PointingHand)
+        .finish()
     }
 
     fn visible_threads<'a>(&self, app: &'a AppContext) -> Vec<&'a CodexThreadSummary> {
@@ -475,7 +530,6 @@ impl CodexConversationsView {
         }
         column.finish()
     }
-
 }
 
 fn shorten_project_path(path: &str) -> String {
@@ -508,8 +562,17 @@ impl TypedActionView for CodexConversationsView {
                 });
             }
             CodexConversationsAction::ResolveApproval(decision) => {
-                self.model
-                    .update(ctx, |model, ctx| model.resolve_pending_approval(*decision, ctx));
+                self.model.update(ctx, |model, ctx| {
+                    model.resolve_pending_approval(*decision, ctx)
+                });
+            }
+            CodexConversationsAction::ResolveUserInput {
+                question_id,
+                answer,
+            } => {
+                self.model.update(ctx, |model, ctx| {
+                    model.resolve_pending_user_input(question_id.clone(), answer.clone(), ctx)
+                });
             }
         }
     }

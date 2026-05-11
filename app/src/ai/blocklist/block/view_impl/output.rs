@@ -25,6 +25,15 @@ use crate::ai::skills::{
 };
 
 use crate::code::editor_management::CodeSource;
+#[cfg(not(target_family = "wasm"))]
+use crate::codex_app_server::{
+    CodexAppServerModel, CodexApprovalDecision, CodexPendingApproval, CodexPendingApprovalControl,
+};
+#[cfg(not(target_family = "wasm"))]
+use crate::opencode_server::{
+    OpenCodePendingPermission, OpenCodePendingQuestion, OpenCodePermissionReply,
+    OpenCodeServerModel,
+};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::view_components::compactible_action_button::{
     CompactibleActionButton, RenderCompactibleActionButton, SMALL_SIZE_SWITCH_THRESHOLD,
@@ -57,6 +66,10 @@ use indexmap::IndexMap;
 use std::{cell::OnceCell, cmp::Ordering, collections::HashMap, rc::Rc, sync::Arc};
 
 use crate::util::link_detection::{add_link_detection_mouse_interactions, DetectedLinksState};
+#[cfg(not(target_family = "wasm"))]
+use crate::{
+    ai::blocklist::block::OpenCodeCustomAnswerContext, view_components::SubmittableTextInput,
+};
 use crate::{
     ai::{
         agent::{
@@ -134,9 +147,11 @@ use warpui::{
         Empty, Expanded, Fill, Flex, FormattedTextElement, Hoverable, MainAxisAlignment,
         MainAxisSize, ParentElement, Radius, Shrinkable, Text, Wrap,
     },
+    fonts::{Properties, Weight},
     keymap::Keystroke,
     platform::{Cursor, OperatingSystem},
     ui_components::{
+        button::ButtonVariant,
         components::{Coords, UiComponent, UiComponentStyles},
         radio_buttons::{RadioButtonItem, RadioButtonLayout},
     },
@@ -150,6 +165,12 @@ const BLOCKED_ACTION_MESSAGE_FOR_UPLOADING_ARTIFACT: &str = "Grant access to upl
 pub(crate) struct Props<'a> {
     pub(crate) model: &'a dyn AIBlockModel<View = AIBlock>,
     pub(super) state_handles: &'a AIBlockStateHandles,
+    #[cfg(not(target_family = "wasm"))]
+    pub(super) opencode_custom_answer_input: &'a ViewHandle<SubmittableTextInput>,
+    #[cfg(not(target_family = "wasm"))]
+    pub(super) opencode_custom_answer_context: Option<&'a OpenCodeCustomAnswerContext>,
+    #[cfg(not(target_family = "wasm"))]
+    pub(super) opencode_question_answers: &'a HashMap<String, Vec<Vec<String>>>,
     pub(super) action_buttons: &'a HashMap<AIAgentActionId, ActionButtons>,
     pub(super) view_screenshot_buttons: &'a HashMap<AIAgentActionId, ui_components::button::Button>,
     pub(crate) action_model: &'a ModelHandle<BlocklistAIActionModel>,
@@ -1199,7 +1220,620 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
         output_items.add_child(render_stopped_output(props, app))
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(pending_approval) = render_codex_pending_approval(props, app) {
+        output_items.add_child(pending_approval.with_content_item_spacing().finish());
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    if let Some(pending_request) = render_opencode_pending_request(props, app) {
+        output_items.add_child(pending_request.with_content_item_spacing().finish());
+    }
+
     output_items.finish()
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn render_codex_pending_approval(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
+    if !props.model.is_latest_non_passive_exchange_in_root_task(app) {
+        return None;
+    }
+    let conversation_id = props.model.conversation(app)?.id();
+    let approval = CodexAppServerModel::as_ref(app)
+        .pending_approval_for_conversation(conversation_id)?
+        .clone();
+    Some(render_codex_pending_approval_card(
+        &approval,
+        props.state_handles,
+        app,
+    ))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn render_codex_pending_approval_card(
+    approval: &CodexPendingApproval,
+    state_handles: &AIBlockStateHandles,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let mut column = Flex::column().with_spacing(8.).with_child(
+        Text::new_inline(
+            approval.title(),
+            appearance.ui_font_family(),
+            appearance.ui_font_size() + 1.,
+        )
+        .with_style(Properties::default().weight(Weight::Bold))
+        .with_color(theme.main_text_color(theme.background()).into())
+        .finish(),
+    );
+
+    column.add_child(
+        appearance
+            .ui_builder()
+            .wrappable_text(approval.message(), true)
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+                ..Default::default()
+            })
+            .build()
+            .finish(),
+    );
+
+    if let Some(command) = approval.command.as_ref() {
+        column.add_child(
+            appearance
+                .ui_builder()
+                .wrappable_text(command.clone(), true)
+                .with_style(UiComponentStyles {
+                    font_size: Some(12.),
+                    font_color: Some(theme.main_text_color(theme.background()).into_solid()),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        );
+    }
+
+    if let Some(cwd) = approval.cwd.as_ref() {
+        column.add_child(
+            appearance
+                .ui_builder()
+                .wrappable_text(cwd.clone(), true)
+                .with_style(UiComponentStyles {
+                    font_size: Some(12.),
+                    font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        );
+    }
+
+    let controls = approval.controls();
+    if !controls.is_empty() {
+        let mut button_row = Flex::row().with_spacing(8.);
+        for (index, control) in controls.into_iter().enumerate() {
+            match control {
+                CodexPendingApprovalControl::ApprovalDecision(decision) => {
+                    let mouse_state = state_handles
+                        .codex_approval_button_handles
+                        .borrow_mut()
+                        .entry(decision)
+                        .or_default()
+                        .clone();
+                    let variant = if decision == CodexApprovalDecision::Accept {
+                        ButtonVariant::Accent
+                    } else {
+                        ButtonVariant::Secondary
+                    };
+                    button_row.add_child(
+                        appearance
+                            .ui_builder()
+                            .button(variant, mouse_state)
+                            .with_text_label(decision.label().to_string())
+                            .with_style(UiComponentStyles {
+                                padding: Some(
+                                    Coords::default().top(6.).bottom(6.).left(10.).right(10.),
+                                ),
+                                ..Default::default()
+                            })
+                            .build()
+                            .on_click(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(AIBlockAction::ResolveCodexApproval(
+                                    decision,
+                                ));
+                            })
+                            .with_cursor(Cursor::PointingHand)
+                            .finish(),
+                    );
+                }
+                CodexPendingApprovalControl::UserInputOption {
+                    question_id, label, ..
+                } => {
+                    let mouse_state = state_handles
+                        .codex_user_input_button_handles
+                        .borrow_mut()
+                        .entry((question_id.clone(), label.clone()))
+                        .or_default()
+                        .clone();
+                    let variant = if index == 0 {
+                        ButtonVariant::Accent
+                    } else {
+                        ButtonVariant::Secondary
+                    };
+                    button_row.add_child(
+                        appearance
+                            .ui_builder()
+                            .button(variant, mouse_state)
+                            .with_text_label(label.clone())
+                            .with_style(UiComponentStyles {
+                                padding: Some(
+                                    Coords::default().top(6.).bottom(6.).left(10.).right(10.),
+                                ),
+                                ..Default::default()
+                            })
+                            .build()
+                            .on_click(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(AIBlockAction::ResolveCodexUserInput {
+                                    question_id: question_id.clone(),
+                                    answer: label.clone(),
+                                });
+                            })
+                            .with_cursor(Cursor::PointingHand)
+                            .finish(),
+                    );
+                }
+            }
+        }
+        column.add_child(button_row.finish());
+    }
+
+    Container::new(column.finish())
+        .with_background_color(theme.surface_2().into())
+        .with_border(Border::all(1.).with_border_fill(theme.outline()))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+        .with_uniform_padding(10.)
+        .finish()
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn render_opencode_pending_request(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
+    if !props.model.is_latest_non_passive_exchange_in_root_task(app) {
+        return None;
+    }
+    let conversation_id = props.model.conversation(app)?.id();
+    let model = OpenCodeServerModel::as_ref(app);
+    if let Some(question) = model.pending_question_for_conversation(conversation_id) {
+        return Some(render_opencode_pending_question_card(
+            question,
+            props.state_handles,
+            props.opencode_custom_answer_input,
+            props.opencode_custom_answer_context,
+            props.opencode_question_answers,
+            app,
+        ));
+    }
+    model
+        .pending_permission_for_conversation(conversation_id)
+        .map(|permission| {
+            render_opencode_pending_permission_card(permission, props.state_handles, app)
+        })
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn render_opencode_pending_permission_card(
+    permission: &OpenCodePendingPermission,
+    state_handles: &AIBlockStateHandles,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let mut column = Flex::column().with_spacing(8.).with_child(
+        Text::new_inline(
+            "OpenCode needs permission".to_string(),
+            appearance.ui_font_family(),
+            appearance.ui_font_size() + 1.,
+        )
+        .with_style(Properties::default().weight(Weight::Bold))
+        .with_color(theme.main_text_color(theme.background()).into())
+        .finish(),
+    );
+
+    column.add_child(
+        appearance
+            .ui_builder()
+            .wrappable_text(permission.permission.clone(), true)
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+                ..Default::default()
+            })
+            .build()
+            .finish(),
+    );
+
+    if !permission.patterns.is_empty() {
+        column.add_child(
+            appearance
+                .ui_builder()
+                .wrappable_text(permission.patterns.join("\n"), true)
+                .with_style(UiComponentStyles {
+                    font_size: Some(12.),
+                    font_color: Some(theme.main_text_color(theme.background()).into_solid()),
+                    ..Default::default()
+                })
+                .build()
+                .finish(),
+        );
+    }
+
+    let mut button_row = Flex::row().with_spacing(8.);
+    for reply in [
+        OpenCodePermissionReply::Once,
+        OpenCodePermissionReply::Always,
+        OpenCodePermissionReply::Reject,
+    ] {
+        let request_id = permission.id.clone();
+        let mouse_state = state_handles
+            .opencode_permission_button_handles
+            .borrow_mut()
+            .entry((request_id.clone(), reply))
+            .or_default()
+            .clone();
+        let variant = if reply == OpenCodePermissionReply::Once {
+            ButtonVariant::Accent
+        } else {
+            ButtonVariant::Secondary
+        };
+        button_row.add_child(
+            appearance
+                .ui_builder()
+                .button(variant, mouse_state)
+                .with_text_label(reply.label().to_string())
+                .with_style(UiComponentStyles {
+                    padding: Some(Coords::default().top(6.).bottom(6.).left(10.).right(10.)),
+                    ..Default::default()
+                })
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AIBlockAction::ResolveOpenCodePermission {
+                        request_id: request_id.clone(),
+                        reply,
+                    });
+                })
+                .with_cursor(Cursor::PointingHand)
+                .finish(),
+        );
+    }
+    column.add_child(button_row.finish());
+
+    pending_request_container(column, app)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn render_opencode_pending_question_card(
+    question: &OpenCodePendingQuestion,
+    state_handles: &AIBlockStateHandles,
+    custom_answer_input: &ViewHandle<SubmittableTextInput>,
+    custom_answer_context: Option<&OpenCodeCustomAnswerContext>,
+    question_answers: &HashMap<String, Vec<Vec<String>>>,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let mut column = Flex::column().with_spacing(8.).with_child(
+        Text::new_inline(
+            question.title(),
+            appearance.ui_font_family(),
+            appearance.ui_font_size() + 1.,
+        )
+        .with_style(Properties::default().weight(Weight::Bold))
+        .with_color(theme.main_text_color(theme.background()).into())
+        .finish(),
+    );
+
+    column.add_child(
+        appearance
+            .ui_builder()
+            .wrappable_text(question.message(), true)
+            .with_style(UiComponentStyles {
+                font_size: Some(12.),
+                font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+                ..Default::default()
+            })
+            .build()
+            .finish(),
+    );
+
+    let answers = question_answers.get(&question.id).map(Vec::as_slice);
+    let first_unanswered_custom_index =
+        question
+            .questions
+            .iter()
+            .enumerate()
+            .find_map(|(question_index, question_info)| {
+                let answer = opencode_question_answer(answers, question_index);
+                (question_info.options.is_empty()
+                    && question_info.allows_custom_answer()
+                    && answer.is_empty())
+                .then_some(question_index)
+            });
+    let has_multiple_questions = question.questions.len() > 1;
+    let has_multiple_choice = question
+        .questions
+        .iter()
+        .any(|question_info| question_info.multiple);
+
+    for (question_index, question_info) in question.questions.iter().enumerate() {
+        let answer = opencode_question_answer(answers, question_index);
+        let title = if question_info.header.trim().is_empty() {
+            format!("Question {}", question_index + 1)
+        } else {
+            question_info.header.clone()
+        };
+        column.add_child(
+            Text::new_inline(
+                title,
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_style(Properties::default().weight(Weight::Bold))
+            .with_color(theme.main_text_color(theme.background()).into())
+            .finish(),
+        );
+
+        if !question_info.question.trim().is_empty() {
+            column.add_child(
+                appearance
+                    .ui_builder()
+                    .wrappable_text(question_info.question.clone(), true)
+                    .with_style(UiComponentStyles {
+                        font_size: Some(12.),
+                        font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            );
+        }
+
+        let mut button_row = Flex::row().with_spacing(8.);
+        let mut has_question_buttons = false;
+
+        for (option_index, option) in question_info.options.iter().enumerate() {
+            let request_id = question.id.clone();
+            let is_multiple = question_info.multiple;
+            let is_custom_option = question_info.allows_custom_answer()
+                && is_custom_answer_label(option.label.as_str());
+            let is_selected = answer.contains(&option.label);
+            let answer = option.label.clone();
+            let mouse_state = state_handles
+                .opencode_question_button_handles
+                .borrow_mut()
+                .entry((request_id.clone(), question_index, answer.clone()))
+                .or_default()
+                .clone();
+            let variant = if is_selected || option_index == 0 && !has_multiple_questions {
+                ButtonVariant::Accent
+            } else {
+                ButtonVariant::Secondary
+            };
+            has_question_buttons = true;
+            button_row.add_child(
+                appearance
+                    .ui_builder()
+                    .button(variant, mouse_state)
+                    .with_text_label(option.label.clone())
+                    .with_style(UiComponentStyles {
+                        padding: Some(Coords::default().top(6.).bottom(6.).left(10.).right(10.)),
+                        ..Default::default()
+                    })
+                    .build()
+                    .on_click(move |ctx, _, _| {
+                        if is_custom_option {
+                            ctx.dispatch_typed_action(
+                                AIBlockAction::ShowOpenCodeCustomQuestionInput {
+                                    request_id: request_id.clone(),
+                                    question_index,
+                                },
+                            );
+                        } else if !has_multiple_questions && !is_multiple {
+                            ctx.dispatch_typed_action(AIBlockAction::ResolveOpenCodeQuestion {
+                                request_id: request_id.clone(),
+                                answers: vec![vec![answer.clone()]],
+                            });
+                        } else {
+                            ctx.dispatch_typed_action(AIBlockAction::AnswerOpenCodeQuestion {
+                                request_id: request_id.clone(),
+                                question_index,
+                                answer: answer.clone(),
+                                multiple: is_multiple,
+                            });
+                        }
+                    })
+                    .with_cursor(Cursor::PointingHand)
+                    .finish(),
+            );
+        }
+
+        let has_explicit_custom_option = question_info
+            .options
+            .iter()
+            .any(|option| is_custom_answer_label(option.label.as_str()));
+        if !question_info.options.is_empty()
+            && question_info.allows_custom_answer()
+            && !has_explicit_custom_option
+        {
+            let request_id = question.id.clone();
+            let mouse_state = state_handles
+                .opencode_question_custom_button_handles
+                .borrow_mut()
+                .entry((request_id.clone(), question_index))
+                .or_default()
+                .clone();
+            has_question_buttons = true;
+            button_row.add_child(
+                appearance
+                    .ui_builder()
+                    .button(ButtonVariant::Secondary, mouse_state)
+                    .with_text_label("Custom answer".to_string())
+                    .with_style(UiComponentStyles {
+                        padding: Some(Coords::default().top(6.).bottom(6.).left(10.).right(10.)),
+                        ..Default::default()
+                    })
+                    .build()
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(AIBlockAction::ShowOpenCodeCustomQuestionInput {
+                            request_id: request_id.clone(),
+                            question_index,
+                        });
+                    })
+                    .with_cursor(Cursor::PointingHand)
+                    .finish(),
+            );
+        }
+
+        if has_question_buttons {
+            column.add_child(button_row.finish());
+        }
+
+        if !answer.is_empty() {
+            column.add_child(
+                appearance
+                    .ui_builder()
+                    .wrappable_text(format!("Selected: {}", answer.join(", ")), true)
+                    .with_style(UiComponentStyles {
+                        font_size: Some(12.),
+                        font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+                        ..Default::default()
+                    })
+                    .build()
+                    .finish(),
+            );
+        }
+
+        let should_show_custom_answer_input = custom_answer_context.is_some_and(|context| {
+            context.request_id == question.id && context.question_index == question_index
+        }) || (custom_answer_context.is_none()
+            && first_unanswered_custom_index == Some(question_index));
+        if should_show_custom_answer_input {
+            column.add_child(ChildView::new(custom_answer_input).finish());
+        }
+    }
+
+    let can_submit = opencode_question_answers_complete(question, answers.unwrap_or(&[]));
+    let needs_submit_button = has_multiple_questions || has_multiple_choice;
+    let request_id = question.id.clone();
+    let mut action_row = Flex::row().with_spacing(8.);
+    if needs_submit_button {
+        let submit_mouse_state = state_handles
+            .opencode_question_submit_button_handles
+            .borrow_mut()
+            .entry(request_id.clone())
+            .or_default()
+            .clone();
+        let mut submit_button = appearance
+            .ui_builder()
+            .button(ButtonVariant::Accent, submit_mouse_state)
+            .with_text_label("Submit".to_string())
+            .with_style(UiComponentStyles {
+                padding: Some(Coords::default().top(6.).bottom(6.).left(10.).right(10.)),
+                ..Default::default()
+            })
+            .build();
+        if !can_submit {
+            submit_button = submit_button.disable();
+        }
+        action_row.add_child(
+            submit_button
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AIBlockAction::SubmitOpenCodeQuestion {
+                        request_id: request_id.clone(),
+                    });
+                })
+                .with_cursor(Cursor::PointingHand)
+                .finish(),
+        );
+    }
+
+    let request_id = question.id.clone();
+    let reject_mouse_state = state_handles
+        .opencode_question_reject_button_handles
+        .borrow_mut()
+        .entry(request_id.clone())
+        .or_default()
+        .clone();
+    action_row.add_child(
+        appearance
+            .ui_builder()
+            .button(ButtonVariant::Secondary, reject_mouse_state)
+            .with_text_label("Reject".to_string())
+            .with_style(UiComponentStyles {
+                padding: Some(Coords::default().top(6.).bottom(6.).left(10.).right(10.)),
+                ..Default::default()
+            })
+            .build()
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(AIBlockAction::RejectOpenCodeQuestion {
+                    request_id: request_id.clone(),
+                });
+            })
+            .with_cursor(Cursor::PointingHand)
+            .finish(),
+    );
+    column.add_child(action_row.finish());
+
+    pending_request_container(column, app)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn opencode_question_answer<'a>(
+    answers: Option<&'a [Vec<String>]>,
+    question_index: usize,
+) -> &'a [String] {
+    answers
+        .and_then(|answers| answers.get(question_index))
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn opencode_question_answers_complete(
+    question: &OpenCodePendingQuestion,
+    answers: &[Vec<String>],
+) -> bool {
+    !question.questions.is_empty()
+        && question
+            .questions
+            .iter()
+            .enumerate()
+            .all(|(index, _)| answers.get(index).is_some_and(|answer| !answer.is_empty()))
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn is_custom_answer_label(label: &str) -> bool {
+    let normalized = label
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    matches!(
+        normalized.as_str(),
+        "custom" | "customanswer" | "customresponse" | "other"
+    )
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn pending_request_container(column: Flex, app: &AppContext) -> Box<dyn Element> {
+    let theme = Appearance::as_ref(app).theme();
+    Container::new(column.finish())
+        .with_background_color(theme.surface_2().into())
+        .with_border(Border::all(1.).with_border_fill(theme.outline()))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+        .with_uniform_padding(10.)
+        .finish()
 }
 
 fn should_render_stopped_output(props: Props, app: &AppContext) -> bool {
