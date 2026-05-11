@@ -166,6 +166,117 @@ fn parses_error_empty_and_aborted_messages() {
     assert!(item.text.contains("Aborted."));
 }
 
+#[test]
+fn parses_pending_permission_requests() {
+    let request: OpenCodePermissionRequestWire = serde_json::from_value(json!({
+        "id": "perm-1",
+        "sessionID": "session-1",
+        "permission": "bash",
+        "patterns": ["cargo test -p warp"],
+        "always": ["cargo test*"]
+    }))
+    .unwrap();
+
+    let pending = request.into_pending();
+    assert_eq!(pending.id, "perm-1");
+    assert_eq!(pending.session_id, "session-1");
+    assert_eq!(pending.permission, "bash");
+    assert_eq!(pending.patterns, vec!["cargo test -p warp"]);
+    assert_eq!(OpenCodePermissionReply::Once.wire_value(), "once");
+}
+
+#[test]
+fn parses_pending_question_requests() {
+    let request: OpenCodeQuestionRequestWire = serde_json::from_value(json!({
+        "id": "question-1",
+        "sessionID": "session-1",
+        "questions": [{
+            "header": "Approve plan?",
+            "question": "Should OpenCode continue?",
+            "custom": true,
+            "options": [
+                { "label": "Approve", "description": "Continue" },
+                { "label": "Reject", "description": "Stop" }
+            ]
+        }]
+    }))
+    .unwrap();
+
+    let pending = request.into_pending();
+    assert_eq!(pending.title(), "Approve plan?");
+    assert_eq!(pending.message(), "Should OpenCode continue?");
+    assert_eq!(
+        pending.single_question().unwrap().options[0].label,
+        "Approve"
+    );
+    assert!(pending.single_question().unwrap().allows_custom_answer());
+}
+
+#[test]
+fn parses_optionless_questions_as_custom_answer_requests() {
+    let request: OpenCodeQuestionRequestWire = serde_json::from_value(json!({
+        "id": "question-1",
+        "sessionID": "session-1",
+        "questions": [{
+            "header": "Custom answer",
+            "question": "What should OpenCode use?"
+        }]
+    }))
+    .unwrap();
+
+    let pending = request.into_pending();
+    let question = pending.single_question().unwrap();
+    assert!(question.options.is_empty());
+    assert!(question.allows_custom_answer());
+}
+
+#[test]
+fn parses_question_options_with_missing_optional_fields() {
+    let request: OpenCodeQuestionRequestWire = serde_json::from_value(json!({
+        "id": "question-1",
+        "sessionID": "session-1",
+        "questions": [{
+            "question": "Pick one",
+            "options": [{ "label": "Choice A" }]
+        }]
+    }))
+    .unwrap();
+
+    let pending = request.into_pending();
+    let question = pending.single_question().unwrap();
+    assert_eq!(question.header, "");
+    assert_eq!(question.question, "Pick one");
+    assert_eq!(question.options[0].description, "");
+}
+
+#[test]
+fn parses_multi_step_question_requests() {
+    let request: OpenCodeQuestionRequestWire = serde_json::from_value(json!({
+        "id": "question-1",
+        "sessionID": "session-1",
+        "questions": [
+            {
+                "header": "Pick a path",
+                "question": "Which implementation should OpenCode use?",
+                "options": [{ "label": "Minimal" }]
+            },
+            {
+                "header": "Add note",
+                "question": "Any extra instructions?",
+                "custom": true
+            }
+        ]
+    }))
+    .unwrap();
+
+    let pending = request.into_pending();
+    assert!(pending.single_question().is_none());
+    assert_eq!(pending.questions.len(), 2);
+    assert_eq!(pending.title(), "OpenCode needs input");
+    assert_eq!(pending.questions[1].header, "Add note");
+    assert!(pending.questions[1].allows_custom_answer());
+}
+
 fn projects(paths: &[&str]) -> Vec<OpenCodeProjectWire> {
     paths
         .iter()
