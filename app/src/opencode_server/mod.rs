@@ -1875,6 +1875,9 @@ fn part_to_response_text(part: &Value) -> Option<String> {
 fn tool_part_to_text(part: &Value) -> Option<String> {
     let tool = part.get("tool").and_then(Value::as_str).unwrap_or("tool");
     let state = part.get("state")?;
+    if let Some(command) = opencode_shell_tool_command(tool, state) {
+        return Some(opencode_shell_tool_to_command_markers(command, state));
+    }
     let status = state
         .get("status")
         .and_then(Value::as_str)
@@ -1901,6 +1904,53 @@ fn tool_part_to_text(part: &Value) -> Option<String> {
         Some(status) => Some(format!("Tool {tool}: {status}")),
         None => Some(format!("Tool {tool}: {}", readable_json(state))),
     }
+}
+
+fn opencode_shell_tool_command<'a>(tool: &str, state: &'a Value) -> Option<&'a str> {
+    let normalized_tool = tool.to_ascii_lowercase();
+    if !matches!(
+        normalized_tool.as_str(),
+        "bash" | "shell" | "sh" | "terminal" | "command" | "cmd" | "exec"
+    ) {
+        return None;
+    }
+
+    state
+        .get("command")
+        .and_then(Value::as_str)
+        .or_else(|| state.get("title").and_then(Value::as_str))
+        .or_else(|| {
+            state.get("input").and_then(|input| {
+                input
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .or_else(|| input.get("cmd").and_then(Value::as_str))
+            })
+        })
+        .filter(|command| !command.trim().is_empty())
+}
+
+fn opencode_shell_tool_to_command_markers(command: &str, state: &Value) -> String {
+    let mut parts = vec![format!("commandExecution: {}", command.trim())];
+    let output = state
+        .get("output")
+        .and_then(opencode_shell_tool_output_text)
+        .or_else(|| {
+            state
+                .get("error")
+                .and_then(error_text_from_value)
+                .filter(|error| !error.trim().is_empty())
+        });
+    if let Some(output) = output {
+        let output = serde_json::to_string(&output).unwrap_or_else(|_| format!("{output:?}"));
+        parts.push(format!("commandExecution/output: {output}"));
+    }
+    parts.join("\n\n")
+}
+
+fn opencode_shell_tool_output_text(value: &Value) -> Option<String> {
+    let output = readable_json(value);
+    (!output.trim().is_empty()).then_some(output)
 }
 
 fn patch_part_to_text(part: &Value) -> Option<String> {

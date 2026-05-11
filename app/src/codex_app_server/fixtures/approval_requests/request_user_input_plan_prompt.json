@@ -1,0 +1,9 @@
+{
+  "id": 11,
+  "method": "request_user_input",
+  "params": {
+    "thread_id": "thread-plan-confirm",
+    "turn_id": "turn-plan-confirm",
+    "prompt": "implement this plan"
+  }
+}
