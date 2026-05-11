@@ -329,6 +329,104 @@ fn codex_output_attaches_command_output_to_command_action() {
 }
 
 #[test]
+fn codex_output_attaches_delayed_command_output_to_latest_action() {
+    let task_id = TaskId::new("root-task".to_string());
+    let (status, action_results) = codex_output_status(
+        Some(
+            "commandExecution: /bin/zsh -lc 'git status --short'\n\nAssistant text before the output marker.\n\ncommandExecution/output: \" M app/src/codex_app_server/mod.rs\\n\"".to_string(),
+        ),
+        false,
+        &task_id,
+    );
+
+    let output = match status {
+        AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success { output },
+        } => output,
+        _ => panic!("expected finished successful output"),
+    };
+    let rendered_text = output
+        .get()
+        .messages
+        .iter()
+        .map(|message| message.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !rendered_text.contains("commandExecution/output"),
+        "command output marker leaked into rendered text: {rendered_text}"
+    );
+    assert_eq!(action_results.len(), 1);
+    let AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
+        output,
+        ..
+    }) = &action_results[0].result
+    else {
+        panic!("expected completed command result");
+    };
+    assert_eq!(output, " M app/src/codex_app_server/mod.rs\n");
+}
+
+#[test]
+fn codex_output_attaches_targeted_delayed_command_output_to_matching_action() {
+    let task_id = TaskId::new("root-task".to_string());
+    let du_command = "/bin/zsh -lc 'du -sh homeassistant-config .esphome 2>/dev/null || true'";
+    let git_command = "/bin/zsh -lc 'git status --short'";
+    let output_marker = serde_json::json!({
+        "command": du_command,
+        "output": " 47M\thomeassistant-config\n976M\t.esphome\n",
+    });
+    let (status, action_results) = codex_output_status(
+        Some(format!(
+            "commandExecution: {du_command}\n\ncommandExecution: {git_command}\n\ncommandExecution/output: {output_marker}"
+        )),
+        false,
+        &task_id,
+    );
+
+    let output = match status {
+        AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success { output },
+        } => output,
+        _ => panic!("expected finished successful output"),
+    };
+    let rendered_text = output
+        .get()
+        .messages
+        .iter()
+        .map(|message| message.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        !rendered_text.contains("commandExecution/output"),
+        "command output marker leaked into rendered text: {rendered_text}"
+    );
+    assert_eq!(action_results.len(), 2);
+    let outputs_by_command = action_results
+        .iter()
+        .map(|result| {
+            let AIAgentActionResultType::RequestCommandOutput(
+                RequestCommandOutputResult::Completed {
+                    command, output, ..
+                },
+            ) = &result.result
+            else {
+                panic!("expected completed command result");
+            };
+            (command.as_str(), output.as_str())
+        })
+        .collect::<HashMap<_, _>>();
+
+    assert_eq!(
+        outputs_by_command.get(du_command),
+        Some(&" 47M\thomeassistant-config\n976M\t.esphome\n")
+    );
+    assert_eq!(outputs_by_command.get(git_command), Some(&""));
+}
+
+#[test]
 fn append_finished_codex_exchange_stores_command_result_for_restore() {
     let mut conversation = restored_conversation(None);
 
@@ -362,6 +460,58 @@ fn append_finished_codex_exchange_stores_command_result_for_restore() {
         .unwrap();
 
     assert_eq!(result.id, action.id);
+}
+
+#[test]
+fn streaming_codex_exchange_stores_command_result_while_waiting_for_approval() {
+    let mut conversation = restored_conversation(None);
+    let exchange_id = conversation
+        .append_codex_exchange(
+            Some("inspect the repo".to_string()),
+            Some("commandExecution: git status --short".to_string()),
+            None,
+            true,
+            Local::now(),
+        )
+        .unwrap();
+
+    conversation
+        .update_codex_exchange_output(
+            exchange_id,
+            "commandExecution: git status --short\n\ncommandExecution/output: \" M app/src/codex_app_server/mod.rs\\n\"".to_string(),
+            false,
+            false,
+        )
+        .unwrap();
+
+    let exchange = conversation.root_task_exchanges().next().unwrap();
+    let action = exchange
+        .output_status
+        .output()
+        .unwrap()
+        .get()
+        .actions()
+        .next()
+        .unwrap()
+        .clone();
+    let result = exchange
+        .input
+        .iter()
+        .find_map(|input| match input {
+            AIAgentInput::ActionResult { result, .. } => Some(result),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("streaming Codex command action result is missing"));
+
+    assert_eq!(result.id, action.id);
+    let AIAgentActionResultType::RequestCommandOutput(RequestCommandOutputResult::Completed {
+        output,
+        ..
+    }) = &result.result
+    else {
+        panic!("expected completed command result");
+    };
+    assert_eq!(output, " M app/src/codex_app_server/mod.rs\n");
 }
 
 #[test]

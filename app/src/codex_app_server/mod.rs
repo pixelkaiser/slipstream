@@ -127,7 +127,7 @@ impl CodexPendingApproval {
             .map(|question| question.header.clone())
             .filter(|header| !header.trim().is_empty())
             .unwrap_or_else(|| {
-                if self.is_user_input_request() {
+                if self.has_meaningful_user_input_question() {
                     "Codex needs input".to_string()
                 } else {
                     "Codex needs approval".to_string()
@@ -138,12 +138,37 @@ impl CodexPendingApproval {
     pub fn message(&self) -> String {
         self.single_user_input_question()
             .map(|question| question.question.clone())
-            .filter(|question| !question.trim().is_empty())
-            .unwrap_or_else(|| self.reason.clone())
+            .filter(|question| {
+                !question.trim().is_empty() && !is_generic_codex_approval_reason(question)
+            })
+            .unwrap_or_else(|| self.defaulted_reason())
     }
 
     pub fn is_user_input_request(&self) -> bool {
         is_request_user_input_method(&self.method)
+    }
+
+    fn has_meaningful_user_input_question(&self) -> bool {
+        self.user_input_questions.iter().any(|question| {
+            !question.options.is_empty()
+                || (!question.question.trim().is_empty()
+                    && !is_generic_codex_approval_reason(&question.question))
+        })
+    }
+
+    fn defaulted_reason(&self) -> String {
+        if !is_generic_codex_approval_reason(&self.reason) {
+            return self.reason.clone();
+        }
+        if self.command.is_some() {
+            "Approve Codex to run this command?".to_string()
+        } else if self.method.to_ascii_lowercase().contains("filechange") {
+            "Approve Codex to apply the requested file changes?".to_string()
+        } else if self.is_user_input_request() {
+            "Approve Codex to continue with the proposed plan?".to_string()
+        } else {
+            "Approve this Codex request?".to_string()
+        }
     }
 
     pub fn effective_available_decisions(&self) -> Vec<CodexApprovalDecision> {
@@ -1881,6 +1906,27 @@ fn codex_items_to_agent_text(items: &[CodexConversationItem]) -> String {
             continue;
         }
 
+        if let Some((command, output)) = codex_completed_command_and_output(item) {
+            if last_command
+                .as_ref()
+                .is_some_and(|last| normalized_codex_text(last) == normalized_codex_text(&command))
+            {
+                if let Some(output) = output {
+                    flush_codex_assistant_delta_buffer(&mut parts, &mut assistant_delta_buffer);
+                    flush_codex_command_output_buffer(&mut parts, &mut command_output_buffer);
+                    push_codex_command_output_part(&mut parts, &output, Some(&command));
+                }
+                continue;
+            }
+
+            flush_codex_assistant_delta_buffer(&mut parts, &mut assistant_delta_buffer);
+            flush_codex_command_output_buffer(&mut parts, &mut command_output_buffer);
+            if let Some(output) = output {
+                push_codex_command_output_part(&mut parts, &output, Some(&command));
+            }
+            continue;
+        }
+
         if is_codex_completed_item(&item.role)
             && last_command.as_ref().is_some_and(|command| {
                 normalized_codex_text(command) == normalized_codex_text(&item.text)
@@ -1892,7 +1938,10 @@ fn codex_items_to_agent_text(items: &[CodexConversationItem]) -> String {
         if let Some(command) = codex_command_text_from_item(item) {
             flush_codex_assistant_delta_buffer(&mut parts, &mut assistant_delta_buffer);
             flush_codex_command_output_buffer(&mut parts, &mut command_output_buffer);
-            parts.push(format!("commandExecution: {command}"));
+            parts.push(format!(
+                "commandExecution: {}",
+                format_codex_command_for_agent_text(&command)
+            ));
             last_command = Some(command);
             continue;
         }
@@ -1935,9 +1984,29 @@ fn flush_codex_assistant_delta_buffer(parts: &mut Vec<String>, buffer: &mut Stri
 
 fn flush_codex_command_output_buffer(parts: &mut Vec<String>, buffer: &mut String) {
     if !buffer.trim().is_empty() {
-        parts.push(buffer.trim_end().to_string());
+        push_codex_command_output_part(parts, buffer, None);
     }
     buffer.clear();
+}
+
+fn push_codex_command_output_part(parts: &mut Vec<String>, output: &str, command: Option<&str>) {
+    let output = match command {
+        Some(command) => serde_json::json!({
+            "command": command,
+            "output": output,
+        })
+        .to_string(),
+        None => serde_json::to_string(output).unwrap_or_else(|_| format!("{:?}", output)),
+    };
+    parts.push(format!("commandExecution/output: {output}"));
+}
+
+fn format_codex_command_for_agent_text(command: &str) -> String {
+    if command.contains('\n') || command.contains('\r') {
+        serde_json::to_string(command).unwrap_or_else(|_| format!("{:?}", command))
+    } else {
+        command.to_string()
+    }
 }
 
 fn normalized_codex_text(text: &str) -> String {
@@ -2005,6 +2074,18 @@ fn codex_command_text(text: &str) -> Option<String> {
         .or_else(|| (!text.trim().is_empty()).then(|| text.trim().to_string()))
 }
 
+fn codex_completed_command_and_output(
+    item: &CodexConversationItem,
+) -> Option<(String, Option<String>)> {
+    if !is_codex_completed_item(&item.role) {
+        return None;
+    }
+    let value = serde_json::from_str::<Value>(&item.text).ok()?;
+    let command = command_field(&value)?;
+    let output = codex_command_output_text_from_value(&value);
+    Some((command, output))
+}
+
 fn looks_like_codex_shell_command(command: &str) -> bool {
     let command = command.trim();
     command.starts_with("/bin/")
@@ -2036,7 +2117,16 @@ fn codex_command_output_text(text: &str) -> Option<String> {
 fn codex_command_output_text_from_value(value: &Value) -> Option<String> {
     string_field(
         value,
-        &["body", "output", "delta", "text", "content", "message"],
+        &[
+            "body",
+            "output",
+            "aggregatedOutput",
+            "aggregated_output",
+            "delta",
+            "text",
+            "content",
+            "message",
+        ],
     )
     .or_else(|| {
         value
@@ -2419,6 +2509,17 @@ fn text_content_from_value(value: &Value) -> String {
 }
 
 fn parse_notification_item(method: Option<&str>, params: &Value) -> Option<CodexConversationItem> {
+    if let Some(item) = params.get("item") {
+        if string_field(item, &["type", "kind"])
+            .is_some_and(|item_type| normalize_identifier(&item_type).contains("commandexecution"))
+        {
+            return Some(CodexConversationItem {
+                role: method.unwrap_or("codex").to_string(),
+                text: item.to_string(),
+            });
+        }
+    }
+
     text_from_value(params).map(|text| CodexConversationItem {
         role: method.unwrap_or("codex").to_string(),
         text,
@@ -2436,7 +2537,7 @@ fn parse_approval_request(
     }
     let request_id = request_id?;
     let params = params?;
-    let reason = string_field(params, &["reason", "message"]).unwrap_or_else(|| {
+    let reason = string_field(params, &["reason", "message", "prompt"]).unwrap_or_else(|| {
         if method.contains("commandExecution") {
             "Codex is requesting command approval.".to_string()
         } else if method.contains("fileChange") {
@@ -2769,6 +2870,15 @@ fn is_request_user_input_method(method: &str) -> bool {
     normalize_identifier(method).contains("requestuserinput")
 }
 
+fn is_generic_codex_approval_reason(reason: &str) -> bool {
+    matches!(
+        normalize_identifier(reason).as_str(),
+        "codexisrequestingapproval"
+            | "codexisrequestingcommandapproval"
+            | "codexisrequestingfilechangeapproval"
+    )
+}
+
 fn is_terminal_method(method: Option<&str>) -> bool {
     matches!(method, Some("turn/completed") | Some("turn/finished"))
 }
@@ -2905,6 +3015,9 @@ fn codex_approval_capture_path() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod pending_approval_e2e_tests;
+
+#[cfg(test)]
+mod snapshot_e2e_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3383,6 +3496,11 @@ mod tests {
         .unwrap();
 
         assert!(approval.user_input_questions.is_empty());
+        assert_eq!(approval.title(), "Codex needs approval");
+        assert_eq!(
+            approval.message(),
+            "Approve Codex to continue with the proposed plan?"
+        );
         assert_eq!(
             approval.effective_available_decisions(),
             vec![
@@ -3478,7 +3596,51 @@ mod tests {
 
         assert_eq!(
             text,
-            "commandExecution: /bin/zsh -lc 'git status --short'\n\n M app/src/codex_app_server/mod.rs\n\nDone."
+            "commandExecution: /bin/zsh -lc 'git status --short'\n\ncommandExecution/output: \" M app/src/codex_app_server/mod.rs\\n\"\n\nDone."
+        );
+    }
+
+    #[test]
+    fn late_completed_command_execution_update_never_renders_raw_json() {
+        let completed_command = json!({
+            "aggregatedOutput": " 47M\thomeassistant-config\n976M\t.esphome\n",
+            "command": "/bin/zsh -lc 'du -sh homeassistant-config .esphome 2>/dev/null || true'",
+            "commandActions": [{
+                "command": "du -sh homeassistant-config .esphome 2>/dev/null || true",
+                "type": "unknown"
+            }],
+            "cwd": "/Users/te/dev/esphome",
+            "durationMs": 389,
+            "exitCode": 0,
+            "id": "call_brnPF99vxX7WcYLCQb9J6uju",
+            "processId": "45778",
+            "source": "unifiedExecStartup",
+            "status": "completed",
+            "type": "commandExecution"
+        });
+        let text = codex_items_to_agent_text(&[
+            CodexConversationItem {
+                role: "item/started".to_string(),
+                text: "/bin/zsh -lc 'du -sh homeassistant-config .esphome 2>/dev/null || true'"
+                    .to_string(),
+            },
+            CodexConversationItem {
+                role: "item/started".to_string(),
+                text: "/bin/zsh -lc 'git status --short'".to_string(),
+            },
+            CodexConversationItem {
+                role: "item/completed".to_string(),
+                text: completed_command.to_string(),
+            },
+        ]);
+
+        assert!(
+            !text.contains("aggregatedOutput"),
+            "raw commandExecution JSON leaked into agent text: {text}"
+        );
+        assert_eq!(
+            text,
+            "commandExecution: /bin/zsh -lc 'du -sh homeassistant-config .esphome 2>/dev/null || true'\n\ncommandExecution: /bin/zsh -lc 'git status --short'\n\ncommandExecution/output: {\"command\":\"/bin/zsh -lc 'du -sh homeassistant-config .esphome 2>/dev/null || true'\",\"output\":\" 47M\\thomeassistant-config\\n976M\\t.esphome\\n\"}"
         );
     }
 
