@@ -12,10 +12,11 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use settings::Setting as _;
-use warpui::{r#async::Timer, Entity, ModelContext, SingletonEntity};
+use warpui::{r#async::Timer, Entity, EntityId, ModelContext, SingletonEntity};
 use websocket::{Message, WebSocket, WebsocketMessage as _};
 
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::settings::{
     CodexAppServerSettings, CodexAppServerSettingsChangedEvent, DEFAULT_CODEX_APP_SERVER_URL,
@@ -28,6 +29,8 @@ const RECONNECT_BACKOFF: [Duration; 3] = [
     Duration::from_secs(1),
 ];
 const ACTIVE_THREAD_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const CODEX_APPROVAL_POLICY: &str = "on-request";
+const CODEX_APPROVALS_REVIEWER: &str = "user";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodexAppServerStatus {
@@ -77,6 +80,33 @@ pub struct CodexConversationItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexUserInputQuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexUserInputQuestion {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub is_other: bool,
+    pub is_secret: bool,
+    pub options: Vec<CodexUserInputQuestionOption>,
+    answer_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CodexPendingApprovalControl {
+    ApprovalDecision(CodexApprovalDecision),
+    UserInputOption {
+        question_id: String,
+        label: String,
+        description: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexPendingApproval {
     request_id: JsonRpcId,
     pub method: String,
@@ -87,25 +117,114 @@ pub struct CodexPendingApproval {
     pub command: Option<String>,
     pub cwd: Option<String>,
     pub available_decisions: Vec<CodexApprovalDecision>,
+    pub user_input_questions: Vec<CodexUserInputQuestion>,
+    decision_wire_values: HashMap<CodexApprovalDecision, Value>,
 }
 
 impl CodexPendingApproval {
-    fn as_conversation_item(&self) -> CodexConversationItem {
-        let command = self
-            .command
-            .as_ref()
-            .map(|command| format!("\nCommand: {command}"))
-            .unwrap_or_default();
-        let cwd = self
-            .cwd
-            .as_ref()
-            .map(|cwd| format!("\nWorking directory: {cwd}"))
-            .unwrap_or_default();
+    pub fn title(&self) -> String {
+        self.single_user_input_question()
+            .map(|question| question.header.clone())
+            .filter(|header| !header.trim().is_empty())
+            .unwrap_or_else(|| {
+                if self.is_user_input_request() {
+                    "Codex needs input".to_string()
+                } else {
+                    "Codex needs approval".to_string()
+                }
+            })
+    }
 
-        CodexConversationItem {
-            role: "approval".to_string(),
-            text: format!("{}{command}{cwd}", self.reason),
+    pub fn message(&self) -> String {
+        self.single_user_input_question()
+            .map(|question| question.question.clone())
+            .filter(|question| !question.trim().is_empty())
+            .unwrap_or_else(|| self.reason.clone())
+    }
+
+    pub fn is_user_input_request(&self) -> bool {
+        is_request_user_input_method(&self.method)
+    }
+
+    pub fn effective_available_decisions(&self) -> Vec<CodexApprovalDecision> {
+        let has_option_question = self
+            .user_input_questions
+            .iter()
+            .any(|question| !question.options.is_empty());
+        if self.available_decisions.is_empty() && !has_option_question {
+            default_approval_decisions(&self.method)
+        } else {
+            self.available_decisions.clone()
         }
+    }
+
+    pub fn controls(&self) -> Vec<CodexPendingApprovalControl> {
+        let option_questions = self
+            .user_input_questions
+            .iter()
+            .filter(|question| !question.options.is_empty())
+            .collect::<Vec<_>>();
+        if let [question] = option_questions.as_slice() {
+            return question
+                .options
+                .iter()
+                .map(|option| CodexPendingApprovalControl::UserInputOption {
+                    question_id: question.id.clone(),
+                    label: option.label.clone(),
+                    description: option.description.clone(),
+                })
+                .collect();
+        }
+
+        let decisions = if self.available_decisions.is_empty() {
+            default_approval_decisions(&self.method)
+        } else {
+            self.available_decisions.clone()
+        };
+        decisions
+            .into_iter()
+            .map(CodexPendingApprovalControl::ApprovalDecision)
+            .collect()
+    }
+
+    pub fn single_user_input_question(&self) -> Option<&CodexUserInputQuestion> {
+        if self.user_input_questions.len() == 1 {
+            self.user_input_questions.first()
+        } else {
+            None
+        }
+    }
+
+    fn approval_result(&self, decision: CodexApprovalDecision) -> Value {
+        let wire_value = self
+            .decision_wire_values
+            .get(&decision)
+            .cloned()
+            .unwrap_or_else(|| json!(decision.wire_value()));
+        json!({
+            "decision": wire_value,
+        })
+    }
+
+    fn user_input_result(&self, question_id: &str, answer: &str) -> Option<Value> {
+        let question = self
+            .user_input_questions
+            .iter()
+            .find(|question| question.id == question_id)?;
+
+        if let Some(answer_index) = question.answer_index {
+            let mut answers = vec![json!({ "answers": [] }); answer_index + 1];
+            answers[answer_index] = json!({ "answers": [answer] });
+            return Some(json!({ "answers": answers }));
+        }
+
+        Some(json!({
+            "answers": {
+                question_id: {
+                    "answers": [answer],
+                },
+            },
+        }))
     }
 }
 
@@ -113,6 +232,7 @@ impl CodexPendingApproval {
 pub enum CodexApprovalDecision {
     Accept,
     AcceptForSession,
+    AcceptForPrefix,
     Decline,
     Cancel,
 }
@@ -123,27 +243,36 @@ impl CodexApprovalDecision {
         match self {
             Self::Accept => "Accept",
             Self::AcceptForSession => "Accept for session",
+            Self::AcceptForPrefix => "Accept for prefix",
             Self::Decline => "Decline",
             Self::Cancel => "Cancel",
         }
     }
 
     fn from_wire(value: &str) -> Option<Self> {
-        match value {
-            "accept" => Some(Self::Accept),
-            "acceptForSession" => Some(Self::AcceptForSession),
-            "decline" => Some(Self::Decline),
-            "cancel" => Some(Self::Cancel),
+        match normalize_identifier(value).as_str() {
+            "accept" | "approve" | "allow" | "yes" => Some(Self::Accept),
+            "acceptforsession" | "approveforsession" | "allowforsession" => {
+                Some(Self::AcceptForSession)
+            }
+            "acceptforprefix" | "approveforprefix" | "allowforprefix" => {
+                Some(Self::AcceptForPrefix)
+            }
+            "acceptwithexecpolicyamendment" => Some(Self::AcceptForPrefix),
+            "applynetworkpolicyamendment" => Some(Self::AcceptForSession),
+            "decline" | "deny" | "reject" | "no" => Some(Self::Decline),
+            "cancel" | "abort" => Some(Self::Cancel),
             _ => None,
         }
     }
 
-    fn result(self) -> Value {
+    fn wire_value(self) -> &'static str {
         match self {
-            Self::Accept => json!("accept"),
-            Self::AcceptForSession => json!("acceptForSession"),
-            Self::Decline => json!("decline"),
-            Self::Cancel => json!("cancel"),
+            Self::Accept => "accept",
+            Self::AcceptForSession => "acceptForSession",
+            Self::AcceptForPrefix => "acceptForPrefix",
+            Self::Decline => "decline",
+            Self::Cancel => "cancel",
         }
     }
 }
@@ -181,6 +310,14 @@ struct CodexActiveTurn {
     thread_id: String,
     client: JsonRpcSocket,
     pending_approval: CodexPendingApproval,
+    conversation_context: Option<CodexConversationTurnContext>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CodexConversationTurnContext {
+    conversation_id: AIConversationId,
+    exchange_id: AIAgentExchangeId,
+    terminal_view_id: EntityId,
 }
 
 struct CodexStartedThread {
@@ -301,6 +438,15 @@ impl CodexAppServerModel {
         self.active_turn
             .as_ref()
             .map(|active_turn| &active_turn.pending_approval)
+    }
+
+    pub fn pending_approval_for_conversation(
+        &self,
+        conversation_id: AIConversationId,
+    ) -> Option<&CodexPendingApproval> {
+        let thread_id = self.thread_id_by_conversation_id.get(&conversation_id)?;
+        let active_turn = self.active_turn.as_ref()?;
+        (active_turn.thread_id == *thread_id).then_some(&active_turn.pending_approval)
     }
 
     pub fn opening_thread_id(&self) -> Option<&str> {
@@ -752,56 +898,81 @@ impl CodexAppServerModel {
                 .await
             },
             move |model, result, ctx| {
-                let (output_text, is_finished, is_error, active_turn) = match result {
-                    Ok(progress) => {
-                        let output_text = codex_items_to_agent_text(&progress.items);
-                        (
-                            output_text,
-                            progress.active_turn.is_none(),
-                            false,
-                            progress.active_turn,
-                        )
-                    }
-                    Err(error) => (
-                        format!("Codex app-server error: {error:#}"),
-                        true,
-                        true,
-                        None,
-                    ),
-                };
-
-                model.active_turn = active_turn;
-                model.local_turn_thread_id = None;
-                if model.active_turn.is_none() {
-                    model.start_active_thread_polling(callback_thread_id.clone(), ctx);
-                }
-                let update_result =
-                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
-                        history.update_codex_exchange_output(
-                            conversation_id,
-                            exchange_id,
-                            output_text.clone(),
-                            is_finished,
-                            is_error,
-                            terminal_view_id,
-                            ctx,
-                        )
-                    });
-                if let Err(error) = update_result {
-                    log::error!("Could not update Codex exchange output: {error:?}");
-                }
-                if let Some(active_thread) = &mut model.active_thread {
-                    if active_thread.summary.id == callback_thread_id {
-                        active_thread.items.push(CodexConversationItem {
-                            role: if is_error { "error" } else { "codex" }.to_string(),
-                            text: output_text,
-                        });
-                        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
-                    }
-                }
+                model.apply_conversation_turn_progress(
+                    &callback_thread_id,
+                    CodexConversationTurnContext {
+                        conversation_id,
+                        exchange_id,
+                        terminal_view_id,
+                    },
+                    result,
+                    ctx,
+                );
             },
         );
         true
+    }
+
+    fn apply_conversation_turn_progress(
+        &mut self,
+        active_thread_id: &str,
+        conversation_context: CodexConversationTurnContext,
+        result: Result<CodexTurnProgress>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let (output_text, is_finished, is_error, active_turn) = match result {
+            Ok(progress) => {
+                let output_text = codex_items_to_agent_text(&progress.items);
+                (
+                    output_text,
+                    progress.active_turn.is_none(),
+                    false,
+                    progress.active_turn.map(|mut active_turn| {
+                        active_turn.conversation_context = Some(conversation_context);
+                        active_turn
+                    }),
+                )
+            }
+            Err(error) => (
+                format!("Codex app-server error: {error:#}"),
+                true,
+                true,
+                None,
+            ),
+        };
+
+        self.active_turn = active_turn;
+        self.local_turn_thread_id = None;
+        if self.active_turn.is_none() {
+            self.start_active_thread_polling(active_thread_id.to_string(), ctx);
+        }
+
+        let update_result = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.update_codex_exchange_output(
+                conversation_context.conversation_id,
+                conversation_context.exchange_id,
+                output_text.clone(),
+                is_finished,
+                is_error,
+                conversation_context.terminal_view_id,
+                ctx,
+            )
+        });
+        if let Err(error) = update_result {
+            log::error!("Could not update Codex exchange output: {error:?}");
+        }
+
+        if let Some(active_thread) = &mut self.active_thread {
+            if active_thread.summary.id == active_thread_id
+                && (!output_text.trim().is_empty() || is_error)
+            {
+                active_thread.items.push(CodexConversationItem {
+                    role: if is_error { "error" } else { "codex" }.to_string(),
+                    text: output_text,
+                });
+            }
+        }
+        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
     }
 
     fn take_started_thread(&mut self, thread_id: &str) -> Option<CodexStartedThread> {
@@ -826,6 +997,8 @@ impl CodexAppServerModel {
             return;
         };
         let thread_id = active_turn.thread_id.clone();
+        let conversation_context = active_turn.conversation_context;
+        let result = active_turn.pending_approval.approval_result(decision);
         self.append_items(
             &thread_id,
             vec![CodexConversationItem {
@@ -841,12 +1014,74 @@ impl CodexAppServerModel {
             async move {
                 let mut client = active_turn.client;
                 client
-                    .respond(active_turn.pending_approval.request_id, decision.result())
+                    .respond(active_turn.pending_approval.request_id, result)
                     .await?;
                 client.collect_turn_progress(thread_id).await
             },
             move |model, result, ctx| {
-                model.apply_turn_progress(&callback_thread_id, result, ctx);
+                if let Some(conversation_context) = conversation_context {
+                    model.apply_conversation_turn_progress(
+                        &callback_thread_id,
+                        conversation_context,
+                        result,
+                        ctx,
+                    );
+                } else {
+                    model.apply_turn_progress(&callback_thread_id, result, ctx);
+                }
+            },
+        );
+    }
+
+    #[allow(dead_code)]
+    pub fn resolve_pending_user_input(
+        &mut self,
+        question_id: String,
+        answer: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(active_turn) = self.active_turn.take() else {
+            return;
+        };
+        let Some(result) = active_turn
+            .pending_approval
+            .user_input_result(&question_id, &answer)
+        else {
+            self.active_turn = Some(active_turn);
+            return;
+        };
+        let thread_id = active_turn.thread_id.clone();
+        let conversation_context = active_turn.conversation_context;
+        self.append_items(
+            &thread_id,
+            vec![CodexConversationItem {
+                role: "user".to_string(),
+                text: answer,
+            }],
+        );
+        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
+        self.local_turn_thread_id = Some(thread_id.clone());
+        let callback_thread_id = thread_id.clone();
+
+        let _ = ctx.spawn(
+            async move {
+                let mut client = active_turn.client;
+                client
+                    .respond(active_turn.pending_approval.request_id, result)
+                    .await?;
+                client.collect_turn_progress(thread_id).await
+            },
+            move |model, result, ctx| {
+                if let Some(conversation_context) = conversation_context {
+                    model.apply_conversation_turn_progress(
+                        &callback_thread_id,
+                        conversation_context,
+                        result,
+                        ctx,
+                    );
+                } else {
+                    model.apply_turn_progress(&callback_thread_id, result, ctx);
+                }
             },
         );
     }
@@ -1455,6 +1690,11 @@ async fn continue_thread(
 
 fn thread_start_params(model_id: Option<&str>, cwd: Option<&PathBuf>) -> Value {
     let mut params = serde_json::Map::new();
+    params.insert("approvalPolicy".to_string(), json!(CODEX_APPROVAL_POLICY));
+    params.insert(
+        "approvalsReviewer".to_string(),
+        json!(CODEX_APPROVALS_REVIEWER),
+    );
     if let Some(model_id) = model_id {
         params.insert("model".to_string(), json!(model_id));
     }
@@ -1467,6 +1707,11 @@ fn thread_start_params(model_id: Option<&str>, cwd: Option<&PathBuf>) -> Value {
 fn thread_resume_params(thread_id: &str, model_id: Option<&str>) -> Value {
     let mut params = serde_json::Map::new();
     params.insert("threadId".to_string(), json!(thread_id));
+    params.insert("approvalPolicy".to_string(), json!(CODEX_APPROVAL_POLICY));
+    params.insert(
+        "approvalsReviewer".to_string(),
+        json!(CODEX_APPROVALS_REVIEWER),
+    );
     if let Some(model_id) = model_id {
         params.insert("model".to_string(), json!(model_id));
     }
@@ -1482,6 +1727,11 @@ fn turn_start_params(
 ) -> Value {
     let mut params = serde_json::Map::new();
     params.insert("threadId".to_string(), json!(thread_id));
+    params.insert("approvalPolicy".to_string(), json!(CODEX_APPROVAL_POLICY));
+    params.insert(
+        "approvalsReviewer".to_string(),
+        json!(CODEX_APPROVALS_REVIEWER),
+    );
     if let Some(model_id) = model_id {
         params.insert("model".to_string(), json!(model_id));
     }
@@ -1618,6 +1868,7 @@ fn append_codex_restored_exchange(
 fn codex_items_to_agent_text(items: &[CodexConversationItem]) -> String {
     let mut parts = Vec::new();
     let mut assistant_delta_buffer = String::new();
+    let mut command_output_buffer = String::new();
     let mut last_command: Option<String> = None;
 
     for item in items.iter().filter(|item| !is_codex_user_item(&item.role)) {
@@ -1640,6 +1891,7 @@ fn codex_items_to_agent_text(items: &[CodexConversationItem]) -> String {
 
         if let Some(command) = codex_command_text_from_item(item) {
             flush_codex_assistant_delta_buffer(&mut parts, &mut assistant_delta_buffer);
+            flush_codex_command_output_buffer(&mut parts, &mut command_output_buffer);
             parts.push(format!("commandExecution: {command}"));
             last_command = Some(command);
             continue;
@@ -1648,10 +1900,7 @@ fn codex_items_to_agent_text(items: &[CodexConversationItem]) -> String {
         if is_codex_command_output_delta_item(&item.role) {
             if let Some(output) = codex_command_output_text(&item.text) {
                 flush_codex_assistant_delta_buffer(&mut parts, &mut assistant_delta_buffer);
-                parts.push(format!(
-                    "commandExecution/output: {}",
-                    serde_json::to_string(&output).unwrap_or_else(|_| output)
-                ));
+                command_output_buffer.push_str(&output);
             }
             continue;
         }
@@ -1663,6 +1912,7 @@ fn codex_items_to_agent_text(items: &[CodexConversationItem]) -> String {
         }
 
         flush_codex_assistant_delta_buffer(&mut parts, &mut assistant_delta_buffer);
+        flush_codex_command_output_buffer(&mut parts, &mut command_output_buffer);
 
         if is_codex_assistant_item(&item.role) || is_codex_completed_item(&item.role) {
             parts.push(item.text.clone());
@@ -1672,12 +1922,20 @@ fn codex_items_to_agent_text(items: &[CodexConversationItem]) -> String {
     }
 
     flush_codex_assistant_delta_buffer(&mut parts, &mut assistant_delta_buffer);
+    flush_codex_command_output_buffer(&mut parts, &mut command_output_buffer);
     parts.join("\n\n")
 }
 
 fn flush_codex_assistant_delta_buffer(parts: &mut Vec<String>, buffer: &mut String) {
     if !buffer.trim().is_empty() {
         parts.push(buffer.clone());
+    }
+    buffer.clear();
+}
+
+fn flush_codex_command_output_buffer(parts: &mut Vec<String>, buffer: &mut String) {
+    if !buffer.trim().is_empty() {
+        parts.push(buffer.trim_end().to_string());
     }
     buffer.clear();
 }
@@ -1943,13 +2201,14 @@ impl JsonRpcSocket {
                     payload.id.clone(),
                     payload.params.as_ref(),
                 ) {
-                    items.push(approval.as_conversation_item());
+                    capture_raw_approval_request(text);
                     return Ok(CodexTurnProgress {
                         items,
                         active_turn: Some(CodexActiveTurn {
                             thread_id,
                             client: self,
                             pending_approval: approval,
+                            conversation_context: None,
                         }),
                     });
                 }
@@ -2177,7 +2436,7 @@ fn parse_approval_request(
     }
     let request_id = request_id?;
     let params = params?;
-    let reason = string_field(params, &["reason"]).unwrap_or_else(|| {
+    let reason = string_field(params, &["reason", "message"]).unwrap_or_else(|| {
         if method.contains("commandExecution") {
             "Codex is requesting command approval.".to_string()
         } else if method.contains("fileChange") {
@@ -2186,35 +2445,259 @@ fn parse_approval_request(
             "Codex is requesting approval.".to_string()
         }
     });
-    let available_decisions = approval_decisions(params, method);
+    let user_input_questions = user_input_questions(params);
+    let (available_decisions, decision_wire_values) =
+        approval_decisions(params, method, !user_input_questions.is_empty());
 
     Some(CodexPendingApproval {
         request_id,
         method: method.to_string(),
         thread_id: string_field(params, &["threadId", "thread_id"]),
         turn_id: string_field(params, &["turnId", "turn_id"]),
-        item_id: string_field(params, &["itemId", "item_id"]),
+        item_id: string_field(params, &["itemId", "item_id", "approvalId", "approval_id"]),
         reason,
         command: command_field(params),
-        cwd: string_field(params, &["cwd"]),
+        cwd: string_field(params, &["cwd", "workingDirectory", "working_directory"]),
         available_decisions,
+        user_input_questions,
+        decision_wire_values,
     })
 }
 
-fn approval_decisions(params: &Value, method: &str) -> Vec<CodexApprovalDecision> {
-    let decisions = params
-        .get("availableDecisions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .filter_map(CodexApprovalDecision::from_wire)
-        .collect::<Vec<_>>();
+fn approval_decisions(
+    params: &Value,
+    method: &str,
+    has_user_input_questions: bool,
+) -> (
+    Vec<CodexApprovalDecision>,
+    HashMap<CodexApprovalDecision, Value>,
+) {
+    let mut decision_wire_values = HashMap::new();
+    let mut decisions = Vec::new();
+    let mut wire_values = Vec::new();
+    collect_approval_decision_values(params, &mut wire_values);
+    for wire_value in wire_values {
+        let Some(decision) = approval_decision_from_wire_value(&wire_value) else {
+            continue;
+        };
+        if !decisions.contains(&decision) {
+            decisions.push(decision);
+        }
+        decision_wire_values.entry(decision).or_insert(wire_value);
+    }
     if !decisions.is_empty() {
-        return decisions;
+        return (decisions, decision_wire_values);
     }
 
-    if method == "item/tool/requestUserInput" {
+    if is_request_user_input_method(method) && has_user_input_questions {
+        (vec![], HashMap::new())
+    } else {
+        (default_approval_decisions(method), HashMap::new())
+    }
+}
+
+fn user_input_questions(params: &Value) -> Vec<CodexUserInputQuestion> {
+    let mut questions = Vec::new();
+    collect_user_input_questions(params, &mut questions);
+    let mut seen = BTreeSet::new();
+    questions.retain(|question| {
+        let options = question
+            .options
+            .iter()
+            .map(|option| option.label.as_str())
+            .collect::<Vec<_>>()
+            .join("\u{1f}");
+        seen.insert(format!(
+            "{}\u{1e}{}\u{1e}{}",
+            question.header, question.question, options
+        ))
+    });
+    questions
+}
+
+fn collect_user_input_questions(value: &Value, questions: &mut Vec<CodexUserInputQuestion>) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_user_input_questions(value, questions);
+            }
+        }
+        Value::Object(map) => {
+            if let Some(question) = user_input_question(value, questions.len()) {
+                questions.push(question);
+            }
+
+            for key in [
+                "params",
+                "input",
+                "inputItems",
+                "input_items",
+                "questions",
+                "request",
+                "tool",
+                "toolCall",
+                "tool_call",
+                "item",
+                "event",
+                "data",
+                "payload",
+                "arguments",
+                "args",
+                "content",
+                "body",
+            ] {
+                if let Some(child) = map.get(key) {
+                    collect_user_input_questions(child, questions);
+                }
+            }
+        }
+        Value::String(value) => {
+            if let Some(parsed) = parse_embedded_json(value) {
+                collect_user_input_questions(&parsed, questions);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn user_input_question(value: &Value, fallback_index: usize) -> Option<CodexUserInputQuestion> {
+    let has_options = value_has_array_field(value, &["options", "choices", "buttons", "answers"]);
+    let has_question_flags =
+        value_has_any_field(value, &["isOther", "is_other", "isSecret", "is_secret"]);
+    let question = string_field(value, &["question", "prompt"])
+        .or_else(|| {
+            (has_options || has_question_flags)
+                .then(|| string_field(value, &["message", "body", "text"]))?
+        })
+        .unwrap_or_default();
+    if question.trim().is_empty() && !has_options && !has_question_flags {
+        return None;
+    }
+
+    let explicit_id = string_field(value, &["id", "questionId", "question_id", "key", "name"]);
+    let answer_index = explicit_id.is_none().then_some(fallback_index);
+    let id = explicit_id.unwrap_or_else(|| format!("question-{}", fallback_index + 1));
+
+    Some(CodexUserInputQuestion {
+        id,
+        header: string_field(value, &["header", "title", "label", "name"]).unwrap_or_default(),
+        question,
+        is_other: bool_field(value, &["isOther", "is_other"]),
+        is_secret: bool_field(value, &["isSecret", "is_secret"]),
+        options: user_input_question_options(value),
+        answer_index,
+    })
+}
+
+fn user_input_question_options(value: &Value) -> Vec<CodexUserInputQuestionOption> {
+    ["options", "choices", "buttons", "answers"]
+        .iter()
+        .filter_map(|key| value.get(*key).and_then(Value::as_array))
+        .flatten()
+        .filter_map(user_input_question_option)
+        .collect()
+}
+
+fn user_input_question_option(value: &Value) -> Option<CodexUserInputQuestionOption> {
+    match value {
+        Value::String(label) if !label.trim().is_empty() => Some(CodexUserInputQuestionOption {
+            label: label.clone(),
+            description: String::new(),
+        }),
+        Value::Number(label) => Some(CodexUserInputQuestionOption {
+            label: label.to_string(),
+            description: String::new(),
+        }),
+        Value::Object(_) => Some(CodexUserInputQuestionOption {
+            label: string_field(value, &["label", "title", "text", "value", "name", "id"])?,
+            description: string_field(value, &["description", "subtitle", "detail", "details"])
+                .unwrap_or_default(),
+        }),
+        _ => None,
+    }
+}
+
+fn collect_approval_decision_values(value: &Value, decisions: &mut Vec<Value>) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_approval_decision_values(value, decisions);
+            }
+        }
+        Value::Object(map) => {
+            for key in ["availableDecisions", "available_decisions"] {
+                if let Some(value) = map.get(key) {
+                    collect_decision_value(value, decisions);
+                }
+            }
+
+            for key in [
+                "params",
+                "request",
+                "tool",
+                "toolCall",
+                "tool_call",
+                "item",
+                "event",
+                "data",
+                "payload",
+                "arguments",
+                "args",
+                "content",
+                "body",
+            ] {
+                if let Some(child) = map.get(key) {
+                    collect_approval_decision_values(child, decisions);
+                }
+            }
+        }
+        Value::String(value) => {
+            if let Some(parsed) = parse_embedded_json(value) {
+                collect_approval_decision_values(&parsed, decisions);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_decision_value(value: &Value, decisions: &mut Vec<Value>) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_decision_value(value, decisions);
+            }
+        }
+        Value::Object(_) => {
+            if let Some(decision) = string_field(value, &["decision", "action", "value", "id"]) {
+                decisions.push(json!(decision));
+            } else {
+                decisions.push(value.clone());
+            }
+        }
+        Value::String(value) if !value.trim().is_empty() => decisions.push(json!(value)),
+        _ => {}
+    }
+}
+
+fn approval_decision_from_wire_value(value: &Value) -> Option<CodexApprovalDecision> {
+    match value {
+        Value::String(value) => CodexApprovalDecision::from_wire(value),
+        Value::Object(map) => {
+            if map.contains_key("acceptWithExecpolicyAmendment") {
+                Some(CodexApprovalDecision::AcceptForPrefix)
+            } else if map.contains_key("applyNetworkPolicyAmendment") {
+                Some(CodexApprovalDecision::AcceptForSession)
+            } else {
+                string_field(value, &["decision", "action", "value", "id"])
+                    .and_then(|value| CodexApprovalDecision::from_wire(&value))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn default_approval_decisions(method: &str) -> Vec<CodexApprovalDecision> {
+    if is_request_user_input_method(method) {
         vec![
             CodexApprovalDecision::Accept,
             CodexApprovalDecision::Decline,
@@ -2231,6 +2714,31 @@ fn approval_decisions(params: &Value, method: &str) -> Vec<CodexApprovalDecision
 }
 
 fn command_field(value: &Value) -> Option<String> {
+    if let Some(execve) = value.get("execve") {
+        let program = string_field(execve, &["program"]);
+        let argv = execve
+            .get("argv")
+            .and_then(Value::as_array)
+            .map(|argv| {
+                argv.iter()
+                    .filter_map(|part| match part {
+                        Value::String(value) => Some(value.clone()),
+                        Value::Number(value) => Some(value.to_string()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let command = program
+            .into_iter()
+            .chain(argv)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !command.trim().is_empty() {
+            return Some(command);
+        }
+    }
+
     match value.get("command") {
         Some(Value::Array(parts)) => {
             let command = parts
@@ -2249,12 +2757,16 @@ fn command_field(value: &Value) -> Option<String> {
 }
 
 fn is_approval_request(method: &str) -> bool {
-    matches!(
-        method,
-        "item/commandExecution/requestApproval"
-            | "item/fileChange/requestApproval"
-            | "item/tool/requestUserInput"
-    )
+    let normalized = normalize_identifier(method);
+    normalized.contains("requestapproval")
+        || normalized.contains("execapprovalrequest")
+        || normalized.contains("applypatchapprovalrequest")
+        || normalized.contains("requestpermissions")
+        || normalized.contains("requestuserinput")
+}
+
+fn is_request_user_input_method(method: &str) -> bool {
+    normalize_identifier(method).contains("requestuserinput")
 }
 
 fn is_terminal_method(method: Option<&str>) -> bool {
@@ -2292,6 +2804,31 @@ fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
     None
 }
 
+fn value_has_any_field(value: &Value, keys: &[&str]) -> bool {
+    keys.iter().any(|key| value.get(*key).is_some())
+}
+
+fn value_has_array_field(value: &Value, keys: &[&str]) -> bool {
+    keys.iter()
+        .any(|key| value.get(*key).and_then(Value::as_array).is_some())
+}
+
+fn parse_embedded_json(value: &str) -> Option<Value> {
+    let trimmed = value.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    serde_json::from_str(trimmed).ok()
+}
+
+fn normalize_identifier(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn bool_field(value: &Value, keys: &[&str]) -> bool {
     for key in keys {
         match value.get(*key) {
@@ -2306,6 +2843,68 @@ fn bool_field(value: &Value, keys: &[&str]) -> bool {
     }
     false
 }
+
+fn capture_raw_approval_request(raw_message: &str) {
+    let Some(path) = codex_approval_capture_path() else {
+        return;
+    };
+    let message = serde_json::from_str::<Value>(raw_message)
+        .unwrap_or_else(|_| Value::String(raw_message.to_string()));
+    let record = json!({
+        "captured_at": Utc::now().to_rfc3339(),
+        "message": message,
+    });
+
+    if let Some(parent) = path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            log::warn!(
+                "Could not create Codex approval capture directory {}: {error}",
+                parent.display()
+            );
+            return;
+        }
+    }
+
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            use std::io::Write as _;
+
+            if let Err(error) = writeln!(file, "{record}") {
+                log::warn!(
+                    "Could not write Codex approval capture {}: {error}",
+                    path.display()
+                );
+            }
+        }
+        Err(error) => {
+            log::warn!(
+                "Could not open Codex approval capture {}: {error}",
+                path.display()
+            );
+        }
+    }
+}
+
+fn codex_approval_capture_path() -> Option<PathBuf> {
+    let value = std::env::var("SLIPSTREAM_CODEX_CAPTURE_APPROVALS").ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() || matches!(trimmed, "0" | "false" | "FALSE" | "off" | "OFF") {
+        return None;
+    }
+    if matches!(trimmed, "1" | "true" | "TRUE" | "on" | "ON") {
+        return Some(PathBuf::from(
+            "/tmp/slipstream-codex-approval-requests.jsonl",
+        ));
+    }
+    Some(PathBuf::from(trimmed))
+}
+
+#[cfg(test)]
+mod pending_approval_e2e_tests;
 
 #[cfg(test)]
 mod tests {
@@ -2433,12 +3032,18 @@ mod tests {
     fn codex_request_params_include_model_only_when_selected() {
         assert_eq!(
             thread_resume_params("thread-1", None),
-            json!({ "threadId": "thread-1" })
+            json!({
+                "threadId": "thread-1",
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
+            })
         );
         assert_eq!(
             thread_resume_params("thread-1", Some("gpt-5.4-codex")),
             json!({
                 "threadId": "thread-1",
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
                 "model": "gpt-5.4-codex",
             })
         );
@@ -2446,6 +3051,8 @@ mod tests {
             turn_start_params("thread-1", "hello", Some("gpt-5.4-codex"), None, None),
             json!({
                 "threadId": "thread-1",
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
                 "model": "gpt-5.4-codex",
                 "input": [{
                     "type": "text",
@@ -2507,6 +3114,8 @@ mod tests {
             ),
             json!({
                 "threadId": "thread-1",
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
                 "collaborationMode": {
                     "mode": "plan",
                     "settings": {
@@ -2559,6 +3168,8 @@ mod tests {
         assert_eq!(
             thread_start_params(Some("gpt-5.4-codex"), Some(&PathBuf::from("/tmp/project"))),
             json!({
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
                 "model": "gpt-5.4-codex",
                 "cwd": "/tmp/project",
             })
@@ -2604,8 +3215,176 @@ mod tests {
 
         assert_eq!(approval.reason, "Run tests?");
         assert_eq!(approval.command.as_deref(), Some("cargo test -p warp"));
+        assert!(approval.user_input_questions.is_empty());
         assert_eq!(
             approval.available_decisions,
+            vec![
+                CodexApprovalDecision::Accept,
+                CodexApprovalDecision::Decline,
+                CodexApprovalDecision::Cancel,
+            ]
+        );
+    }
+
+    #[test]
+    fn approval_decision_result_uses_app_server_payload_shape() {
+        let payload = json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "item-1",
+        });
+        let approval = parse_approval_request(
+            Some("item/commandExecution/requestApproval"),
+            Some(JsonRpcId::Number(99)),
+            Some(&payload),
+        )
+        .unwrap();
+
+        assert_eq!(
+            approval.approval_result(CodexApprovalDecision::AcceptForSession),
+            json!({ "decision": "acceptForSession" })
+        );
+    }
+
+    #[test]
+    fn approval_decision_result_preserves_new_codex_wire_values() {
+        let payload = json!({
+            "thread_id": "thread-1",
+            "turn_id": "turn-1",
+            "approval_id": "approval-1",
+            "execve": {
+                "program": "cargo",
+                "argv": ["test", "-p", "warp"]
+            },
+            "available_decisions": [
+                "approve",
+                "approve_for_session",
+                "approve_for_prefix",
+                "decline",
+                "cancel"
+            ]
+        });
+        let approval = parse_approval_request(
+            Some("exec_approval_request"),
+            Some(JsonRpcId::Number(99)),
+            Some(&payload),
+        )
+        .unwrap();
+
+        assert_eq!(approval.item_id.as_deref(), Some("approval-1"));
+        assert_eq!(approval.command.as_deref(), Some("cargo test -p warp"));
+        assert_eq!(
+            approval.available_decisions,
+            vec![
+                CodexApprovalDecision::Accept,
+                CodexApprovalDecision::AcceptForSession,
+                CodexApprovalDecision::AcceptForPrefix,
+                CodexApprovalDecision::Decline,
+                CodexApprovalDecision::Cancel,
+            ]
+        );
+        assert_eq!(
+            approval.approval_result(CodexApprovalDecision::AcceptForSession),
+            json!({ "decision": "approve_for_session" })
+        );
+    }
+
+    #[test]
+    fn parses_request_user_input_questions() {
+        let payload = json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "call-1",
+            "questions": [{
+                "id": "approval",
+                "header": "Approve plan?",
+                "question": "Should Codex continue with this plan?",
+                "options": [
+                    { "label": "Approve", "description": "Continue" },
+                    { "label": "Decline", "description": "Stop" }
+                ]
+            }]
+        });
+        let approval = parse_approval_request(
+            Some("item/tool/requestUserInput"),
+            Some(JsonRpcId::Number(42)),
+            Some(&payload),
+        )
+        .unwrap();
+
+        assert!(approval.available_decisions.is_empty());
+        assert_eq!(approval.title(), "Approve plan?");
+        assert_eq!(approval.message(), "Should Codex continue with this plan?");
+        assert_eq!(approval.user_input_questions[0].options[0].label, "Approve");
+        assert_eq!(
+            approval.user_input_result("approval", "Approve"),
+            Some(json!({
+                "answers": {
+                    "approval": {
+                        "answers": ["Approve"],
+                    },
+                },
+            }))
+        );
+    }
+
+    #[test]
+    fn parses_idless_request_user_input_questions_from_latest_codex_shape() {
+        let payload = json!({
+            "thread_id": "thread-1",
+            "turn_id": "turn-1",
+            "questions": [{
+                "header": "Prompt Test",
+                "question": "What kind of prompt interaction would you like to test?",
+                "isOther": true,
+                "options": [
+                    { "label": "Single choice" },
+                    { "label": "Multiple choice" },
+                    { "label": "Custom answer" }
+                ]
+            }]
+        });
+        let approval = parse_approval_request(
+            Some("request_user_input"),
+            Some(JsonRpcId::Number(42)),
+            Some(&payload),
+        )
+        .unwrap();
+
+        assert!(approval.available_decisions.is_empty());
+        assert_eq!(approval.user_input_questions[0].id, "question-1");
+        assert_eq!(approval.title(), "Prompt Test");
+        assert_eq!(
+            approval.message(),
+            "What kind of prompt interaction would you like to test?"
+        );
+        assert_eq!(
+            approval.user_input_result("question-1", "Single choice"),
+            Some(json!({
+                "answers": [{
+                    "answers": ["Single choice"],
+                }],
+            }))
+        );
+    }
+
+    #[test]
+    fn request_user_input_without_questions_falls_back_to_approval_buttons() {
+        let payload = json!({
+            "thread_id": "thread-1",
+            "turn_id": "turn-1",
+            "reason": "Codex is requesting approval."
+        });
+        let approval = parse_approval_request(
+            Some("request_user_input"),
+            Some(JsonRpcId::Number(42)),
+            Some(&payload),
+        )
+        .unwrap();
+
+        assert!(approval.user_input_questions.is_empty());
+        assert_eq!(
+            approval.effective_available_decisions(),
             vec![
                 CodexApprovalDecision::Accept,
                 CodexApprovalDecision::Decline,
@@ -2699,8 +3478,34 @@ mod tests {
 
         assert_eq!(
             text,
-            "commandExecution: /bin/zsh -lc 'git status --short'\n\ncommandExecution/output: \" M app/src/codex_app_server/mod.rs\\n\"\n\nDone."
+            "commandExecution: /bin/zsh -lc 'git status --short'\n\n M app/src/codex_app_server/mod.rs\n\nDone."
         );
+    }
+
+    #[test]
+    fn parses_nested_request_user_input_questions() {
+        let payload = json!({
+            "request": {
+                "questions": [{
+                    "id": "approval",
+                    "header": "Approve plan?",
+                    "question": "Should Codex continue with this plan?",
+                    "options": [
+                        { "label": "Approve", "description": "Continue" },
+                        { "label": "Decline", "description": "Stop" }
+                    ]
+                }]
+            }
+        });
+        let approval = parse_approval_request(
+            Some("item/tool/requestUserInput"),
+            Some(JsonRpcId::Number(42)),
+            Some(&payload),
+        )
+        .unwrap();
+
+        assert_eq!(approval.title(), "Approve plan?");
+        assert_eq!(approval.user_input_questions[0].options[0].label, "Approve");
     }
 
     #[test]
