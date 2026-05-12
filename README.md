@@ -27,6 +27,20 @@ To get started:
 
 For true zero-cloud use, point Slipstream at a model provider running on your own machine, local network, or self-hosted infrastructure. If you point it at an external hosted API, your model traffic goes to that provider instead.
 
+## Local Agent Integrations
+
+Slipstream can connect to local Codex and OpenCode servers for the Codex and OpenCode integrations. Start the matching local server before using the integration:
+
+```sh
+codex app-server --listen ws://127.0.0.1:4500
+```
+
+```sh
+opencode serve --hostname 127.0.0.1 --port 4096
+```
+
+These are the default local endpoints. If you use a different host or port, update the integration endpoint in Slipstream settings.
+
 ## What Changed From Warp
 
 Slipstream tracks Warp, but changes the default operating model:
