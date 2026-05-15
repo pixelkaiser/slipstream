@@ -190,9 +190,8 @@ fn unrelated_registration_error_does_not_trigger_loopback_retry() {
 
 #[test]
 fn callback_result_from_url_extracts_code_and_state() {
-    let url =
-        Url::parse("http://127.0.0.1:54321/oauth2callback?code=AUTH_CODE&state=CSRF_STATE")
-            .unwrap();
+    let url = Url::parse("http://127.0.0.1:54321/oauth2callback?code=AUTH_CODE&state=CSRF_STATE")
+        .unwrap();
 
     let (state, result) = callback_result_from_url(&url).unwrap();
 
