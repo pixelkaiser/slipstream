@@ -1235,7 +1235,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
 
 #[cfg(not(target_family = "wasm"))]
 fn render_codex_pending_approval(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
-    if !props.model.is_latest_non_passive_exchange_in_root_task(app) {
+    if !props.model.is_latest_visible_exchange_in_root_task(app) {
         return None;
     }
     let conversation_id = props.model.conversation(app)?.id();
@@ -1400,7 +1400,7 @@ fn render_codex_pending_approval_card(
 
 #[cfg(not(target_family = "wasm"))]
 fn render_opencode_pending_request(props: Props, app: &AppContext) -> Option<Box<dyn Element>> {
-    if !props.model.is_latest_non_passive_exchange_in_root_task(app) {
+    if !props.model.is_latest_visible_exchange_in_root_task(app) {
         return None;
     }
     let conversation_id = props.model.conversation(app)?.id();

@@ -463,6 +463,8 @@ fn codex_command_message_and_result(
                 command,
                 output,
                 exit_code: ExitCode::default(),
+                start_ts: None,
+                completed_ts: None,
             },
         ),
     };
