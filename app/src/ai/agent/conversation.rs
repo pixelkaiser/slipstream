@@ -76,8 +76,9 @@ use super::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentContext, AIAgentExchange, AIAgentExchangeId, AIAgentInput,
     AIAgentOutputStatus, AIAgentText, AIAgentTextSection, AIAgentTodo, AIAgentTodoId,
-    AgentOutputText, FinishedAIAgentOutput, MessageId, RenderableAIError,
-    RequestCommandOutputResult, RequestCost, UserQueryMode,
+    AgentOutputText, AnyFileContent, FileContext, FileLocations, FinishedAIAgentOutput, MessageId,
+    ReadFilesRequest, ReadFilesResult, RenderableAIError, RequestCommandOutputResult, RequestCost,
+    UserQueryMode,
 };
 use super::{
     AIAgentOutput, OutputModelInfo, ServerOutputId, Shared, SuggestedLoggingId, Suggestions,
@@ -119,6 +120,8 @@ pub(crate) struct CommandBlockInfo {
 
 const CODEX_COMMAND_ACTION_ID_PREFIX: &str = "codex-command-";
 const CODEX_COMMAND_OUTPUT_PREFIX: &str = "commandExecution/output";
+const CODEX_READ_FILES_ACTION_ID_PREFIX: &str = "codex-read-files-";
+const CODEX_READ_FILES_PREFIX: &str = "readFiles";
 
 struct CodexOutputParts {
     output: Shared<AIAgentOutput>,
@@ -133,6 +136,28 @@ struct PendingCodexCommand {
 struct CodexFormattedCommandOutput {
     output: String,
     command: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CodexFormattedReadFiles {
+    files: Vec<CodexFormattedReadFile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CodexFormattedReadFile {
+    path: String,
+    content: String,
+    line_start: Option<usize>,
+    line_end: Option<usize>,
+}
+
+impl CodexFormattedReadFile {
+    fn line_range(&self) -> Option<std::ops::Range<usize>> {
+        match (self.line_start, self.line_end) {
+            (Some(start), Some(end)) if start <= end => Some(start..end),
+            _ => None,
+        }
+    }
 }
 
 fn codex_output_status(
@@ -172,9 +197,24 @@ fn codex_output_from_text(text: String, task_id: &TaskId) -> CodexOutputParts {
     let mut text_buffer = Vec::new();
     let mut pending_command = None;
     let mut command_index = 0;
+    let mut read_files_index = 0;
 
     for line in text.lines() {
-        if let Some(command) = codex_command_from_formatted_line(line) {
+        if let Some(read_files) = codex_read_files_from_formatted_line(line) {
+            push_codex_text_message(&mut messages, &mut text_buffer);
+            flush_pending_codex_command(
+                &mut messages,
+                &mut action_results,
+                &mut pending_command,
+                &mut command_index,
+                task_id,
+            );
+            let (message, result) =
+                codex_read_files_message_and_result(read_files, read_files_index, task_id);
+            messages.push(message);
+            action_results.push(result);
+            read_files_index += 1;
+        } else if let Some(command) = codex_command_from_formatted_line(line) {
             push_codex_text_message(&mut messages, &mut text_buffer);
             flush_pending_codex_command(
                 &mut messages,
@@ -386,6 +426,25 @@ fn codex_command_output_from_formatted_line(line: &str) -> Option<CodexFormatted
     })
 }
 
+fn codex_read_files_from_formatted_line(line: &str) -> Option<CodexFormattedReadFiles> {
+    let (role, input) = line.trim_start().split_once(':')?;
+    let normalized_role = role
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let read_files_role = CODEX_READ_FILES_PREFIX
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if normalized_role != read_files_role {
+        return None;
+    }
+
+    serde_json::from_str(input.trim()).ok()
+}
+
 fn command_field_from_value(value: &serde_json::Value) -> Option<String> {
     match value.get("command") {
         Some(serde_json::Value::Array(parts)) => {
@@ -480,10 +539,73 @@ fn codex_command_message_and_result(
     )
 }
 
+fn codex_read_files_message_and_result(
+    read_files: CodexFormattedReadFiles,
+    read_files_index: usize,
+    task_id: &TaskId,
+) -> (AIAgentOutputMessage, AIAgentActionResult) {
+    let read_files_hash = codex_read_files_hash(&read_files, read_files_index);
+    let action_id = AIAgentActionId::from(format!(
+        "{CODEX_READ_FILES_ACTION_ID_PREFIX}{read_files_index}-{read_files_hash:016x}"
+    ));
+    let locations = read_files
+        .files
+        .iter()
+        .map(|file| FileLocations {
+            name: file.path.clone(),
+            lines: file.line_range().into_iter().collect(),
+        })
+        .collect::<Vec<_>>();
+    let files = read_files
+        .files
+        .into_iter()
+        .map(|file| {
+            let line_range = file.line_range();
+            FileContext::new(
+                file.path,
+                AnyFileContent::StringContent(file.content),
+                line_range,
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    let action = AIAgentAction {
+        id: action_id.clone(),
+        task_id: task_id.clone(),
+        action: AIAgentActionType::ReadFiles(ReadFilesRequest { locations }),
+        requires_result: false,
+    };
+    let result = AIAgentActionResult {
+        id: action_id,
+        task_id: task_id.clone(),
+        result: AIAgentActionResultType::ReadFiles(ReadFilesResult::Success { files }),
+    };
+
+    (
+        AIAgentOutputMessage::action(
+            MessageId::new(format!(
+                "codex-read-files-message-{read_files_index}-{read_files_hash:016x}"
+            )),
+            action,
+        ),
+        result,
+    )
+}
+
 fn codex_command_hash(command: &str, command_index: usize) -> u64 {
     let mut hasher = DefaultHasher::new();
     command_index.hash(&mut hasher);
     command.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn codex_read_files_hash(read_files: &CodexFormattedReadFiles, read_files_index: usize) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    read_files_index.hash(&mut hasher);
+    for file in &read_files.files {
+        file.path.hash(&mut hasher);
+        file.content.hash(&mut hasher);
+    }
     hasher.finish()
 }
 
@@ -493,7 +615,11 @@ fn is_codex_command_action_result(input: &AIAgentInput) -> bool {
         AIAgentInput::ActionResult {
             result: AIAgentActionResult { id, .. },
             ..
-        } if id.to_string().starts_with(CODEX_COMMAND_ACTION_ID_PREFIX)
+        } if {
+            let id = id.to_string();
+            id.starts_with(CODEX_COMMAND_ACTION_ID_PREFIX)
+                || id.starts_with(CODEX_READ_FILES_ACTION_ID_PREFIX)
+        }
     )
 }
 

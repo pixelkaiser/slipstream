@@ -171,7 +171,7 @@ fn refresh_cached_codex_conversation_preserves_existing_exchange_ids() {
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(Vec::new(), &[]));
         let terminal_view_id = EntityId::new();
         let conversation_id = history_model.update(&mut app, |history_model, ctx| {
-            history_model.start_new_conversation(terminal_view_id, false, false, ctx)
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
         });
         let existing_exchange_id = history_model.update(&mut app, |history_model, ctx| {
             history_model
@@ -219,7 +219,7 @@ fn refresh_cached_codex_conversation_rejects_empty_incoming_snapshot() {
             app.add_singleton_model(|_| BlocklistAIHistoryModel::new(Vec::new(), &[]));
         let terminal_view_id = EntityId::new();
         let conversation_id = history_model.update(&mut app, |history_model, ctx| {
-            history_model.start_new_conversation(terminal_view_id, false, false, ctx)
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
         });
         history_model.update(&mut app, |history_model, ctx| {
             history_model

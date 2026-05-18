@@ -849,6 +849,18 @@ impl RequestedCommandView {
         &self.command_text
     }
 
+    fn inline_command_detail_text(
+        &self,
+        action_status: Option<&AIActionStatus>,
+        has_requested_command_block: bool,
+    ) -> Option<String> {
+        if has_requested_command_block {
+            return None;
+        }
+        let action_result = action_status?.finished_result()?;
+        command_detail_text_from_result(self.command_text(), &action_result.result)
+    }
+
     pub fn copied_from_citation(&self) -> Option<&AIAgentCitation> {
         self.copied_from_citation.as_ref()
     }
@@ -1367,6 +1379,15 @@ impl View for RequestedCommandView {
         let is_input_pinned_to_top =
             *InputModeSettings::as_ref(app).input_mode.value() == InputMode::PinnedToTop;
 
+        let has_requested_command_block = {
+            let terminal_model = self.terminal_model.lock();
+            self.action_type.is_requested_command()
+                && terminal_model
+                    .block_list()
+                    .block_for_ai_action_id(&self.action_id)
+                    .is_some()
+        };
+
         // When expanded details are rendered using a regular block, having a non-zero horizontal
         // margin while toggled expanded will cause the body to look wider than the header.
         // The expanded details should also appear connected to the header, so we remove bottom margin in this case.
@@ -1402,12 +1423,20 @@ impl View for RequestedCommandView {
         let should_render_mcp_content = self.is_header_expanded
             && self.action_type.is_mcp_tool()
             && !self.command_text.is_empty();
+        let command_detail_content = (self.is_header_expanded
+            && self.action_type.is_requested_command())
+        .then(|| {
+            self.inline_command_detail_text(action_status.as_ref(), has_requested_command_block)
+        })
+        .flatten();
+        let should_render_command_detail_content = command_detail_content.is_some();
 
         let has_citations_footer =
             !self.derived_from_citations.is_empty() && !self.block_model.status(app).is_streaming();
         let header_element = self.render_header(
             !should_render_editor
                 && !should_render_mcp_content
+                && !should_render_command_detail_content
                 && !is_rendered_above_expanded_command_block
                 && !has_citations_footer,
             app,
@@ -1432,6 +1461,40 @@ impl View for RequestedCommandView {
                 )
                 .with_max_height(MAX_EDITOR_HEIGHT)
                 .finish(),
+            );
+        }
+
+        if let Some(content_text) = command_detail_content {
+            let text_element = Text::new(
+                content_text,
+                appearance.monospace_font_family(),
+                appearance.monospace_font_size(),
+            )
+            .with_color(blended_colors::text_main(theme, theme.background()))
+            .with_selectable(true)
+            .finish();
+
+            let selected_text = self.mcp_content_selected_text.clone();
+            let selectable_text = SelectableArea::new(
+                self.mcp_content_selection_handle.clone(),
+                #[allow(clippy::unwrap_used)]
+                move |selection_args, _, _| {
+                    *selected_text.write().unwrap() = selection_args.selection;
+                },
+                text_element,
+            )
+            .on_selection_updated(|ctx, _| {
+                ctx.dispatch_typed_action(RequestedCommandViewAction::SelectText);
+            })
+            .finish();
+
+            content.add_child(
+                Container::new(selectable_text)
+                    .with_horizontal_padding(INLINE_ACTION_HORIZONTAL_PADDING)
+                    .with_vertical_padding(REQUESTED_COMMAND_BODY_VERTICAL_PADDING)
+                    .with_background(theme.background())
+                    .with_corner_radius(CornerRadius::with_bottom(Radius::Pixels(8.)))
+                    .finish(),
             );
         }
 
@@ -1664,6 +1727,48 @@ pub fn format_command_text(text: &str) -> String {
     } else {
         text.to_string()
     }
+}
+
+fn command_detail_text_from_result(
+    fallback_command: &str,
+    result: &AIAgentActionResultType,
+) -> Option<String> {
+    let AIAgentActionResultType::RequestCommandOutput(command_result) = result else {
+        return None;
+    };
+
+    match command_result {
+        RequestCommandOutputResult::Completed {
+            command, output, ..
+        } => command_detail_text(command, fallback_command, output),
+        RequestCommandOutputResult::LongRunningCommandSnapshot {
+            command,
+            grid_contents,
+            ..
+        } => command_detail_text(command, fallback_command, grid_contents),
+        RequestCommandOutputResult::Denylisted { command } => {
+            command_detail_text(command, fallback_command, "")
+        }
+        RequestCommandOutputResult::CancelledBeforeExecution => None,
+    }
+}
+
+fn command_detail_text(command: &str, fallback_command: &str, output: &str) -> Option<String> {
+    let command = if command.trim().is_empty() {
+        fallback_command
+    } else {
+        command
+    };
+    if command.trim().is_empty() && output.trim().is_empty() {
+        return None;
+    }
+    if output.trim().is_empty() {
+        return Some(command.to_string());
+    }
+    if command.trim().is_empty() {
+        return Some(output.to_string());
+    }
+    Some(format!("{command}\n\n{output}"))
 }
 
 #[cfg(test)]

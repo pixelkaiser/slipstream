@@ -1,17 +1,17 @@
 agent_text:
-  I will inspect the repo.
+  I will list the files.
 
-  commandExecution: git status --short
+  commandExecution: ls
 
-  commandExecution/output: " M app/src/opencode_server/mod.rs\n"
+  commandExecution/output: "a.txt\nb.txt\n"
 
-  Done.
+  Files listed.
 render_model:
 - text:
-  I will inspect the repo.
+  I will list the files.
 
 - action: request_command_output
-  command: git status --short
-  result_output: " M app/src/opencode_server/mod.rs\n"
+  command: ls
+  result_output: "a.txt\nb.txt\n"
 - text:
-  Done.
+  Files listed.

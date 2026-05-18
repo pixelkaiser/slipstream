@@ -7,7 +7,7 @@ use super::{
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
-    AIAgentOutputStatus, FinishedAIAgentOutput, RequestCommandOutputResult,
+    AIAgentOutputStatus, FinishedAIAgentOutput, ReadFilesResult, RequestCommandOutputResult,
 };
 use crate::ai::artifacts::Artifact;
 use crate::persistence::model::AgentConversationData;
@@ -299,6 +299,44 @@ fn codex_output_converts_command_execution_to_command_action() {
 }
 
 #[test]
+fn codex_output_converts_read_files_to_read_files_action() {
+    let task_id = TaskId::new("root-task".to_string());
+    let output_text =
+        "Before\n\nreadFiles: {\"files\":[{\"path\":\"/tmp/README.md\",\"content\":\"one\\ntwo\\n\"}]}\n\nAfter"
+            .to_string();
+    let (status, action_results) = codex_output_status(Some(output_text), false, &task_id);
+
+    let output = match status {
+        AIAgentOutputStatus::Finished {
+            finished_output: FinishedAIAgentOutput::Success { output },
+        } => output,
+        _ => panic!("expected finished successful output"),
+    };
+    let messages = &output.get().messages;
+
+    assert_eq!(messages.len(), 3);
+    let AIAgentOutputMessageType::Action(action) = &messages[1].message else {
+        panic!("expected read files action");
+    };
+    let AIAgentActionType::ReadFiles(request) = &action.action else {
+        panic!("expected read files action");
+    };
+    assert_eq!(request.locations.len(), 1);
+    assert_eq!(request.locations[0].name, "/tmp/README.md");
+
+    assert_eq!(action_results.len(), 1);
+    assert_eq!(action_results[0].id, action.id);
+    let AIAgentActionResultType::ReadFiles(ReadFilesResult::Success { files }) =
+        &action_results[0].result
+    else {
+        panic!("expected read files result");
+    };
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].file_name, "/tmp/README.md");
+    assert_eq!(files[0].line_count, 2);
+}
+
+#[test]
 fn codex_output_attaches_command_output_to_command_action() {
     let task_id = TaskId::new("root-task".to_string());
     let (status, action_results) = codex_output_status(
@@ -467,6 +505,31 @@ fn append_finished_codex_exchange_stores_command_result_for_restore() {
         .unwrap();
 
     assert_eq!(result.id, action.id);
+}
+
+#[test]
+fn codex_exchange_refresh_keeps_read_files_action_result() {
+    let mut conversation = restored_conversation(None);
+
+    conversation
+        .append_codex_exchange(
+            Some("read a file".to_string()),
+            Some(
+                "readFiles: {\"files\":[{\"path\":\"/tmp/README.md\",\"content\":\"one\\ntwo\\n\"}]}"
+                    .to_string(),
+            ),
+            None,
+            false,
+            Local::now(),
+        )
+        .unwrap();
+
+    let exchange = conversation.root_task_exchanges().next().unwrap();
+    let refreshed = exchange.format_codex_output_for_refresh();
+
+    assert!(refreshed.starts_with("readFiles: "));
+    assert!(refreshed.contains("\"path\":\"/tmp/README.md\""));
+    assert!(refreshed.contains("\"content\":\"one\\ntwo\\n\""));
 }
 
 #[test]

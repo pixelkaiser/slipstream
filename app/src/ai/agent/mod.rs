@@ -2939,6 +2939,11 @@ impl AIAgentExchange {
                     }
                     Some(parts.join("\n\n"))
                 }
+                AIAgentOutputMessageType::Action(AIAgentAction {
+                    id,
+                    action: AIAgentActionType::ReadFiles(_),
+                    ..
+                }) => self.codex_read_files_marker(id),
                 AIAgentOutputMessageType::Action(_) => None,
                 _ => {
                     let text = message.to_string();
@@ -2947,6 +2952,49 @@ impl AIAgentExchange {
             })
             .collect::<Vec<_>>()
             .join("\n\n")
+    }
+
+    fn codex_read_files_marker(&self, action_id: &AIAgentActionId) -> Option<String> {
+        let files = self.codex_read_files_result_files(action_id)?;
+        let files = files
+            .iter()
+            .filter_map(|file| {
+                let AnyFileContent::StringContent(content) = &file.content else {
+                    return None;
+                };
+                let line_start = file.line_range.as_ref().map(|range| range.start);
+                let line_end = file.line_range.as_ref().map(|range| range.end);
+                Some(serde_json::json!({
+                    "path": &file.file_name,
+                    "content": content,
+                    "line_start": line_start,
+                    "line_end": line_end,
+                }))
+            })
+            .collect::<Vec<_>>();
+
+        if files.is_empty() {
+            return None;
+        }
+
+        Some(format!("readFiles: {}", serde_json::json!({ "files": files })))
+    }
+
+    fn codex_read_files_result_files(&self, action_id: &AIAgentActionId) -> Option<&[FileContext]> {
+        self.input.iter().find_map(|input| {
+            let AIAgentInput::ActionResult { result, .. } = input else {
+                return None;
+            };
+            if &result.id != action_id {
+                return None;
+            }
+            match &result.result {
+                AIAgentActionResultType::ReadFiles(ReadFilesResult::Success { files }) => {
+                    Some(files.as_slice())
+                }
+                _ => None,
+            }
+        })
     }
 
     fn codex_command_result_output(&self, action_id: &AIAgentActionId) -> Option<&str> {
