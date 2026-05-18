@@ -9,6 +9,10 @@ use super::{
     command_executor::{testing::TestCommandExecutor, NoOpCommandExecutor},
     BootstrapSessionType, SessionId, SessionInfo, SessionType, Sessions, SessionsEvent,
 };
+use crate::auth::auth_state::AuthStateProvider;
+use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
+use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::History;
 
 struct TestView {
     events: Vec<SessionsEvent>,
@@ -107,6 +111,10 @@ fn test_set_env_var_emits_no_event_when_no_change() {
 #[test]
 fn disable_remote_command_execution_replaces_executor_without_marking_session_local() {
     App::test((), |mut app| async move {
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AppTelemetryContextProvider::new_context_provider);
+        app.add_singleton_model(WarpifySettings::new_with_defaults);
+        app.add_singleton_model(|_| History::new(Vec::new()));
         let model_handle = app.add_model(|_| {
             Sessions::new_for_test()
                 .with_command_executor(Arc::new(TestCommandExecutor::default()))

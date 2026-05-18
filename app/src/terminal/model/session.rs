@@ -140,10 +140,9 @@ impl Sessions {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         // Track the connected host_id on the `Session` type so downstream
-        // code can distinguish hosts. The `RemoteServerCommandExecutor`
-        // client itself is baked in at session construction time
-        // (see `new_command_executor_for_local_tty_session`) so we no
-        // longer need to wire it here on connect/disconnect.
+        // code can distinguish hosts. The initial `RemoteServerCommandExecutor`
+        // is baked in at session construction time; already-bootstrapped
+        // sessions can still need an executor swap after an explicit repair.
         #[cfg(feature = "local_tty")]
         if FeatureFlag::SshRemoteServer.is_enabled() {
             let mgr = RemoteServerManager::handle(ctx);
@@ -154,6 +153,18 @@ impl Sessions {
                 } => {
                     if let Some(session) = sessions.sessions.get(sid) {
                         session.set_remote_host_id(Some(host_id.clone()));
+                        if WarpifySettings::is_ssh_remote_server_enabled(ctx) {
+                            let maybe_client = RemoteServerManager::handle(ctx)
+                                .read(ctx, |mgr, _| mgr.client_for_session(*sid).cloned());
+                            if let Some(client) = maybe_client {
+                                let new_executor =
+                                    Arc::new(RemoteServerCommandExecutor::new(*sid, client));
+                                session.set_command_executor(new_executor);
+                                log::info!(
+                                    "Swapped command executor for session {sid:?} after remote server connect"
+                                );
+                            }
+                        }
                     }
                 }
                 RemoteServerManagerEvent::SessionDisconnected {
@@ -305,6 +316,12 @@ impl Sessions {
         self.sessions
             .get(&session_id)
             .is_some_and(|session| session.disable_remote_command_execution())
+    }
+
+    pub fn legacy_ssh_socket_path_for_session(&self, session_id: SessionId) -> Option<PathBuf> {
+        self.sessions
+            .get(&session_id)
+            .and_then(|session| session.legacy_ssh_socket_path())
     }
 
     pub fn register_pending_session(
@@ -1018,6 +1035,13 @@ impl Session {
             self.info.is_legacy_ssh_session,
             IsLegacySSHSession::Yes { .. }
         )
+    }
+
+    pub fn legacy_ssh_socket_path(&self) -> Option<PathBuf> {
+        match &self.info.is_legacy_ssh_session {
+            IsLegacySSHSession::Yes { socket_path } => Some(socket_path.clone()),
+            IsLegacySSHSession::No => None,
+        }
     }
 
     pub fn is_subshell_or_ssh(&self) -> bool {

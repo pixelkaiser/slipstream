@@ -143,6 +143,18 @@ pub fn wire_up_remote_server_controller_with_view<T: EventLoopSender>(
                     ctrl.handle_ssh_remote_server_install(*session_id, ctx);
                 });
             }
+            view::Event::RemoteServerRetryInstallRequested {
+                session_id,
+                socket_path,
+            } => {
+                controller.update(ctx, |ctrl, ctx| {
+                    ctrl.handle_ssh_remote_server_retry_install(
+                        *session_id,
+                        socket_path.clone(),
+                        ctx,
+                    );
+                });
+            }
             view::Event::RemoteServerSkipRequested { session_id } => {
                 controller.update(ctx, |ctrl, ctx| {
                     ctrl.handle_ssh_remote_server_skip(*session_id, ctx);

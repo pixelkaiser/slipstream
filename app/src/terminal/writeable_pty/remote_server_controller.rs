@@ -63,6 +63,18 @@ enum SshInitState {
         session_info: SessionInfo,
         setup_start: Instant,
     },
+    /// Repair path for an already-bootstrapped SSH session after legacy
+    /// ControlMaster command channels start failing.
+    RetryingInstall {
+        session_id: SessionId,
+        transport: SshTransport,
+        setup_start: Instant,
+    },
+    /// Repair path, waiting for a reconnect after reinstall.
+    RetryingConnect {
+        session_id: SessionId,
+        setup_start: Instant,
+    },
 }
 
 /// Per-pane orchestrator that defers the bootstrap script write for SSH sessions,
@@ -207,6 +219,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             } => {
                 self.flush_stashed_bootstrap(old_info, ctx);
             }
+            SshInitState::RetryingInstall { .. } | SshInitState::RetryingConnect { .. } => {}
         }
         let install_options = WarpifySettings::as_ref(ctx).ssh_extension_install_options();
         let transport =
@@ -364,35 +377,75 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         });
     }
 
+    pub fn handle_ssh_remote_server_retry_install(
+        &mut self,
+        session_id: SessionId,
+        socket_path: PathBuf,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let SshInitState::Idle = self.state else {
+            log::warn!(
+                "Remote server retry install requested in unexpected state: session={session_id:?}"
+            );
+            return;
+        };
+
+        let install_options = WarpifySettings::as_ref(ctx).ssh_extension_install_options();
+        let transport =
+            SshTransport::new(socket_path, self.build_auth_context(ctx), install_options);
+        self.did_install = true;
+        self.remote_platform = None;
+        self.preinstall_check = None;
+        self.state = SshInitState::RetryingInstall {
+            session_id,
+            transport: transport.clone(),
+            setup_start: Instant::now(),
+        };
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.install_binary(session_id, transport, true, ctx);
+        });
+    }
+
     /// Called when the remote server session is connected. Flushes the
     /// stashed bootstrap (so the session initializes with a live client)
     /// and emits the `RemoteServerSetupDuration` telemetry event.
     fn on_session_connected(&mut self, session_id: SessionId, ctx: &mut ModelContext<Self>) {
-        let SshInitState::AwaitingConnect {
-            session_id: expected,
-            ..
-        } = &self.state
-        else {
-            return;
-        };
-        if *expected != session_id {
-            return;
+        match &self.state {
+            SshInitState::AwaitingConnect {
+                session_id: expected,
+                ..
+            }
+            | SshInitState::RetryingConnect {
+                session_id: expected,
+                ..
+            } if *expected == session_id => {}
+            _ => return,
         }
 
-        let SshInitState::AwaitingConnect {
-            session_info,
-            setup_start,
-            ..
-        } = std::mem::replace(&mut self.state, SshInitState::Idle)
-        else {
-            unreachable!("just matched AwaitingConnect above");
-        };
+        match std::mem::replace(&mut self.state, SshInitState::Idle) {
+            SshInitState::AwaitingConnect {
+                session_info,
+                setup_start,
+                ..
+            } => {
+                // Flush the stashed bootstrap now that the server is connected.
+                // `client_for_session` will return `Some` when the session
+                // subsequently initializes, so it picks `RemoteServerCommandExecutor`.
+                self.flush_stashed_bootstrap(session_info, ctx);
+                self.send_setup_duration_telemetry(setup_start, ctx);
+            }
+            SshInitState::RetryingConnect { setup_start, .. } => {
+                self.send_setup_duration_telemetry(setup_start, ctx);
+            }
+            _ => unreachable!("just matched a connecting state above"),
+        }
+    }
 
-        // Flush the stashed bootstrap now that the server is connected.
-        // `client_for_session` will return `Some` when the session
-        // subsequently initializes, so it picks `RemoteServerCommandExecutor`.
-        self.flush_stashed_bootstrap(session_info, ctx);
-
+    fn send_setup_duration_telemetry(
+        &self,
+        setup_start: Instant,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let duration_ms = Instant::now()
             .duration_since(setup_start)
             .as_millis()
@@ -430,24 +483,28 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         session_id: SessionId,
         ctx: &mut ModelContext<Self>,
     ) {
-        let SshInitState::AwaitingConnect {
-            session_id: expected,
-            ..
-        } = &self.state
-        else {
-            return;
-        };
-        if *expected != session_id {
-            return;
+        match &self.state {
+            SshInitState::AwaitingConnect {
+                session_id: expected,
+                ..
+            }
+            | SshInitState::RetryingConnect {
+                session_id: expected,
+                ..
+            } if *expected == session_id => {}
+            _ => return,
         }
 
-        let SshInitState::AwaitingConnect { session_info, .. } =
-            std::mem::replace(&mut self.state, SshInitState::Idle)
-        else {
-            unreachable!("just matched AwaitingConnect above");
-        };
-        log::warn!("Remote server connection failed: session={session_id:?}");
-        self.flush_stashed_bootstrap(session_info, ctx);
+        match std::mem::replace(&mut self.state, SshInitState::Idle) {
+            SshInitState::AwaitingConnect { session_info, .. } => {
+                log::warn!("Remote server connection failed: session={session_id:?}");
+                self.flush_stashed_bootstrap(session_info, ctx);
+            }
+            SshInitState::RetryingConnect { .. } => {
+                log::warn!("Remote server retry connection failed: session={session_id:?}");
+            }
+            _ => unreachable!("just matched a connecting state above"),
+        }
     }
 
     pub fn handle_ssh_remote_server_skip(
@@ -471,38 +528,58 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         ctx: &mut ModelContext<Self>,
     ) {
         let expected = match &self.state {
-            SshInitState::AwaitingInstall { session_id, .. } => *session_id,
+            SshInitState::AwaitingInstall { session_id, .. }
+            | SshInitState::RetryingInstall { session_id, .. } => *session_id,
             _ => return,
         };
         if expected != session_id {
             return;
         }
 
-        let (session_info, transport, setup_start) =
-            match std::mem::replace(&mut self.state, SshInitState::Idle) {
-                SshInitState::AwaitingInstall {
-                    session_info,
-                    transport,
-                    setup_start,
-                    ..
-                } => (session_info, transport, setup_start),
-                _ => unreachable!("just matched AwaitingInstall above"),
-            };
-        match result {
-            Ok(()) => {
-                let socket_path = transport.socket_path().clone();
-                self.state = SshInitState::AwaitingConnect {
-                    session_id,
-                    session_info,
-                    setup_start,
-                };
-                self.connect_session_for_current_identity(session_id, socket_path, ctx);
-            }
-            Err(err) => {
-                log::warn!(
-                    "Remote server binary install failed: session={session_id:?} error={err}"
-                );
-                self.flush_stashed_bootstrap(session_info, ctx);
+        match std::mem::replace(&mut self.state, SshInitState::Idle) {
+            SshInitState::AwaitingInstall {
+                session_info,
+                transport,
+                setup_start,
+                ..
+            } => match result {
+                Ok(()) => {
+                    let socket_path = transport.socket_path().clone();
+                    self.state = SshInitState::AwaitingConnect {
+                        session_id,
+                        session_info,
+                        setup_start,
+                    };
+                    self.connect_session_for_current_identity(session_id, socket_path, ctx);
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Remote server binary install failed: session={session_id:?} error={err}"
+                    );
+                    self.flush_stashed_bootstrap(session_info, ctx);
+                }
+            },
+            SshInitState::RetryingInstall {
+                transport,
+                setup_start,
+                ..
+            } => match result {
+                Ok(()) => {
+                    let socket_path = transport.socket_path().clone();
+                    self.state = SshInitState::RetryingConnect {
+                        session_id,
+                        setup_start,
+                    };
+                    self.connect_session_for_current_identity(session_id, socket_path, ctx);
+                }
+                Err(err) => {
+                    log::warn!(
+                        "Remote server retry install failed: session={session_id:?} error={err}"
+                    );
+                }
+            },
+            _ => {
+                unreachable!("just matched an installing state above");
             }
         }
     }

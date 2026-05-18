@@ -160,7 +160,7 @@ use crate::terminal::view::init_environment::{
     },
 };
 use crate::terminal::view::ssh_remote_server_choice_view::{
-    SshRemoteServerChoiceView, SshRemoteServerChoiceViewEvent,
+    SshRemoteServerChoiceView, SshRemoteServerChoiceViewEvent, SshRemoteServerChoiceViewMode,
 };
 use crate::terminal::view::ssh_remote_server_failed_banner::{
     SshRemoteServerFailedBanner, SshRemoteServerFailedBannerEvent,
@@ -323,7 +323,8 @@ use crate::terminal::shared_session::{
 use crate::terminal::ssh::ssh_detection::SshInteractiveSessionDetected;
 use crate::terminal::view::block_onboarding::onboarding_prompt_block::OnboardingPromptBlock;
 use crate::terminal::warpify::{
-    SubshellSource, render::render_subshell_separator, settings::WarpifySettings,
+    SubshellSource, render::render_subshell_separator,
+    settings::{SshExtensionInstallMode, WarpifySettings},
 };
 use crate::terminal::{AudibleBell, SizeUpdateReason};
 use crate::terminal::{BlockListSettings, BlockListSettingsChangedEvent};
@@ -1924,6 +1925,12 @@ pub enum Event {
     /// Emitted when the user clicks "install" in the SSH remote-server choice block.
     RemoteServerInstallRequested {
         session_id: SessionId,
+    },
+    /// Emitted when the user asks to repair the SSH remote-server connection
+    /// after a ControlMaster channel error.
+    RemoteServerRetryInstallRequested {
+        session_id: SessionId,
+        socket_path: PathBuf,
     },
     /// Emitted when the user clicks "skip" in the SSH remote-server choice block.
     RemoteServerSkipRequested {
@@ -4442,6 +4449,10 @@ impl TerminalView {
                                 },
                                 ctx,
                             );
+                            me.maybe_show_remote_server_retry_choice_after_setup_failure(
+                                *session_id,
+                                ctx,
+                            );
                         }
                     }
                     RemoteServerManagerEvent::SessionDisconnected {
@@ -4521,6 +4532,10 @@ impl TerminalView {
                                 ),
                                 ctx,
                             );
+                            me.maybe_show_remote_server_retry_choice_after_setup_failure(
+                                *session_id,
+                                ctx,
+                            );
                         }
                     }
                     RemoteServerManagerEvent::BinaryCheckComplete {
@@ -4554,6 +4569,10 @@ impl TerminalView {
                                 error.user_facing_error(
                                     remote_server::transport::SetupStage::CheckBinary,
                                 ),
+                                ctx,
+                            );
+                            me.maybe_show_remote_server_retry_choice_after_setup_failure(
+                                *session_id,
                                 ctx,
                             );
                         }
@@ -8578,14 +8597,20 @@ impl TerminalView {
     /// in which case completions will not work as expected.
     fn handle_control_master_error(&mut self, ctx: &mut ViewContext<Self>) {
         let active_session_id = self.active_block_session_id();
+        let mut repair_socket_path = None;
         if let Some(session_id) = active_session_id {
-            self.sessions.update(ctx, |sessions, _| {
-                if sessions.disable_remote_command_execution_for_session(session_id) {
-                    log::warn!(
-                        "Disabled remote command execution for session {session_id:?} after SSH ControlMaster error"
-                    );
-                }
+            let (disabled_remote_execution, socket_path) = self.sessions.update(ctx, |sessions, _| {
+                (
+                    sessions.disable_remote_command_execution_for_session(session_id),
+                    sessions.legacy_ssh_socket_path_for_session(session_id),
+                )
             });
+            if disabled_remote_execution {
+                log::warn!(
+                    "Disabled remote command execution for session {session_id:?} after SSH ControlMaster error"
+                );
+                repair_socket_path = socket_path;
+            }
         }
 
         // We don't want to display the error banner a second time in a given session
@@ -8603,6 +8628,14 @@ impl TerminalView {
                 is_open: true,
                 associated_session_id: active_session_id,
             };
+
+            if let (Some(session_id), Some(socket_path)) = (active_session_id, repair_socket_path) {
+                self.handle_remote_server_repair_after_control_master_error(
+                    session_id,
+                    socket_path,
+                    ctx,
+                );
+            }
 
             ctx.notify();
 
@@ -8625,6 +8658,60 @@ impl TerminalView {
                 ctx
             );
         }
+    }
+
+    fn handle_remote_server_repair_after_control_master_error(
+        &mut self,
+        session_id: SessionId,
+        socket_path: PathBuf,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !WarpifySettings::is_ssh_remote_server_enabled(ctx) {
+            return;
+        }
+
+        match *WarpifySettings::as_ref(ctx)
+            .ssh_extension_install_mode
+            .value()
+        {
+            SshExtensionInstallMode::AlwaysAsk => {
+                self.show_ssh_remote_server_choice_block_with_mode(
+                    session_id,
+                    SshRemoteServerChoiceViewMode::RetryAfterControlMasterError,
+                    ctx,
+                );
+            }
+            SshExtensionInstallMode::AlwaysInstall => {
+                ctx.emit(Event::RemoteServerRetryInstallRequested {
+                    session_id,
+                    socket_path,
+                });
+            }
+            SshExtensionInstallMode::NeverInstall => {}
+        }
+    }
+
+    fn maybe_show_remote_server_retry_choice_after_setup_failure(
+        &mut self,
+        session_id: SessionId,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !WarpifySettings::is_ssh_remote_server_enabled(ctx)
+            || !matches!(
+                *WarpifySettings::as_ref(ctx)
+                    .ssh_extension_install_mode
+                    .value(),
+                SshExtensionInstallMode::AlwaysAsk
+            )
+        {
+            return;
+        }
+
+        self.show_ssh_remote_server_choice_block_with_mode(
+            session_id,
+            SshRemoteServerChoiceViewMode::RetryAfterSetupFailure,
+            ctx,
+        );
     }
 
     fn read_from_clipboard(
@@ -12106,6 +12193,19 @@ impl TerminalView {
         session_id: SessionId,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.show_ssh_remote_server_choice_block_with_mode(
+            session_id,
+            SshRemoteServerChoiceViewMode::InitialInstall,
+            ctx,
+        );
+    }
+
+    fn show_ssh_remote_server_choice_block_with_mode(
+        &mut self,
+        session_id: SessionId,
+        mode: SshRemoteServerChoiceViewMode,
+        ctx: &mut ViewContext<Self>,
+    ) {
         let already_present = self.rich_content_views.iter().any(|view| {
             matches!(
                 view.metadata(),
@@ -12117,17 +12217,47 @@ impl TerminalView {
             return;
         }
 
-        let choice_view =
-            ctx.add_typed_action_view(|ctx| SshRemoteServerChoiceView::new(session_id, ctx));
+        let choice_view = ctx.add_typed_action_view(|ctx| match mode {
+            SshRemoteServerChoiceViewMode::InitialInstall => {
+                SshRemoteServerChoiceView::new(session_id, ctx)
+            }
+            SshRemoteServerChoiceViewMode::RetryAfterControlMasterError
+            | SshRemoteServerChoiceViewMode::RetryAfterSetupFailure => {
+                SshRemoteServerChoiceView::new_with_mode(session_id, mode, ctx)
+            }
+        });
 
         ctx.subscribe_to_view(&choice_view, move |me, _, event, ctx| match event {
             SshRemoteServerChoiceViewEvent::Install => {
                 me.remove_ssh_remote_server_choice_block(session_id, ctx);
-                ctx.emit(Event::RemoteServerInstallRequested { session_id });
+                match mode {
+                    SshRemoteServerChoiceViewMode::InitialInstall => {
+                        ctx.emit(Event::RemoteServerInstallRequested { session_id });
+                    }
+                    SshRemoteServerChoiceViewMode::RetryAfterControlMasterError
+                    | SshRemoteServerChoiceViewMode::RetryAfterSetupFailure => {
+                        if let Some(socket_path) = me
+                            .sessions
+                            .as_ref(ctx)
+                            .legacy_ssh_socket_path_for_session(session_id)
+                        {
+                            ctx.emit(Event::RemoteServerRetryInstallRequested {
+                                session_id,
+                                socket_path,
+                            });
+                        } else {
+                            log::warn!(
+                                "Remote server repair requested without SSH ControlMaster socket: session={session_id:?}"
+                            );
+                        }
+                    }
+                }
             }
             SshRemoteServerChoiceViewEvent::Skip => {
                 me.remove_ssh_remote_server_choice_block(session_id, ctx);
-                ctx.emit(Event::RemoteServerSkipRequested { session_id });
+                if matches!(mode, SshRemoteServerChoiceViewMode::InitialInstall) {
+                    ctx.emit(Event::RemoteServerSkipRequested { session_id });
+                }
             }
             SshRemoteServerChoiceViewEvent::OpenWarpifySettings => {
                 ctx.emit(Event::OpenSettings(SettingsSection::Warpify));
