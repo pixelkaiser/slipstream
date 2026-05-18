@@ -8578,6 +8578,16 @@ impl TerminalView {
     /// in which case completions will not work as expected.
     fn handle_control_master_error(&mut self, ctx: &mut ViewContext<Self>) {
         let active_session_id = self.active_block_session_id();
+        if let Some(session_id) = active_session_id {
+            self.sessions.update(ctx, |sessions, _| {
+                if sessions.disable_remote_command_execution_for_session(session_id) {
+                    log::warn!(
+                        "Disabled remote command execution for session {session_id:?} after SSH ControlMaster error"
+                    );
+                }
+            });
+        }
+
         // We don't want to display the error banner a second time in a given session
         // if the user has already closed it.  When we open the banner initially, we
         // store the session ID in here, so if the stored value matches the current

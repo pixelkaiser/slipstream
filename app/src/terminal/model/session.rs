@@ -298,6 +298,15 @@ impl Sessions {
         self.remote_server_setup_states.get(&session_id)
     }
 
+    pub fn disable_remote_command_execution_for_session(
+        &mut self,
+        session_id: SessionId,
+    ) -> bool {
+        self.sessions
+            .get(&session_id)
+            .is_some_and(|session| session.disable_remote_command_execution())
+    }
+
     pub fn register_pending_session(
         &mut self,
         session_info: &SessionInfo,
@@ -949,6 +958,20 @@ impl Session {
         if let SessionType::WarpifiedRemote { host_id: ref mut h } = *st {
             *h = host_id;
         }
+    }
+
+    /// Disables Warp remote-session capabilities that rely on opening
+    /// background command channels, while keeping the foreground SSH PTY alive.
+    pub fn disable_remote_command_execution(&self) -> bool {
+        if !matches!(self.session_type(), SessionType::WarpifiedRemote { .. })
+            && !self.is_legacy_ssh_session()
+        {
+            return false;
+        }
+
+        self.set_remote_host_id(None);
+        self.set_command_executor(Arc::new(NoOpCommandExecutor::new()));
+        true
     }
 
     pub fn shell_family(&self) -> ShellFamily {
