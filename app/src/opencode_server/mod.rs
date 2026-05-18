@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use settings::Setting as _;
 use warpui::{r#async::Timer, Entity, ModelContext, SingletonEntity};
 
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::settings::{
@@ -511,6 +512,38 @@ impl OpenCodeServerModel {
                         ctx.emit(OpenCodeServerModelEvent::StatusChanged);
                         ctx.emit(OpenCodeServerModelEvent::ActiveSessionChanged);
                     }
+                }
+            },
+        );
+    }
+
+    pub fn delete_session(&mut self, session_id: String, ctx: &mut ModelContext<Self>) {
+        let settings = OpenCodeServerSettings::as_ref(ctx);
+        if !*settings.enabled {
+            return;
+        }
+        let config = match OpenCodeServerConfig::from_settings(settings) {
+            Ok(config) => config,
+            Err(error) => {
+                self.status = OpenCodeServerStatus::Disconnected {
+                    message: error.to_string(),
+                };
+                ctx.emit(OpenCodeServerModelEvent::StatusChanged);
+                return;
+            }
+        };
+
+        let directory = self.directory_for_session(&session_id);
+        let callback_session_id = session_id.clone();
+        let _ = ctx.spawn(
+            async move { delete_session_request(&config, &session_id, directory.as_deref()).await },
+            move |model, result, ctx| match result {
+                Ok(()) => model.remove_session_locally(&callback_session_id, ctx),
+                Err(error) => {
+                    model.status = OpenCodeServerStatus::Disconnected {
+                        message: format!("{error:#}"),
+                    };
+                    ctx.emit(OpenCodeServerModelEvent::StatusChanged);
                 }
             },
         );
@@ -1109,6 +1142,39 @@ impl OpenCodeServerModel {
         self.session_id_by_conversation_id
             .insert(conversation_id, session_id);
     }
+
+    fn remove_session_locally(&mut self, session_id: &str, ctx: &mut ModelContext<Self>) {
+        self.sessions.retain(|session| session.id != session_id);
+
+        if self.opening_session_id.as_deref() == Some(session_id) {
+            self.opening_session_id = None;
+        }
+        if self.local_turn_session_id.as_deref() == Some(session_id) {
+            self.local_turn_session_id = None;
+        }
+        self.clear_pending_requests_for_session(session_id, ctx);
+
+        if self
+            .active_session
+            .as_ref()
+            .is_some_and(|session| session.summary.id == session_id)
+        {
+            self.stop_active_session_polling();
+            self.active_session = None;
+            ctx.emit(OpenCodeServerModelEvent::ActiveSessionChanged);
+        }
+
+        if let Some(conversation_id) = self.conversation_id_by_session_id.remove(session_id) {
+            self.session_id_by_conversation_id.remove(&conversation_id);
+            let terminal_view_id = ActiveAgentViewsModel::as_ref(ctx)
+                .get_terminal_view_id_for_conversation(conversation_id, ctx);
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.delete_conversation(conversation_id, terminal_view_id, ctx);
+            });
+        }
+
+        ctx.emit(OpenCodeServerModelEvent::SessionsChanged);
+    }
 }
 
 impl Entity for OpenCodeServerModel {
@@ -1467,6 +1533,22 @@ async fn create_session(
     .into_summary();
     let session_id = summary.id.clone();
     read_session(config, &session_id, Some(summary)).await
+}
+
+async fn delete_session_request(
+    config: &OpenCodeServerConfig,
+    session_id: &str,
+    directory: Option<&Path>,
+) -> Result<()> {
+    let path = format!("/session/{session_id}");
+    let _deleted: bool = request_json(
+        config,
+        Method::DELETE,
+        directory_url(config, &path, directory),
+        None,
+    )
+    .await?;
+    Ok(())
 }
 
 async fn prompt_session(
