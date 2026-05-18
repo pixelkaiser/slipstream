@@ -15,6 +15,7 @@ use settings::Setting as _;
 use warpui::{r#async::Timer, Entity, EntityId, ModelContext, SingletonEntity};
 use websocket::{Message, WebSocket, WebsocketMessage as _};
 
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
@@ -717,6 +718,37 @@ impl CodexAppServerModel {
         );
     }
 
+    pub fn delete_thread(&mut self, thread_id: String, ctx: &mut ModelContext<Self>) {
+        let settings = CodexAppServerSettings::as_ref(ctx);
+        if !*settings.enabled {
+            return;
+        }
+        let config = match CodexAppServerConfig::from_settings(settings) {
+            Ok(config) => config,
+            Err(error) => {
+                self.status = CodexAppServerStatus::Disconnected {
+                    message: error.to_string(),
+                };
+                ctx.emit(CodexAppServerModelEvent::StatusChanged);
+                return;
+            }
+        };
+
+        let callback_thread_id = thread_id.clone();
+        let _ = ctx.spawn(
+            async move { archive_thread(&config, &thread_id).await },
+            move |model, result, ctx| match result {
+                Ok(()) => model.remove_thread_locally(&callback_thread_id, ctx),
+                Err(error) => {
+                    model.status = CodexAppServerStatus::Disconnected {
+                        message: format!("{error:#}"),
+                    };
+                    ctx.emit(CodexAppServerModelEvent::StatusChanged);
+                }
+            },
+        );
+    }
+
     pub fn start_new_conversation(&mut self, ctx: &mut ModelContext<Self>) {
         let settings = CodexAppServerSettings::as_ref(ctx);
         if !*settings.enabled {
@@ -1305,6 +1337,44 @@ impl CodexAppServerModel {
             .insert(conversation_id, thread_id);
     }
 
+    fn remove_thread_locally(&mut self, thread_id: &str, ctx: &mut ModelContext<Self>) {
+        self.threads.retain(|thread| thread.id != thread_id);
+
+        if self.opening_thread_id.as_deref() == Some(thread_id) {
+            self.opening_thread_id = None;
+        }
+        if self.local_turn_thread_id.as_deref() == Some(thread_id) {
+            self.local_turn_thread_id = None;
+        }
+        if self
+            .active_turn
+            .as_ref()
+            .is_some_and(|turn| turn.thread_id == thread_id)
+        {
+            self.active_turn = None;
+        }
+        if self
+            .active_thread
+            .as_ref()
+            .is_some_and(|thread| thread.summary.id == thread_id)
+        {
+            self.stop_active_thread_polling();
+            self.active_thread = None;
+            ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
+        }
+
+        if let Some(conversation_id) = self.conversation_id_by_thread_id.remove(thread_id) {
+            self.thread_id_by_conversation_id.remove(&conversation_id);
+            let terminal_view_id = ActiveAgentViewsModel::as_ref(ctx)
+                .get_terminal_view_id_for_conversation(conversation_id, ctx);
+            BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+                history.delete_conversation(conversation_id, terminal_view_id, ctx);
+            });
+        }
+
+        ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
+    }
+
     fn collaboration_mode_model_id(&self) -> Option<String> {
         self.selected_model_id.clone().or_else(|| {
             self.models
@@ -1713,6 +1783,11 @@ async fn continue_thread(
     client.collect_turn_progress(thread_id.to_string()).await
 }
 
+async fn archive_thread(config: &CodexAppServerConfig, thread_id: &str) -> Result<()> {
+    let _ = json_rpc_request(config, "thread/archive", thread_archive_params(thread_id)).await?;
+    Ok(())
+}
+
 fn thread_start_params(model_id: Option<&str>, cwd: Option<&PathBuf>) -> Value {
     let mut params = serde_json::Map::new();
     params.insert("approvalPolicy".to_string(), json!(CODEX_APPROVAL_POLICY));
@@ -1741,6 +1816,10 @@ fn thread_resume_params(thread_id: &str, model_id: Option<&str>) -> Value {
         params.insert("model".to_string(), json!(model_id));
     }
     Value::Object(params)
+}
+
+fn thread_archive_params(thread_id: &str) -> Value {
+    json!({ "threadId": thread_id })
 }
 
 fn turn_start_params(

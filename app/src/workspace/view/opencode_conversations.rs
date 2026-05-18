@@ -2,12 +2,14 @@
 
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
+use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warpui::{
     elements::{
-        Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, Padding,
-        ParentElement, Radius, Shrinkable, Text,
+        Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+        CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+        MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement,
+        ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
     },
     fonts::{Properties, Weight},
     platform::Cursor,
@@ -30,8 +32,10 @@ use crate::{
         opencode_session_updated_at_utc, opencode_start_command, OpenCodeServerModel,
         OpenCodeServerModelEvent, OpenCodeServerStatus, OpenCodeSessionSummary,
     },
+    menu::{Event as MenuEvent, Menu, MenuItemFields},
     settings::OpenCodeServerSettings,
     ui_components::icons::Icon,
+    ui_components::menu_button::{icon_button_with_context_menu, MenuDirection},
     util::time_format::format_approx_duration_from_now_utc,
     workspace::{RestoreConversationLayout, WorkspaceAction},
 };
@@ -41,14 +45,24 @@ pub enum OpenCodeConversationsAction {
     Refresh,
     NewConversation,
     OpenSession(String),
+    ToggleSessionMenu(String),
+    DeleteSession(String),
+}
+
+#[derive(Clone, Debug)]
+struct OpenCodeOverflowMenuState {
+    session_id: String,
 }
 
 pub struct OpenCodeConversationsView {
     model: ModelHandle<OpenCodeServerModel>,
     query_editor: ViewHandle<EditorView>,
+    session_overflow_menu: ViewHandle<Menu<OpenCodeConversationsAction>>,
+    overflow_menu_state: Option<OpenCodeOverflowMenuState>,
     refresh_button: MouseStateHandle,
     new_conversation_button: MouseStateHandle,
     session_buttons: RefCell<HashMap<String, MouseStateHandle>>,
+    session_overflow_buttons: RefCell<HashMap<String, MouseStateHandle>>,
 }
 
 impl OpenCodeConversationsView {
@@ -105,12 +119,28 @@ impl OpenCodeConversationsView {
             }
         });
 
+        let session_overflow_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .prevent_interaction_with_other_elements()
+                .with_width(160.)
+        });
+        ctx.subscribe_to_view(&session_overflow_menu, |me, _, event, ctx| match event {
+            MenuEvent::Close { .. } => {
+                me.overflow_menu_state = None;
+                ctx.notify();
+            }
+            MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
+        });
+
         Self {
             model,
             query_editor,
+            session_overflow_menu,
+            overflow_menu_state: None,
             refresh_button: Default::default(),
             new_conversation_button: Default::default(),
             session_buttons: Default::default(),
+            session_overflow_buttons: Default::default(),
         }
     }
 
@@ -254,7 +284,19 @@ impl OpenCodeConversationsView {
     ) -> Box<dyn Element> {
         let mut buttons = self.session_buttons.borrow_mut();
         let mouse_state = buttons.entry(session.id.clone()).or_default().clone();
+        let overflow_button_state = self
+            .session_overflow_buttons
+            .borrow_mut()
+            .entry(session.id.clone())
+            .or_default()
+            .clone();
         let action = OpenCodeConversationsAction::OpenSession(session.id.clone());
+        let menu_action = OpenCodeConversationsAction::ToggleSessionMenu(session.id.clone());
+        let overflow_menu = self.session_overflow_menu.clone();
+        let is_menu_open = self
+            .overflow_menu_state
+            .as_ref()
+            .is_some_and(|state| state.session_id == session.id);
         let theme = appearance.theme();
         let font_family = appearance.ui_font_family();
         let font_size = appearance.ui_font_size();
@@ -304,7 +346,7 @@ impl OpenCodeConversationsView {
             .with_child(bottom_row.finish())
             .finish();
 
-        Hoverable::new(mouse_state, move |_| {
+        Hoverable::new(mouse_state, move |state| {
             let container = Container::new(row)
                 .with_horizontal_padding(12.)
                 .with_padding_top(8.)
@@ -314,8 +356,38 @@ impl OpenCodeConversationsView {
             } else {
                 container
             };
-            container.finish()
+            let mut stack = Stack::new().with_child(container.finish());
+            if state.is_hovered() || is_menu_open {
+                let button_style = UiComponentStyles::default()
+                    .set_background(theme.surface_2().into())
+                    .set_border_color(theme.surface_3().into());
+                let overflow_button = icon_button_with_context_menu(
+                    Icon::DotsVertical,
+                    {
+                        let menu_action = menu_action.clone();
+                        move |ctx, _, _| ctx.dispatch_typed_action(menu_action.clone())
+                    },
+                    overflow_button_state.clone(),
+                    &overflow_menu,
+                    is_menu_open,
+                    MenuDirection::Left,
+                    Some(Cursor::PointingHand),
+                    Some(button_style),
+                    appearance,
+                );
+                stack.add_positioned_child(
+                    overflow_button.finish(),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(-8., 6.),
+                        ParentOffsetBounds::ParentByPosition,
+                        ParentAnchor::TopRight,
+                        ChildAnchor::TopRight,
+                    ),
+                );
+            }
+            stack.finish()
         })
+        .with_defer_events_to_children()
         .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
         .with_cursor(Cursor::PointingHand)
         .finish()
@@ -408,6 +480,36 @@ impl TypedActionView for OpenCodeConversationsView {
                 self.model.update(ctx, |model, ctx| {
                     model.open_session_as_conversation(session_id.clone(), ctx);
                 });
+            }
+            OpenCodeConversationsAction::ToggleSessionMenu(session_id) => {
+                let is_open_for_same_session = self
+                    .overflow_menu_state
+                    .as_ref()
+                    .is_some_and(|state| state.session_id == *session_id);
+                if is_open_for_same_session {
+                    self.overflow_menu_state = None;
+                } else {
+                    self.overflow_menu_state = Some(OpenCodeOverflowMenuState {
+                        session_id: session_id.clone(),
+                    });
+                    let delete_item = MenuItemFields::new("Delete")
+                        .with_override_text_color(Appearance::as_ref(ctx).theme().ansi_fg_red())
+                        .with_on_select_action(OpenCodeConversationsAction::DeleteSession(
+                            session_id.clone(),
+                        ))
+                        .into_item();
+                    self.session_overflow_menu.update(ctx, |menu, ctx| {
+                        menu.set_items(vec![delete_item], ctx);
+                    });
+                }
+                ctx.notify();
+            }
+            OpenCodeConversationsAction::DeleteSession(session_id) => {
+                self.overflow_menu_state = None;
+                self.model.update(ctx, |model, ctx| {
+                    model.delete_session(session_id.clone(), ctx);
+                });
+                ctx.notify();
             }
         }
     }
