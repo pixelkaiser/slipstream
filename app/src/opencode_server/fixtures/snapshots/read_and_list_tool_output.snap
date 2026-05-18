@@ -1,0 +1,30 @@
+agent_text:
+  I will inspect the fixture.
+
+  commandExecution: list /private/tmp/opencode-warp-e2e-fixture
+
+  commandExecution/output: "/private/tmp/opencode-warp-e2e-fixture/\nnotes.txt\nREADME.md\n\n(2 entries)"
+
+  readFiles: {"files":[{"content":"# Slipstream\nLocal agent integrations live here.\n","path":"/Users/te/dev/warp/README.md"}]}
+
+  commandExecution: list /Users/te/dev/warp
+
+  commandExecution/output: "/Users/te/dev/warp/\n  README.md\n  app/\n  crates/\n"
+
+  Done.
+render_model:
+- text:
+  I will inspect the fixture.
+
+- action: request_command_output
+  command: list /private/tmp/opencode-warp-e2e-fixture
+  result_output: "/private/tmp/opencode-warp-e2e-fixture/\nnotes.txt\nREADME.md\n\n(2 entries)"
+- action: read_files
+  files: /Users/te/dev/warp/README.md
+  result_file: /Users/te/dev/warp/README.md
+  result_line_count: 2
+- action: request_command_output
+  command: list /Users/te/dev/warp
+  result_output: "/Users/te/dev/warp/\n  README.md\n  app/\n  crates/\n"
+- text:
+  Done.

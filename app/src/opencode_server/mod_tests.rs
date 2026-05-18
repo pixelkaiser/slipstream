@@ -9,7 +9,7 @@ use super::*;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId};
 use crate::ai::agent::{
     AIAgentActionResultType, AIAgentActionType, AIAgentInput, AIAgentOutputMessageType,
-    RequestCommandOutputResult,
+    ReadFilesResult, RequestCommandOutputResult,
 };
 
 #[test]
@@ -121,6 +121,112 @@ fn project_matching_keeps_imported_project_fallback() {
 }
 
 #[test]
+fn session_summary_filters_opencode_child_sessions() {
+    let parent = serde_json::from_value::<OpenCodeSessionWire>(json!({
+        "id": "ses_parent",
+        "title": "Parent session",
+        "projectID": "project-1",
+        "directory": "/Users/te/dev/warp",
+        "time": { "updated": 1777040510640i64 }
+    }))
+    .unwrap();
+    let child = serde_json::from_value::<OpenCodeSessionWire>(json!({
+        "id": "ses_child",
+        "parentID": "ses_parent",
+        "title": "Find files (@explore subagent)",
+        "projectID": "project-1",
+        "directory": "/Users/te/dev/warp",
+        "time": { "updated": 1777040510641i64 }
+    }))
+    .unwrap();
+    let statuses = HashMap::from([("ses_parent".to_string(), "idle".to_string())]);
+
+    let parent_summary =
+        session_summary_for_directory(parent, Path::new("/Users/te/dev/warp"), &statuses).unwrap();
+    let child_summary =
+        session_summary_for_directory(child, Path::new("/Users/te/dev/warp"), &statuses);
+
+    assert_eq!(parent_summary.id, "ses_parent");
+    assert_eq!(parent_summary.status.as_deref(), Some("idle"));
+    assert!(child_summary.is_none());
+}
+
+#[test]
+fn prompt_result_prefers_full_session_detail_for_live_response() {
+    let prompt = "please say hello";
+    let output_items = vec![OpenCodeConversationItem {
+        role: "user".to_string(),
+        text: prompt.to_string(),
+    }];
+    let detail = session_detail(vec![
+        OpenCodeConversationItem {
+            role: "user".to_string(),
+            text: prompt.to_string(),
+        },
+        OpenCodeConversationItem {
+            role: "assistant".to_string(),
+            text: "Hello from the full session detail.".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        opencode_prompt_result_output_text(&output_items, Some(&detail), prompt),
+        "Hello from the full session detail."
+    );
+}
+
+#[test]
+fn prompt_result_uses_latest_matching_detail_turn() {
+    let prompt = "repeat this";
+    let detail = session_detail(vec![
+        OpenCodeConversationItem {
+            role: "user".to_string(),
+            text: prompt.to_string(),
+        },
+        OpenCodeConversationItem {
+            role: "assistant".to_string(),
+            text: "old response".to_string(),
+        },
+        OpenCodeConversationItem {
+            role: "user".to_string(),
+            text: prompt.to_string(),
+        },
+        OpenCodeConversationItem {
+            role: "assistant".to_string(),
+            text: "fresh response".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        opencode_prompt_result_output_text(&[], Some(&detail), prompt),
+        "fresh response"
+    );
+}
+
+#[test]
+fn prompt_result_does_not_use_stale_detail_for_different_prompt() {
+    let output_items = vec![OpenCodeConversationItem {
+        role: "assistant".to_string(),
+        text: "fresh immediate response".to_string(),
+    }];
+    let detail = session_detail(vec![
+        OpenCodeConversationItem {
+            role: "user".to_string(),
+            text: "previous prompt".to_string(),
+        },
+        OpenCodeConversationItem {
+            role: "assistant".to_string(),
+            text: "stale response".to_string(),
+        },
+    ]);
+
+    assert_eq!(
+        opencode_prompt_result_output_text(&output_items, Some(&detail), "new prompt"),
+        "fresh immediate response"
+    );
+}
+
+#[test]
 fn parses_message_parts_into_readable_items() {
     let messages = vec![
         message(
@@ -156,6 +262,75 @@ fn parses_message_parts_into_readable_items() {
         .contains("commandExecution/output: \"app\\ncrates\""));
     assert!(items[1].text.contains("Patch applied: app/src/lib.rs"));
     assert!(items[1].text.contains("Subtask (build): Run checks"));
+}
+
+#[test]
+fn parses_real_opencode_read_and_list_tools_into_boxed_actions() {
+    let messages = vec![
+        message(
+            "user",
+            vec![json!({"type": "text", "text": "inspect files"})],
+            None,
+            None,
+        ),
+        message(
+            "assistant",
+            vec![
+                json!({"type": "text", "text": "I will inspect the fixture."}),
+                json!({
+                    "type": "tool",
+                    "callID": "read-directory-1",
+                    "tool": "read",
+                    "state": {
+                        "status": "completed",
+                        "input": { "filePath": "/private/tmp/opencode-warp-e2e-fixture", "offset": 1, "limit": 2000 },
+                        "output": "<path>/private/tmp/opencode-warp-e2e-fixture</path>\n<type>directory</type>\n<entries>\nnotes.txt\nREADME.md\n\n(2 entries)\n</entries>",
+                        "metadata": {
+                            "preview": "notes.txt\nREADME.md",
+                            "truncated": false,
+                            "loaded": []
+                        },
+                        "title": "private/tmp/opencode-warp-e2e-fixture"
+                    }
+                }),
+                json!({
+                    "type": "tool",
+                    "callID": "read-1",
+                    "tool": "read",
+                    "state": {
+                        "status": "completed",
+                        "input": { "filePath": "/Users/te/dev/warp/README.md" },
+                        "output": "<path>/Users/te/dev/warp/README.md</path>\n<type>file</type>\n<content>1: # Slipstream\n2: Local agent integrations live here.\n\n(End of file - total 2 lines)\n</content>",
+                        "title": "README.md"
+                    }
+                }),
+                json!({
+                    "type": "tool",
+                    "callID": "list-1",
+                    "tool": "list",
+                    "state": {
+                        "status": "completed",
+                        "input": { "path": "/Users/te/dev/warp" },
+                        "output": "/Users/te/dev/warp/\n  README.md\n  app/\n  crates/\n",
+                        "title": ""
+                    }
+                }),
+                json!({"type": "text", "text": "Done."}),
+            ],
+            None,
+            None,
+        ),
+    ];
+    let items = messages_to_conversation_items(&messages);
+    let assistant_items = items
+        .into_iter()
+        .filter(|item| item.role != "user")
+        .collect::<Vec<_>>();
+
+    assert_fixture_snapshot(
+        opencode_agent_output_snapshot(&assistant_items),
+        "src/opencode_server/fixtures/snapshots/read_and_list_tool_output.snap",
+    );
 }
 
 #[test]
@@ -320,24 +495,36 @@ fn opencode_shell_tool_snapshot_keeps_output_in_command_action() {
     let messages = vec![
         message(
             "user",
-            vec![json!({"type": "text", "text": "inspect the repo"})],
+            vec![json!({"type": "text", "text": "list files"})],
             None,
             None,
         ),
         message(
             "assistant",
             vec![
-                json!({"type": "text", "text": "I will inspect the repo."}),
+                json!({"type": "text", "text": "I will list the files."}),
                 json!({
                     "type": "tool",
                     "tool": "bash",
                     "state": {
                         "status": "completed",
-                        "title": "git status --short",
-                        "output": " M app/src/opencode_server/mod.rs\n"
+                        "input": {
+                            "command": "ls",
+                            "timeout": 120000,
+                            "workdir": "/private/tmp/opencode-warp-command-detail-repro",
+                            "description": "Lists files in current directory"
+                        },
+                        "output": "a.txt\nb.txt\n",
+                        "metadata": {
+                            "output": "a.txt\nb.txt\n",
+                            "exit": 0,
+                            "description": "Lists files in current directory",
+                            "truncated": false
+                        },
+                        "title": "Lists files in current directory"
                     }
                 }),
-                json!({"type": "text", "text": "Done."}),
+                json!({"type": "text", "text": "Files listed."}),
             ],
             None,
             None,
@@ -382,10 +569,29 @@ fn message(
     }
 }
 
+fn session_detail(items: Vec<OpenCodeConversationItem>) -> OpenCodeSessionDetail {
+    OpenCodeSessionDetail {
+        summary: OpenCodeSessionSummary {
+            id: "ses_test".to_string(),
+            title: "Test session".to_string(),
+            directory: Some(PathBuf::from("/Users/te/dev/warp")),
+            project_id: Some("project-test".to_string()),
+            updated_at: Some(1777040510640),
+            status: None,
+        },
+        items,
+    }
+}
+
 fn assert_fixture_snapshot(actual: String, relative_path: &str) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
     let expected = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("Could not read snapshot {}: {error}", path.display()));
+        .unwrap_or_else(|error| {
+            panic!(
+                "Could not read snapshot {}: {error}\n\nactual snapshot:\n{actual}",
+                path.display()
+            )
+        });
     assert_eq!(actual.trim_end(), expected.trim_end(), "{}", path.display());
 }
 
@@ -481,6 +687,37 @@ fn agent_render_model_snapshot(output_text: String) -> String {
                             RequestCommandOutputResult::Completed { output, .. },
                         )) => {
                             writeln!(snapshot, "  result_output: {output:?}").unwrap();
+                        }
+                        Some(result) => {
+                            writeln!(snapshot, "  result: {result:?}").unwrap();
+                        }
+                        None => {
+                            writeln!(snapshot, "  result: <missing>").unwrap();
+                        }
+                    }
+                }
+                AIAgentActionType::ReadFiles(request) => {
+                    writeln!(snapshot, "- action: read_files").unwrap();
+                    writeln!(
+                        snapshot,
+                        "  files: {}",
+                        request
+                            .locations
+                            .iter()
+                            .map(|location| location.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                    .unwrap();
+                    match action_results.get(&action.id).map(|result| &result.result) {
+                        Some(AIAgentActionResultType::ReadFiles(ReadFilesResult::Success {
+                            files,
+                        })) => {
+                            for file in files {
+                                writeln!(snapshot, "  result_file: {}", file.file_name).unwrap();
+                                writeln!(snapshot, "  result_line_count: {}", file.line_count)
+                                    .unwrap();
+                            }
                         }
                         Some(result) => {
                             writeln!(snapshot, "  result: {result:?}").unwrap();
