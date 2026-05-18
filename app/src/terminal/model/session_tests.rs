@@ -1,12 +1,13 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use warpui::elements::Empty;
 use warpui::platform::WindowStyle;
 use warpui::{App, AppContext, Element, Entity, ModelHandle, TypedActionView, View, ViewContext};
 
-use super::command_executor::testing::TestCommandExecutor;
-use super::{BootstrapSessionType, Session, SessionId, SessionInfo, Sessions, SessionsEvent};
+use super::{
+    command_executor::{testing::TestCommandExecutor, NoOpCommandExecutor},
+    BootstrapSessionType, Session, SessionId, SessionInfo, SessionType, Sessions, SessionsEvent,
+};
 
 struct TestView {
     events: Vec<SessionsEvent>,
@@ -126,5 +127,66 @@ fn test_malicious_histfile_path_does_not_execute_injected_commands() {
             !std::path::Path::new(marker).exists(),
             "Injected command executed — escaping regression!"
         );
+    });
+}
+
+#[test]
+fn disable_remote_command_execution_replaces_executor_without_marking_session_local() {
+    App::test((), |mut app| async move {
+        let model_handle = app.add_model(|_| {
+            Sessions::new_for_test()
+                .with_command_executor(Arc::new(TestCommandExecutor::default()))
+        });
+        let session_id: SessionId = 42.into();
+
+        model_handle.update(&mut app, |sessions, ctx| {
+            let session_info = SessionInfo::new_for_test()
+                .with_id(session_id)
+                .with_session_type(BootstrapSessionType::WarpifiedRemote)
+                .with_ssh_socket_path(PathBuf::from("/tmp/warp-test-control-socket"));
+            sessions.initialize_bootstrapped_session(
+                session_info,
+                "ssh root@example.com".to_owned(),
+                Vec::new(),
+                None,
+                ctx,
+            );
+        });
+
+        model_handle.read(&app, |sessions, _| {
+            let session = sessions.get(session_id).expect("session should exist");
+            assert_eq!(
+                session.session_type(),
+                SessionType::WarpifiedRemote { host_id: None }
+            );
+            assert!(
+                session
+                    .command_executor
+                    .read()
+                    .as_any()
+                    .downcast_ref::<TestCommandExecutor>()
+                    .is_some()
+            );
+        });
+
+        model_handle.update(&mut app, |sessions, _| {
+            assert!(sessions.disable_remote_command_execution_for_session(session_id));
+        });
+
+        model_handle.read(&app, |sessions, _| {
+            let session = sessions.get(session_id).expect("session should exist");
+            assert_eq!(
+                session.session_type(),
+                SessionType::WarpifiedRemote { host_id: None }
+            );
+            assert!(
+                session
+                    .command_executor
+                    .read()
+                    .as_any()
+                    .downcast_ref::<NoOpCommandExecutor>()
+                    .is_some()
+            );
+        });
     });
 }
