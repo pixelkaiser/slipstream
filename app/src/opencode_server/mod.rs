@@ -650,6 +650,7 @@ impl OpenCodeServerModel {
         self.local_turn_session_id = Some(session_id.clone());
         let selected_model = self.selected_model();
         let callback_session_id = session_id.clone();
+        let prompt_for_result = prompt.clone();
         self.start_pending_request_polling(session_id.clone(), ctx);
         let _ = ctx.spawn(
             async move {
@@ -665,7 +666,11 @@ impl OpenCodeServerModel {
             move |model, result, ctx| {
                 let (output_text, is_error, detail) = match result {
                     Ok(result) => {
-                        let output_text = opencode_items_to_agent_text(&result.output_items);
+                        let output_text = opencode_prompt_result_output_text(
+                            &result.output_items,
+                            result.detail.as_ref(),
+                            &prompt_for_result,
+                        );
                         (
                             if output_text.trim().is_empty() {
                                 "OpenCode returned no response text.".to_string()
@@ -1391,15 +1396,24 @@ async fn list_sessions_for_directory(
     let sessions: Vec<OpenCodeSessionWire> = request_json(config, Method::GET, url, None).await?;
     Ok(sessions
         .into_iter()
-        .map(|session| {
-            let mut summary = session.into_summary();
-            if summary.directory.is_none() {
-                summary.directory = Some(directory.to_path_buf());
-            }
-            summary.status = statuses.get(&summary.id).cloned();
-            summary
-        })
+        .filter_map(|session| session_summary_for_directory(session, directory, statuses))
         .collect())
+}
+
+fn session_summary_for_directory(
+    session: OpenCodeSessionWire,
+    directory: &Path,
+    statuses: &HashMap<String, String>,
+) -> Option<OpenCodeSessionSummary> {
+    if session.parent_id.is_some() {
+        return None;
+    }
+    let mut summary = session.into_summary();
+    if summary.directory.is_none() {
+        summary.directory = Some(directory.to_path_buf());
+    }
+    summary.status = statuses.get(&summary.id).cloned();
+    Some(summary)
 }
 
 async fn read_session(
@@ -1678,6 +1692,8 @@ struct OpenCodeSessionWire {
     id: String,
     title: Option<String>,
     slug: Option<String>,
+    #[serde(rename = "parentID", alias = "parentId", alias = "parent_id")]
+    parent_id: Option<String>,
     #[serde(rename = "projectID")]
     project_id: Option<String>,
     directory: Option<PathBuf>,
@@ -1875,6 +1891,15 @@ fn part_to_response_text(part: &Value) -> Option<String> {
 fn tool_part_to_text(part: &Value) -> Option<String> {
     let tool = part.get("tool").and_then(Value::as_str).unwrap_or("tool");
     let state = part.get("state")?;
+    if let Some(read_directory) = opencode_read_tool_to_directory_command_markers(tool, state) {
+        return Some(read_directory);
+    }
+    if let Some(read_files) = opencode_read_tool_to_read_files_marker(tool, state) {
+        return Some(read_files);
+    }
+    if let Some(list_command) = opencode_list_tool_to_command_markers(tool, state) {
+        return Some(list_command);
+    }
     if let Some(command) = opencode_shell_tool_command(tool, state) {
         return Some(opencode_shell_tool_to_command_markers(command, state));
     }
@@ -1906,6 +1931,132 @@ fn tool_part_to_text(part: &Value) -> Option<String> {
     }
 }
 
+fn opencode_read_tool_to_read_files_marker(tool: &str, state: &Value) -> Option<String> {
+    if !tool.eq_ignore_ascii_case("read") {
+        return None;
+    }
+    let status = state
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| state.get("type").and_then(Value::as_str));
+    if status != Some("completed") {
+        return None;
+    }
+
+    let path = state
+        .get("input")
+        .and_then(|input| input.get("filePath"))
+        .and_then(Value::as_str)
+        .or_else(|| state.get("title").and_then(Value::as_str))?;
+    let output = state.get("output").and_then(Value::as_str)?;
+    let content = opencode_read_tool_content(output)?;
+    let marker = json!({
+        "files": [{
+            "path": path,
+            "content": content,
+        }],
+    });
+    Some(format!("readFiles: {marker}"))
+}
+
+fn opencode_read_tool_to_directory_command_markers(tool: &str, state: &Value) -> Option<String> {
+    if !tool.eq_ignore_ascii_case("read") {
+        return None;
+    }
+    let status = state
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| state.get("type").and_then(Value::as_str));
+    if status != Some("completed") {
+        return None;
+    }
+
+    let path = state
+        .get("input")
+        .and_then(|input| input.get("filePath"))
+        .and_then(Value::as_str)
+        .or_else(|| state.get("title").and_then(Value::as_str))?;
+    let output = state.get("output").and_then(Value::as_str)?;
+    if tagged_content(output, "type").map(str::trim) != Some("directory") {
+        return None;
+    }
+    let entries = tagged_content(output, "entries")
+        .map(|entries| entries.trim_matches('\n'))
+        .filter(|entries| !entries.trim().is_empty())?;
+    let output = format!("{}/\n{}", path.trim_end_matches('/'), entries);
+    let output = serde_json::to_string(&output).unwrap_or_else(|_| format!("{output:?}"));
+    Some(format!(
+        "commandExecution: list {}\n\ncommandExecution/output: {output}",
+        path.trim()
+    ))
+}
+
+fn opencode_list_tool_to_command_markers(tool: &str, state: &Value) -> Option<String> {
+    if !tool.eq_ignore_ascii_case("list") {
+        return None;
+    }
+    let status = state
+        .get("status")
+        .and_then(Value::as_str)
+        .or_else(|| state.get("type").and_then(Value::as_str));
+    if status != Some("completed") {
+        return None;
+    }
+
+    let path = state
+        .get("input")
+        .and_then(|input| input.get("path"))
+        .and_then(Value::as_str)
+        .or_else(|| state.get("title").and_then(Value::as_str))
+        .unwrap_or(".");
+    let output = state
+        .get("output")
+        .and_then(opencode_shell_tool_output_text)
+        .filter(|output| !output.trim().is_empty())?;
+    let output = serde_json::to_string(&output).unwrap_or_else(|_| format!("{output:?}"));
+    Some(format!(
+        "commandExecution: list {}\n\ncommandExecution/output: {output}",
+        path.trim()
+    ))
+}
+
+fn opencode_read_tool_content(output: &str) -> Option<String> {
+    let content = tagged_content(output, "content").or_else(|| tagged_content(output, "file"))?;
+    Some(strip_opencode_file_line_prefixes(content.trim_matches('\n')))
+}
+
+fn tagged_content<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = text.find(&open)? + open.len();
+    let end = text[start..].find(&close)? + start;
+    Some(&text[start..end])
+}
+
+fn strip_opencode_file_line_prefixes(content: &str) -> String {
+    content
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("(File has more lines."))
+        .filter(|line| !line.trim_start().starts_with("(End of file - total "))
+        .map(strip_opencode_file_line_prefix)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn strip_opencode_file_line_prefix(line: &str) -> String {
+    if let Some((prefix, rest)) = line.split_once('|') {
+        if prefix.trim().chars().all(|ch| ch.is_ascii_digit()) {
+            return rest.strip_prefix(' ').unwrap_or(rest).to_string();
+        }
+    }
+    if let Some((prefix, rest)) = line.split_once(':') {
+        if prefix.trim().chars().all(|ch| ch.is_ascii_digit()) {
+            return rest.strip_prefix(' ').unwrap_or(rest).to_string();
+        }
+    }
+    line.to_string()
+}
+
 fn opencode_shell_tool_command<'a>(tool: &str, state: &'a Value) -> Option<&'a str> {
     let normalized_tool = tool.to_ascii_lowercase();
     if !matches!(
@@ -1918,7 +2069,6 @@ fn opencode_shell_tool_command<'a>(tool: &str, state: &'a Value) -> Option<&'a s
     state
         .get("command")
         .and_then(Value::as_str)
-        .or_else(|| state.get("title").and_then(Value::as_str))
         .or_else(|| {
             state.get("input").and_then(|input| {
                 input
@@ -1927,6 +2077,7 @@ fn opencode_shell_tool_command<'a>(tool: &str, state: &'a Value) -> Option<&'a s
                     .or_else(|| input.get("cmd").and_then(Value::as_str))
             })
         })
+        .or_else(|| state.get("title").and_then(Value::as_str))
         .filter(|command| !command.trim().is_empty())
 }
 
@@ -2076,6 +2227,46 @@ fn append_opencode_restored_exchange(
         false,
         start_time,
     );
+}
+
+fn opencode_prompt_result_output_text(
+    output_items: &[OpenCodeConversationItem],
+    detail: Option<&OpenCodeSessionDetail>,
+    prompt: &str,
+) -> String {
+    detail
+        .and_then(|detail| latest_opencode_turn_output_for_prompt(detail, prompt))
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_else(|| opencode_items_to_agent_text(output_items))
+}
+
+fn latest_opencode_turn_output_for_prompt(
+    detail: &OpenCodeSessionDetail,
+    prompt: &str,
+) -> Option<String> {
+    let mut current_query = None;
+    let mut output_start = 0;
+    let mut latest_matching_output = None;
+
+    for (index, item) in detail.items.iter().enumerate() {
+        if item.role == "user" {
+            if current_query.is_some_and(|query| opencode_prompt_matches(query, prompt)) {
+                latest_matching_output = Some(output_start..index);
+            }
+            current_query = Some(item.text.as_str());
+            output_start = index + 1;
+        }
+    }
+
+    if current_query.is_some_and(|query| opencode_prompt_matches(query, prompt)) {
+        latest_matching_output = Some(output_start..detail.items.len());
+    }
+
+    latest_matching_output.map(|range| opencode_items_to_agent_text(&detail.items[range]))
+}
+
+fn opencode_prompt_matches(query: &str, prompt: &str) -> bool {
+    query.trim() == prompt.trim()
 }
 
 fn opencode_items_to_agent_text(items: &[OpenCodeConversationItem]) -> String {
