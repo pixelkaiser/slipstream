@@ -2,12 +2,14 @@
 
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
+use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
 use warpui::{
     elements::{
-        Border, ChildView, Clipped, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-        Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle, Padding,
-        ParentElement, Radius, Shrinkable, Text,
+        Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+        CrossAxisAlignment, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize,
+        MouseStateHandle, OffsetPositioning, Padding, ParentAnchor, ParentElement,
+        ParentOffsetBounds, Radius, Shrinkable, Stack, Text,
     },
     fonts::{Properties, Weight},
     platform::Cursor,
@@ -31,8 +33,10 @@ use crate::{
         EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
         TextOptions,
     },
+    menu::{Event as MenuEvent, Menu, MenuItemFields},
     settings::CodexAppServerSettings,
     ui_components::icons::Icon,
+    ui_components::menu_button::{icon_button_with_context_menu, MenuDirection},
     util::time_format::format_approx_duration_from_now_utc,
     workspace::{RestoreConversationLayout, WorkspaceAction},
 };
@@ -42,16 +46,26 @@ pub enum CodexConversationsAction {
     Refresh,
     NewConversation,
     OpenThread(String),
+    ToggleThreadMenu(String),
+    DeleteThread(String),
     ResolveApproval(CodexApprovalDecision),
     ResolveUserInput { question_id: String, answer: String },
+}
+
+#[derive(Clone, Debug)]
+struct CodexOverflowMenuState {
+    thread_id: String,
 }
 
 pub struct CodexConversationsView {
     model: ModelHandle<CodexAppServerModel>,
     query_editor: ViewHandle<EditorView>,
+    thread_overflow_menu: ViewHandle<Menu<CodexConversationsAction>>,
+    overflow_menu_state: Option<CodexOverflowMenuState>,
     refresh_button: MouseStateHandle,
     new_conversation_button: MouseStateHandle,
     thread_buttons: RefCell<HashMap<String, MouseStateHandle>>,
+    thread_overflow_buttons: RefCell<HashMap<String, MouseStateHandle>>,
     approval_buttons: RefCell<HashMap<CodexApprovalDecision, MouseStateHandle>>,
     user_input_buttons: RefCell<HashMap<(String, String), MouseStateHandle>>,
 }
@@ -109,12 +123,28 @@ impl CodexConversationsView {
             }
         });
 
+        let thread_overflow_menu = ctx.add_typed_action_view(|_| {
+            Menu::new()
+                .prevent_interaction_with_other_elements()
+                .with_width(160.)
+        });
+        ctx.subscribe_to_view(&thread_overflow_menu, |me, _, event, ctx| match event {
+            MenuEvent::Close { .. } => {
+                me.overflow_menu_state = None;
+                ctx.notify();
+            }
+            MenuEvent::ItemSelected | MenuEvent::ItemHovered => {}
+        });
+
         Self {
             model,
             query_editor,
+            thread_overflow_menu,
+            overflow_menu_state: None,
             refresh_button: Default::default(),
             new_conversation_button: Default::default(),
             thread_buttons: Default::default(),
+            thread_overflow_buttons: Default::default(),
             approval_buttons: Default::default(),
             user_input_buttons: Default::default(),
         }
@@ -407,7 +437,19 @@ impl CodexConversationsView {
     ) -> Box<dyn Element> {
         let mut buttons = self.thread_buttons.borrow_mut();
         let mouse_state = buttons.entry(thread.id.clone()).or_default().clone();
+        let overflow_button_state = self
+            .thread_overflow_buttons
+            .borrow_mut()
+            .entry(thread.id.clone())
+            .or_default()
+            .clone();
         let action = CodexConversationsAction::OpenThread(thread.id.clone());
+        let menu_action = CodexConversationsAction::ToggleThreadMenu(thread.id.clone());
+        let overflow_menu = self.thread_overflow_menu.clone();
+        let is_menu_open = self
+            .overflow_menu_state
+            .as_ref()
+            .is_some_and(|state| state.thread_id == thread.id);
         let theme = appearance.theme();
         let font_family = appearance.ui_font_family();
         let font_size = appearance.ui_font_size();
@@ -456,7 +498,7 @@ impl CodexConversationsView {
             .with_child(bottom_row.finish())
             .finish();
 
-        Hoverable::new(mouse_state, move |_| {
+        Hoverable::new(mouse_state, move |state| {
             let container = Container::new(row)
                 .with_horizontal_padding(12.)
                 .with_padding_top(8.)
@@ -466,8 +508,38 @@ impl CodexConversationsView {
             } else {
                 container
             };
-            container.finish()
+            let mut stack = Stack::new().with_child(container.finish());
+            if state.is_hovered() || is_menu_open {
+                let button_style = UiComponentStyles::default()
+                    .set_background(theme.surface_2().into())
+                    .set_border_color(theme.surface_3().into());
+                let overflow_button = icon_button_with_context_menu(
+                    Icon::DotsVertical,
+                    {
+                        let menu_action = menu_action.clone();
+                        move |ctx, _, _| ctx.dispatch_typed_action(menu_action.clone())
+                    },
+                    overflow_button_state.clone(),
+                    &overflow_menu,
+                    is_menu_open,
+                    MenuDirection::Left,
+                    Some(Cursor::PointingHand),
+                    Some(button_style),
+                    appearance,
+                );
+                stack.add_positioned_child(
+                    overflow_button.finish(),
+                    OffsetPositioning::offset_from_parent(
+                        vec2f(-8., 6.),
+                        ParentOffsetBounds::ParentByPosition,
+                        ParentAnchor::TopRight,
+                        ChildAnchor::TopRight,
+                    ),
+                );
+            }
+            stack.finish()
         })
+        .with_defer_events_to_children()
         .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
         .with_cursor(Cursor::PointingHand)
         .finish()
@@ -560,6 +632,36 @@ impl TypedActionView for CodexConversationsView {
                 self.model.update(ctx, |model, ctx| {
                     model.open_thread_as_conversation(thread_id.clone(), ctx);
                 });
+            }
+            CodexConversationsAction::ToggleThreadMenu(thread_id) => {
+                let is_open_for_same_thread = self
+                    .overflow_menu_state
+                    .as_ref()
+                    .is_some_and(|state| state.thread_id == *thread_id);
+                if is_open_for_same_thread {
+                    self.overflow_menu_state = None;
+                } else {
+                    self.overflow_menu_state = Some(CodexOverflowMenuState {
+                        thread_id: thread_id.clone(),
+                    });
+                    let delete_item = MenuItemFields::new("Delete")
+                        .with_override_text_color(Appearance::as_ref(ctx).theme().ansi_fg_red())
+                        .with_on_select_action(CodexConversationsAction::DeleteThread(
+                            thread_id.clone(),
+                        ))
+                        .into_item();
+                    self.thread_overflow_menu.update(ctx, |menu, ctx| {
+                        menu.set_items(vec![delete_item], ctx);
+                    });
+                }
+                ctx.notify();
+            }
+            CodexConversationsAction::DeleteThread(thread_id) => {
+                self.overflow_menu_state = None;
+                self.model.update(ctx, |model, ctx| {
+                    model.delete_thread(thread_id.clone(), ctx);
+                });
+                ctx.notify();
             }
             CodexConversationsAction::ResolveApproval(decision) => {
                 self.model.update(ctx, |model, ctx| {
