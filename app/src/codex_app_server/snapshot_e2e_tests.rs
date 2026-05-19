@@ -178,6 +178,32 @@ fn live_stream_fixture_items_and_approval(
     panic!("live stream fixture did not contain a Codex approval request");
 }
 
+fn live_stream_fixture_items(fixture: &str) -> Vec<CodexConversationItem> {
+    let mut items = Vec::new();
+    for (line_index, line) in fixture.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: Value = serde_json::from_str(line).unwrap_or_else(|error| {
+            panic!("invalid live stream record {}: {error}", line_index + 1)
+        });
+        if record.get("direction").and_then(Value::as_str) != Some("in") {
+            continue;
+        }
+        let Some(message) = record.get("message") else {
+            continue;
+        };
+        let incoming: JsonRpcIncoming = serde_json::from_value(message.clone())
+            .unwrap_or_else(|error| panic!("invalid JSON-RPC message {}: {error}", line_index + 1));
+        if let Some(params) = incoming.params {
+            if let Some(item) = parse_notification_item(incoming.method.as_deref(), &params) {
+                items.push(item);
+            }
+        }
+    }
+    items
+}
+
 fn write_indented_block(snapshot: &mut String, text: &str) {
     for line in text.lines() {
         if line.is_empty() {
@@ -273,5 +299,28 @@ fn codex_real_command_then_approval_stream_snapshot() {
     assert_fixture_snapshot(
         snapshot,
         "src/codex_app_server/fixtures/snapshots/real_command_then_approval_stream.snap",
+    );
+}
+
+#[test]
+fn codex_long_running_command_metadata_stream_snapshot() {
+    let fixture =
+        include_str!("fixtures/live_streams/long_running_command_metadata_real_codex.ndjson");
+    assert!(
+        fixture.contains("\"stdin\":\"\""),
+        "fixture must preserve the command-execution metadata event that previously leaked"
+    );
+    let items = live_stream_fixture_items(fixture);
+    let output_text = codex_items_to_agent_text(&items);
+    let mut snapshot = String::new();
+
+    writeln!(snapshot, "agent_text:").unwrap();
+    write_indented_block(&mut snapshot, &output_text);
+    writeln!(snapshot, "streaming_render_model:").unwrap();
+    snapshot.push_str(&agent_streaming_render_model_snapshot(output_text));
+
+    assert_fixture_snapshot(
+        snapshot,
+        "src/codex_app_server/fixtures/snapshots/long_running_command_metadata_stream.snap",
     );
 }
