@@ -59,6 +59,22 @@ pub struct CodexThreadSummary {
     pub cwd: Option<PathBuf>,
     pub updated_at: Option<String>,
     pub source_kind: Option<String>,
+    pub activity_status: Option<CodexThreadActivityStatus>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexThreadActivityStatus {
+    Thinking,
+    WaitingForApproval,
+}
+
+impl CodexThreadActivityStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Thinking => "Thinking...",
+            Self::WaitingForApproval => "Needs approval",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -336,6 +352,7 @@ struct CodexActiveTurn {
     thread_id: String,
     client: JsonRpcSocket,
     pending_approval: CodexPendingApproval,
+    items: Vec<CodexConversationItem>,
     conversation_context: Option<CodexConversationTurnContext>,
 }
 
@@ -351,9 +368,41 @@ struct CodexStartedThread {
     client: JsonRpcSocket,
 }
 
-struct CodexTurnProgress {
+struct CodexStartedTurn {
+    thread_id: String,
+    client: JsonRpcSocket,
+}
+
+struct CodexTurnStream {
+    thread_id: String,
+    client: JsonRpcSocket,
     items: Vec<CodexConversationItem>,
-    active_turn: Option<CodexActiveTurn>,
+    conversation_context: Option<CodexConversationTurnContext>,
+}
+
+enum CodexTurnStreamStep {
+    Progress {
+        stream: CodexTurnStream,
+        new_items: Vec<CodexConversationItem>,
+    },
+    WaitingForApproval {
+        thread_id: String,
+        client: JsonRpcSocket,
+        pending_approval: CodexPendingApproval,
+        items: Vec<CodexConversationItem>,
+        conversation_context: Option<CodexConversationTurnContext>,
+    },
+    Finished {
+        thread_id: String,
+        items: Vec<CodexConversationItem>,
+        new_items: Vec<CodexConversationItem>,
+        conversation_context: Option<CodexConversationTurnContext>,
+    },
+    Failed {
+        thread_id: String,
+        message: String,
+        conversation_context: Option<CodexConversationTurnContext>,
+    },
 }
 
 struct CodexThreadStart {
@@ -473,6 +522,32 @@ impl CodexAppServerModel {
         let thread_id = self.thread_id_by_conversation_id.get(&conversation_id)?;
         let active_turn = self.active_turn.as_ref()?;
         (active_turn.thread_id == *thread_id).then_some(&active_turn.pending_approval)
+    }
+
+    pub fn thread_activity_label(&self, thread_id: &str) -> Option<String> {
+        if let Some(active_turn) = self
+            .active_turn
+            .as_ref()
+            .filter(|active_turn| active_turn.thread_id == thread_id)
+        {
+            return Some(if active_turn.pending_approval.is_user_input_request() {
+                "Needs input".to_string()
+            } else {
+                CodexThreadActivityStatus::WaitingForApproval
+                    .label()
+                    .to_string()
+            });
+        }
+
+        if self.local_turn_thread_id.as_deref() == Some(thread_id) {
+            return Some(CodexThreadActivityStatus::Thinking.label().to_string());
+        }
+
+        self.threads
+            .iter()
+            .find(|thread| thread.id == thread_id)
+            .and_then(|thread| thread.activity_status)
+            .map(|status| status.label().to_string())
     }
 
     pub fn opening_thread_id(&self) -> Option<&str> {
@@ -838,9 +913,9 @@ impl CodexAppServerModel {
                 text: "Waiting for Codex...".to_string(),
             });
         }
-        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
         self.active_turn = None;
         self.local_turn_thread_id = Some(active_thread_id.clone());
+        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
 
         let settings = CodexAppServerSettings::as_ref(ctx);
         let config = match CodexAppServerConfig::from_settings(settings) {
@@ -872,8 +947,11 @@ impl CodexAppServerModel {
                 )
                 .await
             },
-            move |model, result, ctx| {
-                model.apply_turn_progress(&active_thread_id, result, ctx);
+            move |model, result, ctx| match result {
+                Ok(started_turn) => model.start_turn_stream(started_turn, None, Vec::new(), ctx),
+                Err(error) => {
+                    model.apply_turn_start_error(&active_thread_id, None, format!("{error:#}"), ctx)
+                }
             },
         );
     }
@@ -936,6 +1014,7 @@ impl CodexAppServerModel {
 
         self.active_turn = None;
         self.local_turn_thread_id = Some(thread_id.clone());
+        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
         let callback_thread_id = thread_id.clone();
         let model_id = self.selected_model_id.clone();
         let collaboration_mode = prompt_request.collaboration_mode;
@@ -955,60 +1034,218 @@ impl CodexAppServerModel {
                 .await
             },
             move |model, result, ctx| {
-                model.apply_conversation_turn_progress(
-                    &callback_thread_id,
-                    CodexConversationTurnContext {
-                        conversation_id,
-                        exchange_id,
-                        terminal_view_id,
-                    },
-                    result,
-                    ctx,
-                );
+                let conversation_context = CodexConversationTurnContext {
+                    conversation_id,
+                    exchange_id,
+                    terminal_view_id,
+                };
+                match result {
+                    Ok(started_turn) => model.start_turn_stream(
+                        started_turn,
+                        Some(conversation_context),
+                        Vec::new(),
+                        ctx,
+                    ),
+                    Err(error) => model.apply_turn_start_error(
+                        &callback_thread_id,
+                        Some(conversation_context),
+                        format!("Codex app-server error: {error:#}"),
+                        ctx,
+                    ),
+                }
             },
         );
         true
     }
 
-    fn apply_conversation_turn_progress(
+    fn start_turn_stream(
         &mut self,
-        active_thread_id: &str,
-        conversation_context: CodexConversationTurnContext,
-        result: Result<CodexTurnProgress>,
+        started_turn: CodexStartedTurn,
+        conversation_context: Option<CodexConversationTurnContext>,
+        items: Vec<CodexConversationItem>,
         ctx: &mut ModelContext<Self>,
     ) {
-        let (output_text, is_finished, is_error, active_turn) = match result {
-            Ok(progress) => {
-                let output_text = codex_items_to_agent_text(&progress.items);
-                (
-                    output_text,
-                    progress.active_turn.is_none(),
-                    false,
-                    progress.active_turn.map(|mut active_turn| {
-                        active_turn.conversation_context = Some(conversation_context);
-                        active_turn
-                    }),
-                )
-            }
-            Err(error) => (
-                format!("Codex app-server error: {error:#}"),
-                true,
-                true,
-                None,
-            ),
-        };
+        let thread_id = started_turn.thread_id.clone();
+        self.active_turn = None;
+        self.local_turn_thread_id = Some(thread_id.clone());
+        if self.set_thread_activity_status(&thread_id, Some(CodexThreadActivityStatus::Thinking)) {
+            ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
+        }
+        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
 
-        self.active_turn = active_turn;
-        self.local_turn_thread_id = None;
-        if self.active_turn.is_none() {
-            self.start_active_thread_polling(active_thread_id.to_string(), ctx);
+        self.spawn_turn_stream_step(
+            CodexTurnStream {
+                thread_id,
+                client: started_turn.client,
+                items,
+                conversation_context,
+            },
+            ctx,
+        );
+    }
+
+    fn spawn_turn_stream_step(&mut self, stream: CodexTurnStream, ctx: &mut ModelContext<Self>) {
+        let _ = ctx.spawn(
+            async move { stream.next_step().await },
+            |model, step, ctx| model.apply_turn_stream_step(step, ctx),
+        );
+    }
+
+    fn apply_turn_stream_step(&mut self, step: CodexTurnStreamStep, ctx: &mut ModelContext<Self>) {
+        match step {
+            CodexTurnStreamStep::Progress { stream, new_items } => {
+                let CodexTurnStream {
+                    thread_id,
+                    client,
+                    items,
+                    conversation_context,
+                } = stream;
+                self.apply_stream_items(
+                    &thread_id,
+                    conversation_context,
+                    &items,
+                    new_items,
+                    false,
+                    ctx,
+                );
+                self.start_turn_stream(
+                    CodexStartedTurn { thread_id, client },
+                    conversation_context,
+                    items,
+                    ctx,
+                );
+            }
+            CodexTurnStreamStep::WaitingForApproval {
+                thread_id,
+                client,
+                pending_approval,
+                items,
+                conversation_context,
+            } => {
+                self.local_turn_thread_id = None;
+                self.active_turn = Some(CodexActiveTurn {
+                    thread_id: thread_id.clone(),
+                    client,
+                    pending_approval,
+                    items: items.clone(),
+                    conversation_context,
+                });
+                if self.set_thread_activity_status(
+                    &thread_id,
+                    Some(CodexThreadActivityStatus::WaitingForApproval),
+                ) {
+                    ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
+                }
+                self.apply_stream_items(
+                    &thread_id,
+                    conversation_context,
+                    &items,
+                    Vec::new(),
+                    false,
+                    ctx,
+                );
+            }
+            CodexTurnStreamStep::Finished {
+                thread_id,
+                items,
+                new_items,
+                conversation_context,
+            } => {
+                self.active_turn = None;
+                if self.local_turn_thread_id.as_deref() == Some(thread_id.as_str()) {
+                    self.local_turn_thread_id = None;
+                }
+                if self.set_thread_activity_status(&thread_id, None) {
+                    ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
+                }
+                self.apply_stream_items(
+                    &thread_id,
+                    conversation_context,
+                    &items,
+                    new_items,
+                    true,
+                    ctx,
+                );
+                self.start_active_thread_polling(thread_id, ctx);
+            }
+            CodexTurnStreamStep::Failed {
+                thread_id,
+                message,
+                conversation_context,
+            } => {
+                self.apply_turn_start_error(&thread_id, conversation_context, message, ctx);
+            }
+        }
+    }
+
+    fn apply_stream_items(
+        &mut self,
+        thread_id: &str,
+        conversation_context: Option<CodexConversationTurnContext>,
+        items: &[CodexConversationItem],
+        new_items: Vec<CodexConversationItem>,
+        is_finished: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(conversation_context) = conversation_context {
+            let output_text = codex_items_to_agent_text(items);
+            if is_finished || !output_text.trim().is_empty() {
+                self.update_conversation_stream_output(
+                    conversation_context,
+                    output_text,
+                    is_finished,
+                    false,
+                    ctx,
+                );
+            }
+        } else if !new_items.is_empty() {
+            self.append_items(thread_id, new_items);
+        }
+        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
+    }
+
+    fn apply_turn_start_error(
+        &mut self,
+        thread_id: &str,
+        conversation_context: Option<CodexConversationTurnContext>,
+        message: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.active_turn = None;
+        if self.local_turn_thread_id.as_deref() == Some(thread_id) {
+            self.local_turn_thread_id = None;
+        }
+        if self.set_thread_activity_status(thread_id, None) {
+            ctx.emit(CodexAppServerModelEvent::ThreadsChanged);
         }
 
+        if let Some(conversation_context) = conversation_context {
+            self.update_conversation_stream_output(conversation_context, message, true, true, ctx);
+        } else {
+            self.append_items(
+                thread_id,
+                vec![CodexConversationItem {
+                    role: "error".to_string(),
+                    text: message,
+                }],
+            );
+        }
+        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
+    }
+
+    fn update_conversation_stream_output(
+        &mut self,
+        conversation_context: CodexConversationTurnContext,
+        output_text: String,
+        is_finished: bool,
+        is_error: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         let update_result = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
             history.update_codex_exchange_output(
                 conversation_context.conversation_id,
                 conversation_context.exchange_id,
-                output_text.clone(),
+                output_text,
                 is_finished,
                 is_error,
                 conversation_context.terminal_view_id,
@@ -1018,18 +1255,25 @@ impl CodexAppServerModel {
         if let Err(error) = update_result {
             log::error!("Could not update Codex exchange output: {error:?}");
         }
+    }
 
-        if let Some(active_thread) = &mut self.active_thread {
-            if active_thread.summary.id == active_thread_id
-                && (!output_text.trim().is_empty() || is_error)
-            {
-                active_thread.items.push(CodexConversationItem {
-                    role: if is_error { "error" } else { "codex" }.to_string(),
-                    text: output_text,
-                });
-            }
+    fn set_thread_activity_status(
+        &mut self,
+        thread_id: &str,
+        activity_status: Option<CodexThreadActivityStatus>,
+    ) -> bool {
+        let Some(thread) = self
+            .threads
+            .iter_mut()
+            .find(|thread| thread.id == thread_id)
+        else {
+            return false;
+        };
+        if thread.activity_status == activity_status {
+            return false;
         }
-        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
+        thread.activity_status = activity_status;
+        true
     }
 
     fn take_started_thread(&mut self, thread_id: &str) -> Option<CodexStartedThread> {
@@ -1053,9 +1297,14 @@ impl CodexAppServerModel {
         let Some(active_turn) = self.active_turn.take() else {
             return;
         };
-        let thread_id = active_turn.thread_id.clone();
-        let conversation_context = active_turn.conversation_context;
         let result = active_turn.pending_approval.approval_result(decision);
+        let CodexActiveTurn {
+            thread_id,
+            client,
+            pending_approval,
+            items,
+            conversation_context,
+        } = active_turn;
         self.append_items(
             &thread_id,
             vec![CodexConversationItem {
@@ -1063,29 +1312,26 @@ impl CodexAppServerModel {
                 text: format!("{}.", decision.label()),
             }],
         );
-        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
         self.local_turn_thread_id = Some(thread_id.clone());
+        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
         let callback_thread_id = thread_id.clone();
 
         let _ = ctx.spawn(
             async move {
-                let mut client = active_turn.client;
-                client
-                    .respond(active_turn.pending_approval.request_id, result)
-                    .await?;
-                client.collect_turn_progress(thread_id).await
+                let mut client = client;
+                client.respond(pending_approval.request_id, result).await?;
+                Ok::<_, anyhow::Error>(CodexStartedTurn { thread_id, client })
             },
-            move |model, result, ctx| {
-                if let Some(conversation_context) = conversation_context {
-                    model.apply_conversation_turn_progress(
-                        &callback_thread_id,
-                        conversation_context,
-                        result,
-                        ctx,
-                    );
-                } else {
-                    model.apply_turn_progress(&callback_thread_id, result, ctx);
+            move |model, result, ctx| match result {
+                Ok(started_turn) => {
+                    model.start_turn_stream(started_turn, conversation_context, items, ctx)
                 }
+                Err(error) => model.apply_turn_start_error(
+                    &callback_thread_id,
+                    conversation_context,
+                    format!("Codex app-server error: {error:#}"),
+                    ctx,
+                ),
             },
         );
     }
@@ -1107,8 +1353,13 @@ impl CodexAppServerModel {
             self.active_turn = Some(active_turn);
             return;
         };
-        let thread_id = active_turn.thread_id.clone();
-        let conversation_context = active_turn.conversation_context;
+        let CodexActiveTurn {
+            thread_id,
+            client,
+            pending_approval,
+            items,
+            conversation_context,
+        } = active_turn;
         self.append_items(
             &thread_id,
             vec![CodexConversationItem {
@@ -1116,61 +1367,28 @@ impl CodexAppServerModel {
                 text: answer,
             }],
         );
-        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
         self.local_turn_thread_id = Some(thread_id.clone());
+        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
         let callback_thread_id = thread_id.clone();
 
         let _ = ctx.spawn(
             async move {
-                let mut client = active_turn.client;
-                client
-                    .respond(active_turn.pending_approval.request_id, result)
-                    .await?;
-                client.collect_turn_progress(thread_id).await
+                let mut client = client;
+                client.respond(pending_approval.request_id, result).await?;
+                Ok::<_, anyhow::Error>(CodexStartedTurn { thread_id, client })
             },
-            move |model, result, ctx| {
-                if let Some(conversation_context) = conversation_context {
-                    model.apply_conversation_turn_progress(
-                        &callback_thread_id,
-                        conversation_context,
-                        result,
-                        ctx,
-                    );
-                } else {
-                    model.apply_turn_progress(&callback_thread_id, result, ctx);
+            move |model, result, ctx| match result {
+                Ok(started_turn) => {
+                    model.start_turn_stream(started_turn, conversation_context, items, ctx)
                 }
+                Err(error) => model.apply_turn_start_error(
+                    &callback_thread_id,
+                    conversation_context,
+                    format!("Codex app-server error: {error:#}"),
+                    ctx,
+                ),
             },
         );
-    }
-
-    #[allow(dead_code)]
-    fn apply_turn_progress(
-        &mut self,
-        active_thread_id: &str,
-        result: Result<CodexTurnProgress>,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let (items, active_turn) = match result {
-            Ok(progress) if !progress.items.is_empty() || progress.active_turn.is_some() => {
-                (progress.items, progress.active_turn)
-            }
-            Ok(_) => (vec![], None),
-            Err(error) => (
-                vec![CodexConversationItem {
-                    role: "error".to_string(),
-                    text: format!("{error:#}"),
-                }],
-                None,
-            ),
-        };
-
-        self.active_turn = active_turn;
-        self.local_turn_thread_id = None;
-        self.append_items(active_thread_id, items);
-        if self.active_turn.is_none() {
-            self.start_active_thread_polling(active_thread_id.to_string(), ctx);
-        }
-        ctx.emit(CodexAppServerModelEvent::ActiveThreadChanged);
     }
 
     #[allow(dead_code)]
@@ -1756,7 +1974,7 @@ async fn continue_thread(
     collaboration_mode: Option<CodexPromptCollaborationMode>,
     collaboration_mode_model_id: Option<&str>,
     started_thread: Option<CodexStartedThread>,
-) -> Result<CodexTurnProgress> {
+) -> Result<CodexStartedTurn> {
     let mut client = if let Some(started_thread) = started_thread {
         started_thread.client
     } else {
@@ -1780,7 +1998,10 @@ async fn continue_thread(
         )
         .await?;
 
-    client.collect_turn_progress(thread_id.to_string()).await
+    Ok(CodexStartedTurn {
+        thread_id: thread_id.to_string(),
+        client,
+    })
 }
 
 async fn archive_thread(config: &CodexAppServerConfig, thread_id: &str) -> Result<()> {
@@ -2343,23 +2564,27 @@ impl JsonRpcSocket {
             .await
             .map_err(|error| anyhow!("{error}"))
     }
+}
 
-    async fn collect_turn_progress(mut self, thread_id: String) -> Result<CodexTurnProgress> {
-        let mut items = Vec::new();
+impl CodexTurnStream {
+    async fn next_step(mut self) -> CodexTurnStreamStep {
         loop {
             let next = futures_util::future::select(
-                Box::pin(self.stream.next()),
+                Box::pin(self.client.stream.next()),
                 Box::pin(Timer::after(Duration::from_secs(300))),
             )
             .await;
             let message = match next {
                 futures_util::future::Either::Left((message, _)) => message,
-                futures_util::future::Either::Right((_, _)) => break,
+                futures_util::future::Either::Right((_, _)) => return self.finished(Vec::new()),
             };
             let Some(message) = message else {
-                break;
+                return self.finished(Vec::new());
             };
-            let message = message.map_err(|error| anyhow!("{error}"))?;
+            let message = match message {
+                Ok(message) => message,
+                Err(error) => return self.failed(error.to_string()),
+            };
             let Some(text) = message.text() else {
                 continue;
             };
@@ -2371,39 +2596,56 @@ impl JsonRpcSocket {
                     payload.params.as_ref(),
                 ) {
                     capture_raw_approval_request(text);
-                    return Ok(CodexTurnProgress {
-                        items,
-                        active_turn: Some(CodexActiveTurn {
-                            thread_id,
-                            client: self,
-                            pending_approval: approval,
-                            conversation_context: None,
-                        }),
-                    });
+                    return CodexTurnStreamStep::WaitingForApproval {
+                        thread_id: self.thread_id,
+                        client: self.client,
+                        pending_approval: approval,
+                        items: self.items,
+                        conversation_context: self.conversation_context,
+                    };
                 }
                 if let Some(params) = payload.params {
                     if is_terminal {
-                        items.extend(parse_conversation_items(&params));
-                        break;
+                        let new_items = parse_conversation_items(&params);
+                        self.items.extend(new_items.clone());
+                        return self.finished(new_items);
                     } else if let Some(item) =
                         parse_notification_item(payload.method.as_deref(), &params)
                     {
                         let is_terminal =
                             is_terminal_notification(payload.method.as_deref(), &item);
-                        items.push(item);
+                        let new_items = vec![item];
+                        self.items.extend(new_items.clone());
                         if is_terminal {
-                            break;
+                            return self.finished(new_items);
                         }
+                        return CodexTurnStreamStep::Progress {
+                            stream: self,
+                            new_items,
+                        };
                     }
                 } else if is_terminal {
-                    break;
+                    return self.finished(Vec::new());
                 }
             }
         }
-        Ok(CodexTurnProgress {
-            items,
-            active_turn: None,
-        })
+    }
+
+    fn finished(self, new_items: Vec<CodexConversationItem>) -> CodexTurnStreamStep {
+        CodexTurnStreamStep::Finished {
+            thread_id: self.thread_id,
+            items: self.items,
+            new_items,
+            conversation_context: self.conversation_context,
+        }
+    }
+
+    fn failed(self, message: String) -> CodexTurnStreamStep {
+        CodexTurnStreamStep::Failed {
+            thread_id: self.thread_id,
+            message,
+            conversation_context: self.conversation_context,
+        }
     }
 }
 
@@ -2495,19 +2737,36 @@ fn parse_thread_detail(
             if summary.source_kind.is_none() {
                 summary.source_kind = fallback.source_kind;
             }
+            if summary.activity_status.is_none() {
+                summary.activity_status = fallback.activity_status;
+            }
             if summary.title == summary.id && fallback.title != fallback.id {
                 summary.title = fallback.title;
             }
+            if summary.activity_status.is_none() {
+                summary.activity_status = parse_thread_detail_activity_status(result);
+            }
             summary
         }
-        (Some(summary), None) => summary,
-        (None, Some(summary)) => summary,
+        (Some(mut summary), None) => {
+            if summary.activity_status.is_none() {
+                summary.activity_status = parse_thread_detail_activity_status(result);
+            }
+            summary
+        }
+        (None, Some(mut summary)) => {
+            if summary.activity_status.is_none() {
+                summary.activity_status = parse_thread_detail_activity_status(result);
+            }
+            summary
+        }
         (None, None) => CodexThreadSummary {
             id: fallback_id.to_string(),
             title: fallback_id.to_string(),
             cwd: None,
             updated_at: None,
             source_kind: None,
+            activity_status: None,
         },
     };
     let items = parse_conversation_items(result);
@@ -2523,13 +2782,96 @@ fn parse_thread_summary(value: &Value) -> Option<CodexThreadSummary> {
         string_field(value, &["cwd", "workingDirectory", "working_directory"]).map(PathBuf::from);
     let updated_at = string_field(value, &["updatedAt", "updated_at", "lastUpdatedAt"]);
     let source_kind = string_field(value, &["sourceKind", "source_kind"]);
+    let activity_status = parse_thread_summary_activity_status(value);
     Some(CodexThreadSummary {
         id,
         title,
         cwd,
         updated_at,
         source_kind,
+        activity_status,
     })
+}
+
+fn parse_thread_detail_activity_status(value: &Value) -> Option<CodexThreadActivityStatus> {
+    parse_thread_summary_activity_status(value)
+        .or_else(|| {
+            value
+                .get("thread")
+                .and_then(parse_thread_summary_activity_status)
+        })
+        .or_else(|| value.get("turn").and_then(parse_turn_activity_status))
+        .or_else(|| latest_turn_activity_status(value.get("turns")))
+        .or_else(|| {
+            value
+                .get("thread")
+                .and_then(|thread| latest_turn_activity_status(thread.get("turns")))
+        })
+}
+
+fn parse_thread_summary_activity_status(value: &Value) -> Option<CodexThreadActivityStatus> {
+    parse_status_activity(value.get("status"))
+        .or_else(|| parse_status_activity(value.get("threadStatus")))
+        .or_else(|| parse_status_activity(value.get("thread_status")))
+        .or_else(|| parse_status_activity(value.get("state")))
+}
+
+fn latest_turn_activity_status(value: Option<&Value>) -> Option<CodexThreadActivityStatus> {
+    value
+        .and_then(Value::as_array)?
+        .iter()
+        .rev()
+        .find_map(parse_turn_activity_status)
+}
+
+fn parse_turn_activity_status(value: &Value) -> Option<CodexThreadActivityStatus> {
+    parse_status_activity(value.get("status"))
+        .or_else(|| parse_status_activity(value.get("state")))
+        .or_else(|| parse_status_activity(value.get("turnStatus")))
+        .or_else(|| parse_status_activity(value.get("turn_status")))
+}
+
+fn parse_status_activity(value: Option<&Value>) -> Option<CodexThreadActivityStatus> {
+    let value = value?;
+    match value {
+        Value::String(status) => activity_status_from_identifier(status),
+        Value::Object(map) => {
+            let flags = map
+                .get("activeFlags")
+                .or_else(|| map.get("active_flags"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str);
+            if flags
+                .map(normalize_identifier)
+                .any(|flag| flag.contains("waitingonapproval") || flag.contains("needsapproval"))
+            {
+                return Some(CodexThreadActivityStatus::WaitingForApproval);
+            }
+
+            map.get("type")
+                .or_else(|| map.get("status"))
+                .or_else(|| map.get("state"))
+                .and_then(|value| match value {
+                    Value::String(status) => activity_status_from_identifier(status),
+                    _ => None,
+                })
+        }
+        _ => None,
+    }
+}
+
+fn activity_status_from_identifier(status: &str) -> Option<CodexThreadActivityStatus> {
+    match normalize_identifier(status).as_str() {
+        "waitingonapproval" | "needsapproval" | "approvalrequired" => {
+            Some(CodexThreadActivityStatus::WaitingForApproval)
+        }
+        "active" | "inprogress" | "running" | "thinking" | "streaming" => {
+            Some(CodexThreadActivityStatus::Thinking)
+        }
+        _ => None,
+    }
 }
 
 fn parse_conversation_items(value: &Value) -> Vec<CodexConversationItem> {
@@ -2597,12 +2939,39 @@ fn parse_notification_item(method: Option<&str>, params: &Value) -> Option<Codex
                 text: item.to_string(),
             });
         }
+        if let Some(text) = reasoning_text_from_item(item) {
+            return Some(CodexConversationItem {
+                role: method.unwrap_or("codex").to_string(),
+                text,
+            });
+        }
+    }
+
+    if method.map(normalize_identifier).is_some_and(|method| {
+        method.contains("commandexecution") && !method.contains("requestapproval")
+    }) {
+        return Some(CodexConversationItem {
+            role: method.unwrap_or("codex").to_string(),
+            text: params.to_string(),
+        });
     }
 
     text_from_value(params).map(|text| CodexConversationItem {
         role: method.unwrap_or("codex").to_string(),
         text,
     })
+}
+
+fn reasoning_text_from_item(item: &Value) -> Option<String> {
+    let item_type = string_field(item, &["type", "kind"])?;
+    if !normalize_identifier(&item_type).contains("reasoning") {
+        return None;
+    }
+    ["summary", "content"]
+        .into_iter()
+        .filter_map(|key| item.get(key))
+        .map(text_content_from_value)
+        .find(|text| !text.trim().is_empty())
 }
 
 fn parse_approval_request(
@@ -3340,6 +3709,7 @@ mod tests {
                 cwd: None,
                 updated_at: None,
                 source_kind: None,
+                activity_status: None,
             },
             items: vec![CodexConversationItem {
                 role: "agentMessage".to_string(),
@@ -3680,6 +4050,56 @@ mod tests {
     }
 
     #[test]
+    fn command_execution_output_delta_notification_renders_output() {
+        let item = parse_notification_item(
+            Some("item/commandExecution/outputDelta"),
+            &json!({
+                "delta": {
+                    "body": " M app/src/codex_app_server/mod.rs\n",
+                    "status": "running"
+                }
+            }),
+        )
+        .unwrap();
+
+        let text = codex_items_to_agent_text(&[
+            CodexConversationItem {
+                role: "item/started".to_string(),
+                text: "/bin/zsh -lc 'git status --short'".to_string(),
+            },
+            item,
+        ]);
+
+        assert_eq!(
+            text,
+            "commandExecution: /bin/zsh -lc 'git status --short'\n\ncommandExecution/output: \" M app/src/codex_app_server/mod.rs\\n\""
+        );
+    }
+
+    #[test]
+    fn reasoning_notifications_render_as_incremental_text() {
+        let item = parse_notification_item(
+            Some("item/completed"),
+            &json!({
+                "item": {
+                    "type": "reasoning",
+                    "summary": [{
+                        "type": "summary_text",
+                        "text": "Checked the active Codex stream."
+                    }]
+                }
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(item.text, "Checked the active Codex stream.");
+        assert_eq!(
+            codex_items_to_agent_text(&[item]),
+            "Checked the active Codex stream."
+        );
+    }
+
+    #[test]
     fn late_completed_command_execution_update_never_renders_raw_json() {
         let completed_command = json!({
             "aggregatedOutput": " 47M\thomeassistant-config\n976M\t.esphome\n",
@@ -3763,6 +4183,7 @@ mod tests {
             cwd: Some(PathBuf::from("/tmp/project")),
             updated_at: Some("2026-05-06T12:00:00Z".to_string()),
             source_kind: Some("cli".to_string()),
+            activity_status: None,
         };
 
         let detail = parse_thread_detail(&payload, Some(fallback), "thread-1");
@@ -3778,6 +4199,56 @@ mod tests {
     }
 
     #[test]
+    fn parses_thread_summary_activity_status() {
+        let active = parse_thread_summary(&json!({
+            "id": "thread-1",
+            "status": {
+                "type": "active",
+                "activeFlags": []
+            }
+        }))
+        .unwrap();
+        let waiting = parse_thread_summary(&json!({
+            "id": "thread-2",
+            "status": {
+                "type": "active",
+                "activeFlags": ["waitingOnApproval"]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            active.activity_status,
+            Some(CodexThreadActivityStatus::Thinking)
+        );
+        assert_eq!(
+            waiting.activity_status,
+            Some(CodexThreadActivityStatus::WaitingForApproval)
+        );
+    }
+
+    #[test]
+    fn thread_detail_uses_latest_turn_activity_status() {
+        let payload = json!({
+            "thread": {
+                "id": "thread-1",
+                "title": "Active thread",
+                "turns": [
+                    { "id": "turn-1", "status": "completed" },
+                    { "id": "turn-2", "status": "inProgress" }
+                ]
+            }
+        });
+
+        let detail = parse_thread_detail(&payload, None, "thread-1");
+
+        assert_eq!(
+            detail.summary.activity_status,
+            Some(CodexThreadActivityStatus::Thinking)
+        );
+    }
+
+    #[test]
     fn converts_thread_detail_to_hidden_agent_conversation() {
         let detail = CodexThreadDetail {
             summary: CodexThreadSummary {
@@ -3786,6 +4257,7 @@ mod tests {
                 cwd: Some(PathBuf::from("/tmp/project")),
                 updated_at: Some("1730831111".to_string()),
                 source_kind: Some("cli".to_string()),
+                activity_status: None,
             },
             items: vec![
                 CodexConversationItem {
