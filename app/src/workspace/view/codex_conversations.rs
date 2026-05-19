@@ -431,6 +431,7 @@ impl CodexConversationsView {
 
     fn render_thread(
         &self,
+        app: &AppContext,
         thread: &CodexThreadSummary,
         is_active: bool,
         appearance: &Appearance,
@@ -464,6 +465,11 @@ impl CodexConversationsView {
             .and_then(|cwd| cwd.to_str())
             .map(shorten_project_path);
         let age = codex_thread_updated_at_utc(thread).map(format_approx_duration_from_now_utc);
+        let trailing = self
+            .model
+            .as_ref(app)
+            .thread_activity_label(&thread.id)
+            .or(age);
 
         let title = Text::new_inline(title.to_string(), font_family, font_size + 2.)
             .with_style(Properties::default().weight(Weight::Bold))
@@ -484,9 +490,9 @@ impl CodexConversationsView {
                 .finish(),
             );
         }
-        if let Some(age) = age {
+        if let Some(trailing) = trailing {
             bottom_row.add_child(
-                Text::new_inline(age, font_family, font_size - 2.)
+                Text::new_inline(trailing, font_family, font_size - 2.)
                     .with_color(theme.sub_text_color(theme.background()).into())
                     .finish(),
             );
@@ -594,6 +600,7 @@ impl CodexConversationsView {
         } else {
             for thread in threads {
                 column.add_child(self.render_thread(
+                    app,
                     thread,
                     active_thread_id.as_deref() == Some(thread.id.as_str()),
                     appearance,
