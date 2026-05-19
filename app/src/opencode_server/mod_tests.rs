@@ -222,6 +222,44 @@ fn prompt_result_uses_latest_matching_detail_turn() {
 }
 
 #[test]
+fn prompt_result_uses_partial_detail_with_running_tool_progress() {
+    let prompt = "please rebase main";
+    let messages = vec![message(
+        "assistant",
+        vec![json!({
+            "type": "tool",
+            "tool": "bash",
+            "state": {
+                "status": "running",
+                "input": {
+                    "command": "git rebase main"
+                },
+                "title": "git rebase main",
+                "time": { "start": 1777040510640i64 }
+            }
+        })],
+        None,
+        None,
+    )];
+    let assistant_item = messages_to_conversation_items(&messages)
+        .into_iter()
+        .next()
+        .unwrap();
+    let detail = session_detail(vec![
+        OpenCodeConversationItem {
+            role: "user".to_string(),
+            text: prompt.to_string(),
+        },
+        assistant_item,
+    ]);
+
+    assert_eq!(
+        opencode_prompt_result_output_text(&[], Some(&detail), prompt),
+        "commandExecution: git rebase main"
+    );
+}
+
+#[test]
 fn prompt_result_does_not_use_stale_detail_for_different_prompt() {
     let output_items = vec![OpenCodeConversationItem {
         role: "assistant".to_string(),
@@ -603,13 +641,12 @@ fn session_detail(items: Vec<OpenCodeConversationItem>) -> OpenCodeSessionDetail
 
 fn assert_fixture_snapshot(actual: String, relative_path: &str) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
-    let expected = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| {
-            panic!(
-                "Could not read snapshot {}: {error}\n\nactual snapshot:\n{actual}",
-                path.display()
-            )
-        });
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "Could not read snapshot {}: {error}\n\nactual snapshot:\n{actual}",
+            path.display()
+        )
+    });
     assert_eq!(actual.trim_end(), expected.trim_end(), "{}", path.display());
 }
 
