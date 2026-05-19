@@ -1,0 +1,8 @@
+agent_text:
+  commandExecution: /bin/zsh -lc 'make release-macos TAG=v0.1.15 REF=e1e38baa9be3f2b4b2a4743f3070cda60c242dcb DRY_RUN=1'
+
+  commandExecution/output: "release dry run complete\n"
+streaming_render_model:
+- action: request_command_output
+  command: /bin/zsh -lc 'make release-macos TAG=v0.1.15 REF=e1e38baa9be3f2b4b2a4743f3070cda60c242dcb DRY_RUN=1'
+  result_output: "release dry run complete\n"
