@@ -18,7 +18,9 @@ use settings::Setting as _;
 use warpui::{r#async::Timer, Entity, ModelContext, SingletonEntity};
 
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationId, ExternalAgentConversationProvider,
+};
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::settings::{
     OpenCodeServerSettings, OpenCodeServerSettingsChangedEvent, DEFAULT_OPENCODE_SERVER_URL,
@@ -2235,6 +2237,7 @@ fn opencode_session_detail_to_ai_conversation(
     let mut conversation = AIConversation::new_with_id(conversation_id, false);
     conversation.set_fallback_display_title(detail.summary.title.clone());
     conversation.set_exclude_from_navigation(true);
+    conversation.set_external_agent_provider(ExternalAgentConversationProvider::OpenCode);
 
     let working_directory = detail
         .summary

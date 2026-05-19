@@ -16,7 +16,9 @@ use warpui::{r#async::Timer, Entity, EntityId, ModelContext, SingletonEntity};
 use websocket::{Message, WebSocket, WebsocketMessage as _};
 
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
-use crate::ai::agent::conversation::{AIConversation, AIConversationId};
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationId, ExternalAgentConversationProvider,
+};
 use crate::ai::agent::AIAgentExchangeId;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::settings::{
@@ -2113,6 +2115,7 @@ fn codex_thread_detail_to_ai_conversation(
     let mut conversation = AIConversation::new_with_id(conversation_id, false);
     conversation.set_fallback_display_title(detail.summary.title.clone());
     conversation.set_exclude_from_navigation(true);
+    conversation.set_external_agent_provider(ExternalAgentConversationProvider::Codex);
 
     let working_directory = detail
         .summary
@@ -4275,6 +4278,10 @@ mod tests {
         let conversation = codex_thread_detail_to_ai_conversation(conversation_id, &detail);
 
         assert_eq!(conversation.id(), conversation_id);
+        assert_eq!(
+            conversation.external_agent_provider(),
+            Some(ExternalAgentConversationProvider::Codex)
+        );
         assert!(conversation.should_exclude_from_navigation());
         assert_eq!(conversation.title().as_deref(), Some("render this thread"));
         let exchanges = conversation.root_task_exchanges().collect::<Vec<_>>();

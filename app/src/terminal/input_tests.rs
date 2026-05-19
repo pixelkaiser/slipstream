@@ -2,6 +2,9 @@ use std::collections::HashSet;
 
 use super::*;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::conversation::{
+    AIConversation, AIConversationId, ExternalAgentConversationProvider,
+};
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::blocklist::{AIQueryHistory, BlocklistAIPermissions};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -211,6 +214,10 @@ pub fn initialize_app(app: &mut App) {
         crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier::new()
     });
     app.add_singleton_model(AgentConversationsModel::new);
+    #[cfg(not(target_family = "wasm"))]
+    app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+    #[cfg(not(target_family = "wasm"))]
+    app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
     app.add_singleton_model(PersistedWorkspace::new_for_test);
     // `LocalShellState` captures the user's interactive login-shell PATH (used
     // for MCP/sbx executable resolution). Tests don't exercise that capture, so
@@ -5733,6 +5740,118 @@ fn enter_fullscreen_agent_view_for_test(terminal: &ViewHandle<TerminalView>, app
                 .expect("Should be able to enter agent view");
         });
     });
+}
+
+fn enter_external_agent_conversation_for_test(
+    terminal: &ViewHandle<TerminalView>,
+    app: &mut App,
+    provider: ExternalAgentConversationProvider,
+) -> AIConversationId {
+    let conversation_id = AIConversationId::new();
+    let mut conversation = AIConversation::new_with_id(conversation_id, false);
+    conversation.set_exclude_from_navigation(true);
+    conversation.set_external_agent_provider(provider);
+    let history_model = BlocklistAIHistoryModel::handle(&*app);
+    history_model.update(app, |history, _| {
+        history.cache_external_conversation(conversation);
+    });
+
+    terminal.update(app, |view, ctx| {
+        view.ai_context_model().update(ctx, |context_model, ctx| {
+            context_model.set_pending_query_state_for_existing_conversation(
+                conversation_id,
+                AgentViewEntryOrigin::RestoreExistingConversation,
+                ctx,
+            );
+        });
+    });
+
+    conversation_id
+}
+
+fn run_external_agent_conversation_input_policy_test(
+    provider: ExternalAgentConversationProvider,
+) {
+    App::test((), |mut app| async move {
+        let _agent_mode_flag = FeatureFlag::AgentMode.override_enabled(true);
+        let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);
+
+        initialize_app(&mut app);
+        AISettings::handle(&app).update(&mut app, |ai_settings, ctx| {
+            let _ = ai_settings
+                .ai_autodetection_enabled_internal
+                .set_value(true, ctx);
+        });
+
+        let terminal = add_window_with_bootstrapped_terminal(&mut app, None, None).await;
+        let input = terminal.read(&app, |terminal, _| terminal.input().clone());
+        enter_external_agent_conversation_for_test(&terminal, &mut app, provider);
+
+        input.read(&app, |input, _ctx| {
+            app.read_model(input.ai_input_model(), |input_model, ctx| {
+                assert_eq!(input_model.input_type(), InputType::AI);
+                assert!(input_model.is_input_type_locked());
+                assert!(!input_model.should_run_input_autodetection(ctx));
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.user_insert("Hi", ctx);
+        });
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "Hi");
+            app.read_model(input.ai_input_model(), |input_model, ctx| {
+                assert_eq!(input_model.input_type(), InputType::AI);
+                assert!(input_model.is_input_type_locked());
+                assert!(!input_model.should_run_input_autodetection(ctx));
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.editor.update(ctx, |editor, ctx| {
+                editor.clear_buffer(ctx);
+            });
+        });
+        for c in format!("{}pwd", super::TERMINAL_INPUT_PREFIX).chars() {
+            input.update(&mut app, |input, ctx| {
+                input.user_insert(&c.to_string(), ctx);
+            });
+        }
+
+        input.read(&app, |input, ctx| {
+            assert_eq!(input.buffer_text(ctx), "pwd");
+            assert_eq!(input.prefix_mode(ctx), InputPrefixMode::Shell);
+            app.read_model(input.ai_input_model(), |input_model, _| {
+                assert_eq!(input_model.input_type(), InputType::Shell);
+                assert!(input_model.is_input_type_locked());
+            });
+        });
+
+        input.update(&mut app, |input, ctx| {
+            input.ai_input_model().update(ctx, |input_model, ctx| {
+                input_model.handle_input_buffer_submitted(ctx);
+            });
+        });
+
+        input.read(&app, |input, _ctx| {
+            app.read_model(input.ai_input_model(), |input_model, ctx| {
+                assert_eq!(input_model.input_type(), InputType::AI);
+                assert!(input_model.is_input_type_locked());
+                assert!(!input_model.should_run_input_autodetection(ctx));
+            });
+        });
+    });
+}
+
+#[test]
+fn test_codex_conversation_uses_explicit_shell_prefix_only() {
+    run_external_agent_conversation_input_policy_test(ExternalAgentConversationProvider::Codex);
+}
+
+#[test]
+fn test_opencode_conversation_uses_explicit_shell_prefix_only() {
+    run_external_agent_conversation_input_policy_test(ExternalAgentConversationProvider::OpenCode);
 }
 
 #[test]

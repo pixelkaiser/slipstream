@@ -762,18 +762,27 @@ pub struct AIConversation {
     /// re-delivering already-processed events.
     last_event_sequence: Option<i64>,
 
-    /// Per-plan orchestration configs hydrated from
-
     /// Local-only conversations rendered through Agent View but owned by another backend.
     exclude_from_navigation: bool,
 
-    /// `OrchestrationConfigSnapshot` messages in the conversation's task list.
+    /// Local-only provider identity for conversations rendered through Agent View but owned by
+    /// another backend.
+    external_agent_provider: Option<ExternalAgentConversationProvider>,
+
+    /// Per-plan orchestration configs hydrated from `OrchestrationConfigSnapshot` messages in the
+    /// conversation's task list.
     /// Keyed by `plan_id`; snapshots with empty `plan_id` are ignored.
     orchestration_configs: HashMap<String, (OrchestrationConfig, OrchestrationConfigStatus)>,
 
     /// Whether the user has pinned this child agent in the orchestration
     /// pill bar. Persisted via `AgentConversationData.pinned`.
     pinned: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExternalAgentConversationProvider {
+    Codex,
+    OpenCode,
 }
 
 pub(crate) fn artifact_from_fork_proto(
@@ -827,6 +836,7 @@ impl AIConversation {
             is_remote_child: false,
             last_event_sequence: None,
             exclude_from_navigation: false,
+            external_agent_provider: None,
             orchestration_configs: HashMap::new(),
             pinned: false,
         }
@@ -1031,6 +1041,7 @@ impl AIConversation {
             is_remote_child,
             last_event_sequence,
             exclude_from_navigation: false,
+            external_agent_provider: None,
             orchestration_configs: HashMap::new(),
             pinned,
         })
@@ -1686,6 +1697,17 @@ impl AIConversation {
 
     pub(crate) fn set_exclude_from_navigation(&mut self, exclude: bool) {
         self.exclude_from_navigation = exclude;
+    }
+
+    pub fn external_agent_provider(&self) -> Option<ExternalAgentConversationProvider> {
+        self.external_agent_provider
+    }
+
+    pub(crate) fn set_external_agent_provider(
+        &mut self,
+        provider: ExternalAgentConversationProvider,
+    ) {
+        self.external_agent_provider = Some(provider);
     }
 
     pub fn existing_suggestions(&self) -> Option<&Suggestions> {

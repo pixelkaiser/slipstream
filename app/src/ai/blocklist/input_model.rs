@@ -354,6 +354,13 @@ impl BlocklistAIInputModel {
         self.ai_context_model.as_ref(app).has_locking_attachment()
     }
 
+    fn is_external_agent_conversation_selected(&self, app: &AppContext) -> bool {
+        self.ai_context_model
+            .as_ref(app)
+            .selected_conversation(app)
+            .is_some_and(|conversation| conversation.external_agent_provider().is_some())
+    }
+
     /// Returns the InputType enum which specifies how we will handle the terminal input.
     pub fn input_type(&self) -> InputType {
         self.input_config.input_type
@@ -411,6 +418,17 @@ impl BlocklistAIInputModel {
         new_config: InputConfig,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
+        let new_config = if self.is_external_agent_conversation_selected(ctx)
+            && !new_config.is_locked
+        {
+            InputConfig {
+                input_type: InputType::AI,
+                is_locked: true,
+            }
+        } else {
+            new_config
+        };
+
         // When `AgentView` is enabled, AI input mode can only be set in the top-level terminal
         // mode via autodetection; it cannot be locked to AI input mode unless there is an active
         // agent view or a CLI agent rich input session is open. In the agent view case, executing
@@ -521,6 +539,10 @@ impl BlocklistAIInputModel {
             return false;
         }
 
+        if self.is_external_agent_conversation_selected(app) {
+            return false;
+        }
+
         let ai_settings = AISettings::as_ref(app);
         if FeatureFlag::AgentView.is_enabled() {
             if self.agent_view_controller.as_ref(app).is_fullscreen() {
@@ -565,6 +587,11 @@ impl BlocklistAIInputModel {
             .is_agent_in_control_or_tagged_in();
 
         let new_config = if is_agent_in_control_or_tagged_in {
+            InputConfig {
+                input_type: InputType::AI,
+                is_locked: true,
+            }
+        } else if self.is_external_agent_conversation_selected(ctx) {
             InputConfig {
                 input_type: InputType::AI,
                 is_locked: true,
