@@ -121,6 +121,24 @@ fn project_matching_keeps_imported_project_fallback() {
 }
 
 #[test]
+fn converts_session_detail_to_external_agent_conversation() {
+    let detail = session_detail(vec![OpenCodeConversationItem {
+        role: "user".to_string(),
+        text: "fix the bridge".to_string(),
+    }]);
+    let conversation_id = AIConversationId::new();
+
+    let conversation = opencode_session_detail_to_ai_conversation(conversation_id, &detail);
+
+    assert_eq!(conversation.id(), conversation_id);
+    assert_eq!(
+        conversation.external_agent_provider(),
+        Some(ExternalAgentConversationProvider::OpenCode)
+    );
+    assert!(conversation.should_exclude_from_navigation());
+}
+
+#[test]
 fn session_summary_filters_opencode_child_sessions() {
     let parent = serde_json::from_value::<OpenCodeSessionWire>(json!({
         "id": "ses_parent",

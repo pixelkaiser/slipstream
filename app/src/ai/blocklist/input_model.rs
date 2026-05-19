@@ -319,6 +319,13 @@ impl BlocklistAIInputModel {
         self.ai_context_model.as_ref(app).has_locking_attachment()
     }
 
+    fn is_external_agent_conversation_selected(&self, app: &AppContext) -> bool {
+        self.ai_context_model
+            .as_ref(app)
+            .selected_conversation(app)
+            .is_some_and(|conversation| conversation.external_agent_provider().is_some())
+    }
+
     /// Returns the InputType enum which specifies how we will handle the terminal input.
     pub fn input_type(&self) -> InputType {
         self.input_config.input_type
@@ -400,6 +407,17 @@ impl BlocklistAIInputModel {
         decision_source: Option<InputTypeAutoDetectionSource>,
         ctx: &mut ModelContext<Self>,
     ) -> bool {
+        let new_config = if self.is_external_agent_conversation_selected(ctx)
+            && !new_config.is_locked
+        {
+            InputConfig {
+                input_type: InputType::AI,
+                is_locked: true,
+            }
+        } else {
+            new_config
+        };
+
         // Locking the input to AI is only allowed when the view's policy permits it (e.g. the
         // GUI only allows it inside an agent view or an open CLI agent rich input session).
         if new_config.input_type.is_ai()
@@ -506,6 +524,10 @@ impl BlocklistAIInputModel {
             return false;
         }
 
+        if self.is_external_agent_conversation_selected(app) {
+            return false;
+        }
+
         self.policy.is_autodetection_enabled(app)
     }
 
@@ -541,6 +563,11 @@ impl BlocklistAIInputModel {
             .is_agent_in_control_or_tagged_in();
 
         let new_config = if is_agent_in_control_or_tagged_in {
+            InputConfig {
+                input_type: InputType::AI,
+                is_locked: true,
+            }
+        } else if self.is_external_agent_conversation_selected(ctx) {
             InputConfig {
                 input_type: InputType::AI,
                 is_locked: true,
