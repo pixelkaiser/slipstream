@@ -2257,6 +2257,10 @@ fn codex_items_to_agent_text(items: &[CodexConversationItem]) -> String {
             continue;
         }
 
+        if is_codex_command_execution_item(&item.role) {
+            continue;
+        }
+
         if is_codex_completed_item(&item.role) && !assistant_delta_buffer.trim().is_empty() {
             if normalized_codex_text(&assistant_delta_buffer) == normalized_codex_text(&item.text) {
                 continue;
@@ -2371,10 +2375,10 @@ fn codex_command_text_from_item(item: &CodexConversationItem) -> Option<String> 
 }
 
 fn codex_command_text(text: &str) -> Option<String> {
-    serde_json::from_str::<Value>(text)
-        .ok()
-        .and_then(|value| command_field(&value))
-        .or_else(|| (!text.trim().is_empty()).then(|| text.trim().to_string()))
+    match serde_json::from_str::<Value>(text) {
+        Ok(value) => command_field(&value),
+        Err(_) => (!text.trim().is_empty()).then(|| text.trim().to_string()),
+    }
 }
 
 fn codex_completed_command_and_output(
@@ -2409,6 +2413,10 @@ fn is_codex_command_output_delta_item(role: &str) -> bool {
     role.contains("commandexecution") && role.contains("output")
 }
 
+fn is_codex_command_execution_item(role: &str) -> bool {
+    normalized_codex_role(role).contains("commandexecution")
+}
+
 fn codex_command_output_text(text: &str) -> Option<String> {
     let output = serde_json::from_str::<Value>(text)
         .ok()
@@ -2423,6 +2431,8 @@ fn codex_command_output_text_from_value(value: &Value) -> Option<String> {
         &[
             "body",
             "output",
+            "stdout",
+            "stderr",
             "aggregatedOutput",
             "aggregated_output",
             "delta",
@@ -2950,13 +2960,25 @@ fn parse_notification_item(method: Option<&str>, params: &Value) -> Option<Codex
         }
     }
 
-    if method.map(normalize_identifier).is_some_and(|method| {
-        method.contains("commandexecution") && !method.contains("requestapproval")
-    }) {
-        return Some(CodexConversationItem {
-            role: method.unwrap_or("codex").to_string(),
-            text: params.to_string(),
-        });
+    if let Some(method) = method {
+        let normalized_method = normalize_identifier(method);
+        if normalized_method.contains("commandexecution")
+            && !normalized_method.contains("requestapproval")
+        {
+            let has_renderable_output = (normalized_method.contains("output")
+                || normalized_method.contains("stdout")
+                || normalized_method.contains("stderr"))
+                && codex_command_output_text_from_value(params).is_some();
+            let has_command = command_field(params).is_some();
+
+            if has_renderable_output || has_command {
+                return Some(CodexConversationItem {
+                    role: method.to_string(),
+                    text: params.to_string(),
+                });
+            }
+            return None;
+        }
     }
 
     text_from_value(params).map(|text| CodexConversationItem {
@@ -4076,6 +4098,48 @@ mod tests {
         assert_eq!(
             text,
             "commandExecution: /bin/zsh -lc 'git status --short'\n\ncommandExecution/output: \" M app/src/codex_app_server/mod.rs\\n\""
+        );
+    }
+
+    #[test]
+    fn command_execution_stdin_metadata_notification_is_not_rendered() {
+        let metadata = json!({
+            "itemId": "call_dIzVclupRujrYqq8q5medDDY",
+            "processId": "63833",
+            "stdin": "",
+            "threadId": "019e2d34-58ad-76a2-a2f6-4f2f518fb44b",
+            "turnId": "019e4031-2dac-7353-9e1e-dc95e14325a2"
+        });
+
+        assert!(parse_notification_item(Some("item/commandExecution/stdin"), &metadata).is_none());
+
+        let text = codex_items_to_agent_text(&[
+            CodexConversationItem {
+                role: "item/started".to_string(),
+                text: "/bin/zsh -lc 'make release-macos TAG=v0.1.15 DRY_RUN=1'".to_string(),
+            },
+            CodexConversationItem {
+                role: "item/commandExecution/stdin".to_string(),
+                text: metadata.to_string(),
+            },
+            CodexConversationItem {
+                role: "item/commandExecution/outputDelta".to_string(),
+                text: json!({
+                    "delta": {
+                        "body": "release dry run complete\n"
+                    }
+                })
+                .to_string(),
+            },
+        ]);
+
+        assert!(
+            !text.contains("itemId"),
+            "command metadata leaked into agent text: {text}"
+        );
+        assert_eq!(
+            text,
+            "commandExecution: /bin/zsh -lc 'make release-macos TAG=v0.1.15 DRY_RUN=1'\n\ncommandExecution/output: \"release dry run complete\\n\""
         );
     }
 

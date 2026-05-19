@@ -33,6 +33,7 @@ const RECONNECT_BACKOFF: [Duration; 3] = [
     Duration::from_secs(1),
 ];
 const ACTIVE_SESSION_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const LOCAL_TURN_POLL_INTERVAL: Duration = Duration::from_millis(750);
 const PENDING_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(750);
 const DEFAULT_SESSION_LIMIT: usize = 100;
 
@@ -192,6 +193,7 @@ pub struct OpenCodeServerModel {
     local_turn_session_id: Option<String>,
     pending_permissions: Vec<OpenCodePendingPermission>,
     pending_questions: Vec<OpenCodePendingQuestion>,
+    local_turn_poll_generation: u64,
     pending_request_poll_generation: u64,
     models: Vec<OpenCodeModelInfo>,
     selected_model_id: Option<String>,
@@ -210,6 +212,14 @@ struct OpenCodeRefreshSnapshot {
 struct OpenCodePromptResult {
     output_items: Vec<OpenCodeConversationItem>,
     detail: Option<OpenCodeSessionDetail>,
+}
+
+#[derive(Debug, Clone)]
+struct OpenCodeConversationTurnContext {
+    conversation_id: AIConversationId,
+    exchange_id: crate::ai::agent::AIAgentExchangeId,
+    terminal_view_id: warpui::EntityId,
+    prompt: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,6 +250,7 @@ impl OpenCodeServerModel {
             local_turn_session_id: None,
             pending_permissions: Vec::new(),
             pending_questions: Vec::new(),
+            local_turn_poll_generation: 0,
             pending_request_poll_generation: 0,
             models: Vec::new(),
             selected_model_id: None,
@@ -359,6 +370,7 @@ impl OpenCodeServerModel {
         let settings = OpenCodeServerSettings::as_ref(ctx);
         if !*settings.enabled {
             self.stop_active_session_polling();
+            self.stop_local_turn_polling();
             self.status = OpenCodeServerStatus::Disabled;
             self.sessions.clear();
             self.active_session = None;
@@ -382,6 +394,7 @@ impl OpenCodeServerModel {
             Ok(config) => config,
             Err(error) => {
                 self.stop_active_session_polling();
+                self.stop_local_turn_polling();
                 self.status = OpenCodeServerStatus::Disconnected {
                     message: error.to_string(),
                 };
@@ -434,6 +447,7 @@ impl OpenCodeServerModel {
                     }
                     Err(error) => {
                         model.stop_active_session_polling();
+                        model.stop_local_turn_polling();
                         model.status = OpenCodeServerStatus::Disconnected {
                             message: format!("{error:#}"),
                         };
@@ -489,6 +503,7 @@ impl OpenCodeServerModel {
         self.stop_active_session_polling();
         self.active_session = None;
         self.local_turn_session_id = None;
+        self.stop_local_turn_polling();
         ctx.emit(OpenCodeServerModelEvent::ActiveSessionChanged);
 
         let _ = ctx.spawn(
@@ -683,10 +698,22 @@ impl OpenCodeServerModel {
         };
 
         self.local_turn_session_id = Some(session_id.clone());
+        let turn_context = OpenCodeConversationTurnContext {
+            conversation_id,
+            exchange_id,
+            terminal_view_id,
+            prompt: prompt.clone(),
+        };
         let selected_model = self.selected_model();
         let callback_session_id = session_id.clone();
         let prompt_for_result = prompt.clone();
         self.start_pending_request_polling(session_id.clone(), ctx);
+        self.start_local_turn_polling(
+            session_id.clone(),
+            fallback_summary.clone(),
+            turn_context.clone(),
+            ctx,
+        );
         let _ = ctx.spawn(
             async move {
                 prompt_session(
@@ -719,6 +746,7 @@ impl OpenCodeServerModel {
                     Err(error) => (format!("OpenCode server error: {error:#}"), true, None),
                 };
 
+                model.stop_local_turn_polling();
                 model.local_turn_session_id = None;
                 model.clear_pending_requests_for_session(&callback_session_id, ctx);
                 if let Some(detail) = detail {
@@ -916,6 +944,154 @@ impl OpenCodeServerModel {
                 }
             },
         );
+    }
+
+    fn stop_local_turn_polling(&mut self) {
+        self.local_turn_poll_generation = self.local_turn_poll_generation.wrapping_add(1);
+    }
+
+    fn start_local_turn_polling(
+        &mut self,
+        session_id: String,
+        fallback_summary: Option<OpenCodeSessionSummary>,
+        turn_context: OpenCodeConversationTurnContext,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.stop_local_turn_polling();
+        let generation = self.local_turn_poll_generation;
+        self.poll_local_turn(session_id, fallback_summary, turn_context, generation, ctx);
+    }
+
+    fn should_poll_local_turn(&self, session_id: &str, generation: u64) -> bool {
+        self.local_turn_poll_generation == generation
+            && self.local_turn_session_id.as_deref() == Some(session_id)
+    }
+
+    fn schedule_local_turn_poll(
+        &mut self,
+        session_id: String,
+        fallback_summary: Option<OpenCodeSessionSummary>,
+        turn_context: OpenCodeConversationTurnContext,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let _ = ctx.spawn(
+            async move {
+                Timer::after(LOCAL_TURN_POLL_INTERVAL).await;
+            },
+            move |model, _, ctx| {
+                if model.should_poll_local_turn(&session_id, generation) {
+                    model.poll_local_turn(
+                        session_id,
+                        fallback_summary,
+                        turn_context,
+                        generation,
+                        ctx,
+                    );
+                }
+            },
+        );
+    }
+
+    fn poll_local_turn(
+        &mut self,
+        session_id: String,
+        fallback_summary: Option<OpenCodeSessionSummary>,
+        turn_context: OpenCodeConversationTurnContext,
+        generation: u64,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if !self.should_poll_local_turn(&session_id, generation) {
+            return;
+        }
+
+        let settings = OpenCodeServerSettings::as_ref(ctx);
+        if !*settings.enabled {
+            return;
+        }
+        let config = match OpenCodeServerConfig::from_settings(settings) {
+            Ok(config) => config,
+            Err(error) => {
+                log::warn!("OpenCode live turn poll skipped: {error:#}");
+                return;
+            }
+        };
+        let read_session_id = session_id.clone();
+        let read_fallback_summary = fallback_summary.clone();
+
+        let _ = ctx.spawn(
+            async move { read_session(&config, &read_session_id, read_fallback_summary).await },
+            move |model, result, ctx| {
+                if !model.should_poll_local_turn(&session_id, generation) {
+                    return;
+                }
+                match result {
+                    Ok(detail) => {
+                        model.apply_live_turn_session_detail(detail, &turn_context, ctx);
+                    }
+                    Err(error) => {
+                        log::warn!("OpenCode live turn poll failed: {error:#}");
+                    }
+                }
+                if model.should_poll_local_turn(&session_id, generation) {
+                    model.schedule_local_turn_poll(
+                        session_id,
+                        fallback_summary,
+                        turn_context,
+                        generation,
+                        ctx,
+                    );
+                }
+            },
+        );
+    }
+
+    fn apply_live_turn_session_detail(
+        &mut self,
+        detail: OpenCodeSessionDetail,
+        turn_context: &OpenCodeConversationTurnContext,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(output_text) =
+            latest_opencode_turn_output_for_prompt(&detail, &turn_context.prompt)
+                .filter(|text| !text.trim().is_empty())
+        {
+            self.update_conversation_turn_output(turn_context, output_text, false, false, ctx);
+        }
+
+        let summary_changed = upsert_session_summary(&mut self.sessions, detail.summary.clone());
+        let active_session_changed = self.active_session.as_ref() != Some(&detail);
+        if active_session_changed {
+            self.active_session = Some(detail);
+            ctx.emit(OpenCodeServerModelEvent::ActiveSessionChanged);
+        }
+        if summary_changed {
+            ctx.emit(OpenCodeServerModelEvent::SessionsChanged);
+        }
+    }
+
+    fn update_conversation_turn_output(
+        &mut self,
+        turn_context: &OpenCodeConversationTurnContext,
+        output_text: String,
+        is_finished: bool,
+        is_error: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let update_result = BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, ctx| {
+            history.update_codex_exchange_output(
+                turn_context.conversation_id,
+                turn_context.exchange_id,
+                output_text,
+                is_finished,
+                is_error,
+                turn_context.terminal_view_id,
+                ctx,
+            )
+        });
+        if let Err(error) = update_result {
+            log::error!("Could not update OpenCode exchange output: {error:?}");
+        }
     }
 
     fn should_poll_active_session(&self, session_id: &str, generation: u64) -> bool {
@@ -2106,7 +2282,9 @@ fn opencode_list_tool_to_command_markers(tool: &str, state: &Value) -> Option<St
 
 fn opencode_read_tool_content(output: &str) -> Option<String> {
     let content = tagged_content(output, "content").or_else(|| tagged_content(output, "file"))?;
-    Some(strip_opencode_file_line_prefixes(content.trim_matches('\n')))
+    Some(strip_opencode_file_line_prefixes(
+        content.trim_matches('\n'),
+    ))
 }
 
 fn tagged_content<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
