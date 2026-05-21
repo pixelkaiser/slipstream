@@ -311,3 +311,103 @@ fn test_parse_git_status_file_without_spaces_still_works() {
     assert_eq!(result[0].0, std::path::PathBuf::from("simple.txt"));
     assert_eq!(result[0].1, GitFileStatus::Modified);
 }
+
+#[test]
+fn format_hunk_patch_formats_modified_file_hunk() {
+    let hunk = DiffHunk {
+        old_start_line: 10,
+        old_line_count: 3,
+        new_start_line: 10,
+        new_line_count: 3,
+        lines: vec![
+            DiffLine {
+                line_type: DiffLineType::Context,
+                old_line_number: Some(10),
+                new_line_number: Some(10),
+                text: "unchanged".to_string(),
+                no_trailing_newline: false,
+            },
+            DiffLine {
+                line_type: DiffLineType::Delete,
+                old_line_number: Some(11),
+                new_line_number: None,
+                text: "old".to_string(),
+                no_trailing_newline: false,
+            },
+            DiffLine {
+                line_type: DiffLineType::Add,
+                old_line_number: None,
+                new_line_number: Some(11),
+                text: "new".to_string(),
+                no_trailing_newline: false,
+            },
+            DiffLine {
+                line_type: DiffLineType::Context,
+                old_line_number: Some(12),
+                new_line_number: Some(12),
+                text: "also unchanged".to_string(),
+                no_trailing_newline: false,
+            },
+        ],
+        unified_diff_start: 0,
+        unified_diff_end: 0,
+    };
+
+    let patch = LocalDiffStateModel::format_hunk_patch(
+        std::path::Path::new("src/main.rs"),
+        &GitFileStatus::Modified,
+        &hunk,
+    )
+    .unwrap();
+
+    assert_eq!(
+        patch,
+        concat!(
+            "diff --git a/src/main.rs b/src/main.rs\n",
+            "--- a/src/main.rs\n",
+            "+++ b/src/main.rs\n",
+            "@@ -10,3 +10,3 @@\n",
+            " unchanged\n",
+            "-old\n",
+            "+new\n",
+            " also unchanged\n"
+        )
+    );
+}
+
+#[test]
+fn format_hunk_patch_formats_untracked_file_hunk() {
+    let hunk = DiffHunk {
+        old_start_line: 0,
+        old_line_count: 0,
+        new_start_line: 1,
+        new_line_count: 1,
+        lines: vec![DiffLine {
+            line_type: DiffLineType::Add,
+            old_line_number: None,
+            new_line_number: Some(1),
+            text: "new file".to_string(),
+            no_trailing_newline: false,
+        }],
+        unified_diff_start: 0,
+        unified_diff_end: 0,
+    };
+
+    let patch = LocalDiffStateModel::format_hunk_patch(
+        std::path::Path::new("new file.txt"),
+        &GitFileStatus::Untracked,
+        &hunk,
+    )
+    .unwrap();
+
+    assert_eq!(
+        patch,
+        concat!(
+            "diff --git a/new file.txt b/new file.txt\n",
+            "--- /dev/null\n",
+            "+++ b/new file.txt\n",
+            "@@ -0,0 +1 @@\n",
+            "+new file\n"
+        )
+    );
+}

@@ -374,6 +374,11 @@ impl RemoteDiffStateManager {
                 // Client-only event — should not occur on the server side.
                 log::warn!("Unexpected ConnectionLost event on server-side model key={key:?}");
             }
+            DiffStateModelEvent::GitIndexOperationFinished { .. }
+            | DiffStateModelEvent::GitIndexOperationFailed { .. } => {
+                // Local UI-only feedback; remote diff subscribers will receive
+                // the resulting snapshot or metadata events after the operation.
+            }
         }
     }
 

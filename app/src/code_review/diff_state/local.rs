@@ -61,7 +61,7 @@ cfg_if::cfg_if! {
 use super::{
     DiffHunk, DiffLine, DiffLineType, DiffMetadata, DiffMetadataAgainstBase, DiffMode, DiffState,
     DiffStateModelEvent, DiffStats, FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffData,
-    GitDiffWithBaseContent, GitFileStatus,
+    GitDiffWithBaseContent, GitFileStatus, GitIndexOperation,
 };
 #[cfg(all(feature = "local_fs", feature = "local_tty"))]
 use crate::terminal::local_shell::LocalShellState;
@@ -78,6 +78,59 @@ const BIDI_CHARS: [char; 9] = [
     '\u{2068}', // FIRST STRONG ISOLATE
     '\u{2069}', // POP DIRECTIONAL ISOLATE
 ];
+
+#[cfg(feature = "local_fs")]
+async fn run_git_command_with_stdin(
+    repo_path: &Path,
+    args: &[&str],
+    stdin: &str,
+) -> Result<String> {
+    use command::r#async::Command;
+    use command::Stdio;
+    use futures_lite::io::AsyncWriteExt;
+
+    log::debug!(
+        "[GIT OPERATION] local.rs run_git_command_with_stdin git {}",
+        args.join(" ")
+    );
+
+    let mut child = Command::new("git")
+        .arg("-c")
+        .arg("diff.autoRefreshIndex=false")
+        .args(args)
+        .current_dir(repo_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| anyhow!("Failed to execute git command: {e}"))?;
+
+    let mut child_stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("Failed to capture git command stdin"))?;
+    child_stdin
+        .write_all(stdin.as_bytes())
+        .await
+        .map_err(|e| anyhow!("Failed to write git command stdin: {e}"))?;
+    drop(child_stdin);
+
+    let output = child
+        .output()
+        .await
+        .map_err(|e| anyhow!("Failed to execute git command: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Err(anyhow!("Git command failed: {}, {}", stderr, stdout))
+    }
+}
 
 /// Internal representation of the diffs we've loaded against all bases.
 /// This could include changes against both the latest commit/HEAD
@@ -855,6 +908,226 @@ impl LocalDiffStateModel {
         _file_infos: Vec<FileStatusInfo>,
         _should_stash: bool,
         _branch_name: Option<String>,
+        _ctx: &mut ModelContext<Self>,
+    ) {
+        // Noop on WASM builds.
+    }
+
+    #[cfg(feature = "local_fs")]
+    async fn apply_index_operation_to_files_impl(
+        repo_sp: &StandardizedPath,
+        file_paths: Vec<PathBuf>,
+        operation: GitIndexOperation,
+    ) -> Result<()> {
+        if file_paths.is_empty() {
+            return Ok(());
+        }
+
+        let Some(repo_path) = repo_sp.to_local_path() else {
+            anyhow::bail!(
+                "apply_index_operation_to_files_impl called with non-local path: {repo_sp}"
+            );
+        };
+
+        let relative_paths = file_paths
+            .iter()
+            .map(|path| {
+                path.to_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow!("Invalid file path: contains invalid UTF-8"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut args = match operation {
+            GitIndexOperation::Stage => vec!["add", "--"],
+            GitIndexOperation::Unstage => vec!["restore", "--staged", "--"],
+        };
+        args.extend(relative_paths.iter().map(String::as_str));
+
+        run_git_command(&repo_path, &args).await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub fn apply_index_operation_to_files(
+        &mut self,
+        file_paths: Vec<PathBuf>,
+        operation: GitIndexOperation,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(current_repository) = &self.repository else {
+            return;
+        };
+        let current_repository_path = current_repository.as_ref(ctx).root_dir().clone();
+
+        ctx.spawn(
+            async move {
+                Self::apply_index_operation_to_files_impl(
+                    &current_repository_path,
+                    file_paths,
+                    operation,
+                )
+                .await
+            },
+            move |me, result, ctx| match result {
+                Ok(_) => {
+                    ctx.emit(DiffStateModelEvent::GitIndexOperationFinished { operation });
+                    me.load_diffs_for_current_repo(false, ctx);
+                    me.refresh_diff_metadata_for_current_repo(false, ctx);
+                }
+                Err(err) => {
+                    log::error!("Failed to apply git index operation: {err}");
+                    ctx.emit(DiffStateModelEvent::GitIndexOperationFailed {
+                        operation,
+                        message: err.to_string(),
+                    });
+                }
+            },
+        );
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    pub fn apply_index_operation_to_files(
+        &mut self,
+        _file_paths: Vec<PathBuf>,
+        _operation: GitIndexOperation,
+        _ctx: &mut ModelContext<Self>,
+    ) {
+        // Noop on WASM builds.
+    }
+
+    fn unified_diff_range(start: usize, count: usize) -> String {
+        if count == 1 {
+            start.to_string()
+        } else {
+            format!("{start},{count}")
+        }
+    }
+
+    fn format_hunk_patch(
+        file_path: &Path,
+        file_status: &GitFileStatus,
+        hunk: &DiffHunk,
+    ) -> Result<String> {
+        let path = file_path
+            .to_str()
+            .ok_or_else(|| anyhow!("Invalid file path: contains invalid UTF-8"))?;
+
+        let old_path = match file_status {
+            GitFileStatus::New | GitFileStatus::Untracked => "/dev/null".to_string(),
+            GitFileStatus::Renamed { old_path } => format!("a/{old_path}"),
+            _ => format!("a/{path}"),
+        };
+        let new_path = match file_status {
+            GitFileStatus::Deleted => "/dev/null".to_string(),
+            _ => format!("b/{path}"),
+        };
+        let diff_old_path = match file_status {
+            GitFileStatus::Renamed { old_path } => format!("a/{old_path}"),
+            _ => format!("a/{path}"),
+        };
+        let diff_new_path = format!("b/{path}");
+
+        let mut patch = String::new();
+        patch.push_str(&format!("diff --git {diff_old_path} {diff_new_path}\n"));
+        patch.push_str(&format!("--- {old_path}\n"));
+        patch.push_str(&format!("+++ {new_path}\n"));
+        patch.push_str(&format!(
+            "@@ -{} +{} @@\n",
+            Self::unified_diff_range(hunk.old_start_line, hunk.old_line_count),
+            Self::unified_diff_range(hunk.new_start_line, hunk.new_line_count)
+        ));
+
+        for line in &hunk.lines {
+            let prefix = match line.line_type {
+                DiffLineType::Add => '+',
+                DiffLineType::Delete => '-',
+                DiffLineType::Context => ' ',
+                DiffLineType::HunkHeader => continue,
+            };
+            patch.push(prefix);
+            patch.push_str(&line.text);
+            patch.push('\n');
+        }
+
+        Ok(patch)
+    }
+
+    #[cfg(feature = "local_fs")]
+    async fn apply_index_operation_to_hunk_impl(
+        repo_sp: &StandardizedPath,
+        file_path: PathBuf,
+        file_status: GitFileStatus,
+        hunk: DiffHunk,
+        operation: GitIndexOperation,
+    ) -> Result<()> {
+        let Some(repo_path) = repo_sp.to_local_path() else {
+            anyhow::bail!(
+                "apply_index_operation_to_hunk_impl called with non-local path: {repo_sp}"
+            );
+        };
+
+        let patch = Self::format_hunk_patch(&file_path, &file_status, &hunk)?;
+        let args = match operation {
+            GitIndexOperation::Stage => vec!["apply", "--cached", "--whitespace=nowarn"],
+            GitIndexOperation::Unstage => {
+                vec!["apply", "--cached", "--reverse", "--whitespace=nowarn"]
+            }
+        };
+
+        run_git_command_with_stdin(&repo_path, &args, &patch).await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "local_fs")]
+    pub fn apply_index_operation_to_hunk(
+        &mut self,
+        file_path: PathBuf,
+        file_status: GitFileStatus,
+        hunk: DiffHunk,
+        operation: GitIndexOperation,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(current_repository) = &self.repository else {
+            return;
+        };
+        let current_repository_path = current_repository.as_ref(ctx).root_dir().clone();
+
+        ctx.spawn(
+            async move {
+                Self::apply_index_operation_to_hunk_impl(
+                    &current_repository_path,
+                    file_path,
+                    file_status,
+                    hunk,
+                    operation,
+                )
+                .await
+            },
+            move |me, result, ctx| match result {
+                Ok(_) => {
+                    ctx.emit(DiffStateModelEvent::GitIndexOperationFinished { operation });
+                    me.load_diffs_for_current_repo(false, ctx);
+                    me.refresh_diff_metadata_for_current_repo(false, ctx);
+                }
+                Err(err) => {
+                    log::error!("Failed to apply git hunk index operation: {err}");
+                    ctx.emit(DiffStateModelEvent::GitIndexOperationFailed {
+                        operation,
+                        message: err.to_string(),
+                    });
+                }
+            },
+        );
+    }
+
+    #[cfg(not(feature = "local_fs"))]
+    pub fn apply_index_operation_to_hunk(
+        &mut self,
+        _file_path: PathBuf,
+        _file_status: GitFileStatus,
+        _hunk: DiffHunk,
+        _operation: GitIndexOperation,
         _ctx: &mut ModelContext<Self>,
     ) {
         // Noop on WASM builds.

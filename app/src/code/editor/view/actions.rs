@@ -656,6 +656,14 @@ pub enum CodeEditorViewAction {
     RevertDiffHunk {
         line_range: Range<LineCount>,
     },
+    /// Stage diff hunk changes (when clicking stage icon)
+    StageDiffHunk {
+        line_range: Range<LineCount>,
+    },
+    /// Unstage diff hunk changes (when clicking unstage icon)
+    UnstageDiffHunk {
+        line_range: Range<LineCount>,
+    },
     /// Open comment line (when opening a comment on a specific line)
     NewCommentOnLine {
         line: EditorLineLocation,
@@ -805,6 +813,8 @@ impl CodeEditorViewAction {
             | Self::HiddenSectionExpansion { .. }
             | Self::AddDiffHunkContext { .. }
             | Self::RevertDiffHunk { .. }
+            | Self::StageDiffHunk { .. }
+            | Self::UnstageDiffHunk { .. }
             | Self::NewCommentOnLine { .. }
             | Self::RequestOpenSavedComment { .. }
             | Self::MouseHovered { .. }
@@ -1091,6 +1101,18 @@ impl TypedActionView for CodeEditorView {
                     // Notify to re-render
                     ctx.notify();
                 }
+            }
+            StageDiffHunk { line_range } => {
+                ctx.emit(CodeEditorEvent::DiffHunkStageRequested {
+                    line_range: line_range.clone(),
+                });
+                ctx.notify();
+            }
+            UnstageDiffHunk { line_range } => {
+                ctx.emit(CodeEditorEvent::DiffHunkUnstageRequested {
+                    line_range: line_range.clone(),
+                });
+                ctx.notify();
             }
             NewCommentOnLine { line: line_info } => {
                 if FeatureFlag::InlineCodeReview.is_enabled() {

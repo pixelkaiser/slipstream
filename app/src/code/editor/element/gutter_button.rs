@@ -112,6 +112,64 @@ impl GutterButton for RevertHunkButton {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
+pub struct StageHunkButton {
+    is_enabled: bool,
+}
+
+impl StageHunkButton {
+    pub fn new(is_enabled: bool) -> Self {
+        Self { is_enabled }
+    }
+}
+
+impl GutterButton for StageHunkButton {
+    fn is_enabled(&self) -> bool {
+        self.is_enabled
+    }
+
+    fn tooltip_text(&self) -> Option<&'static str> {
+        if self.is_enabled {
+            Some("Stage diff hunk")
+        } else {
+            Some("Save changes to stage")
+        }
+    }
+
+    fn icon(&self) -> Icon {
+        Icon::PlusCircle
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UnstageHunkButton {
+    is_enabled: bool,
+}
+
+impl UnstageHunkButton {
+    pub fn new(is_enabled: bool) -> Self {
+        Self { is_enabled }
+    }
+}
+
+impl GutterButton for UnstageHunkButton {
+    fn is_enabled(&self) -> bool {
+        self.is_enabled
+    }
+
+    fn tooltip_text(&self) -> Option<&'static str> {
+        if self.is_enabled {
+            Some("Unstage diff hunk")
+        } else {
+            Some("Save changes to unstage")
+        }
+    }
+
+    fn icon(&self) -> Icon {
+        Icon::MinusCircle
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
 #[allow(dead_code)]
 pub enum CommentButton {
     #[default]
