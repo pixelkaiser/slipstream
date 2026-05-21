@@ -17,8 +17,7 @@ use super::{
     BlockVisibilitySettings, ChangelogSettings, CodeSettings, CodexAppServerSettings, DebugSettings,
     EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType,
     InputModeSettings, InputSettings, LocalControlSettings, PaneSettings,
-    SameLinePromptBlockSettings, ScrollSettings,
-    OpenCodeServerSettings,
+    SameLinePromptBlockSettings, ScrollSettings, OpenCodeServerSettings,
     SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
 };
 use crate::ai::cloud_agent_settings::CloudAgentSettings;

@@ -96,6 +96,7 @@ use crate::settings::{
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
     WarpDriveContextEnabled,
 };
+use crate::server::server_api::no_cloud_mode_enabled;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
 use crate::view_components::action_button::{

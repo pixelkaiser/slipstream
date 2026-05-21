@@ -212,7 +212,7 @@ use super::ssh::warpify::{
 use super::warpify::success_block::{WarpifySuccessBlock, WarpifySuccessBlockEvent};
 use super::warpify::trigger_state::{SshBlockState, WarpifyState};
 use super::warpify::WarpificationSource;
-use super::{cli_agent, CLIAgent, GridType};
+use super::{cli_agent, CLIAgent, GridType, HistoryEvent};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::redaction::redact_secrets;
