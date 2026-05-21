@@ -308,6 +308,8 @@ fn create_loaded_state_with_editors(
         .map(|(file_path, editor)| {
             let chevron_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
             let open_in_tab_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
+            let stage_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
+            let unstage_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
             let discard_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
             let add_context_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
             let copy_path_button = app.add_view(window_id, |_| ActionButton::new("", NakedTheme));
@@ -329,6 +331,8 @@ fn create_loaded_state_with_editors(
                 header_mouse_state: MouseStateHandle::default(),
                 chevron_button,
                 open_in_tab_button,
+                stage_button,
+                unstage_button,
                 discard_button,
                 add_context_button,
                 copy_path_button,

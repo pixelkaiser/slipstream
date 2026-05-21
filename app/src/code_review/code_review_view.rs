@@ -96,6 +96,7 @@ use crate::code_review::diff_selector::{DiffSelector, DiffSelectorEvent, DiffTar
 use crate::code_review::diff_state::{
     DiffHunk, DiffLineType, DiffMode, DiffState, DiffStateModel, DiffStateModelEvent, DiffStats,
     FileDiff, FileDiffAndContent, FileStatusInfo, GitDiffWithBaseContent, GitFileStatus,
+    GitIndexOperation,
 };
 use crate::code_review::editor_state::CodeReviewEditorState;
 use crate::code_review::find_model::CodeReviewFindModel;
@@ -336,6 +337,8 @@ pub enum CodeReviewAction {
     Close,
     EmitPaneEvent(PaneEvent),
     ShowDiscardConfirmDialog(Option<String>),
+    StageFile(String),
+    UnstageFile(String),
     ConfirmDiscardFile,
     CancelDiscardFile,
     ToggleStashChanges,
@@ -363,6 +366,8 @@ pub struct FileState {
     header_mouse_state: MouseStateHandle,
     chevron_button: ViewHandle<ActionButton>,
     open_in_tab_button: ViewHandle<ActionButton>,
+    stage_button: ViewHandle<ActionButton>,
+    unstage_button: ViewHandle<ActionButton>,
     discard_button: ViewHandle<ActionButton>,
     add_context_button: ViewHandle<ActionButton>,
     copy_path_button: ViewHandle<ActionButton>,
@@ -2339,6 +2344,19 @@ impl CodeReviewView {
                 }
                 ctx.notify();
             }
+            DiffStateModelEvent::GitIndexOperationFinished { operation } => {
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    let toast = DismissibleToast::default(operation.success_message().to_string());
+                    toast_stack.add_ephemeral_toast(toast, self.window_id, ctx);
+                });
+            }
+            DiffStateModelEvent::GitIndexOperationFailed { operation, message } => {
+                log::error!("{}: {message}", operation.failure_message());
+                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                    let toast = DismissibleToast::error(operation.failure_message().to_string());
+                    toast_stack.add_ephemeral_toast(toast, self.window_id, ctx);
+                });
+            }
             DiffStateModelEvent::ConnectionLost => {
                 // Don't clear loaded state — keep stale diffs visible
                 // so the user can still see what they were looking at.
@@ -2574,10 +2592,16 @@ impl CodeReviewView {
             .diff_state_model
             .as_ref(ctx)
             .is_git_operation_blocked(ctx);
+        let supports_staging = self.diff_state_model.as_ref(ctx).supports_staging();
         let discard_tooltip_text = if git_operation_blocked {
             get_discard_button_disabled_tooltip(git_operation_blocked)
         } else {
             "Discard changes".to_string()
+        };
+        let staging_disabled_tooltip = if git_operation_blocked {
+            get_discard_button_disabled_tooltip(git_operation_blocked)
+        } else {
+            "Git staging is unavailable".to_string()
         };
 
         let mut file_states = vec![];
@@ -2640,6 +2664,52 @@ impl CodeReviewView {
                     })
             });
 
+            let stage_path = file.file_diff.file_path.clone();
+            let stage_disabled_tooltip = staging_disabled_tooltip.clone();
+            let stage_button = ctx.add_typed_action_view(move |ctx| {
+                let mut button = ActionButton::new("", NakedTheme)
+                    .with_icon(Icon::PlusCircle)
+                    .with_size(ButtonSize::InlineActionHeader)
+                    .with_tooltip(if supports_staging && !git_operation_blocked {
+                        "Stage file"
+                    } else {
+                        stage_disabled_tooltip.as_str()
+                    });
+
+                if !supports_staging || git_operation_blocked {
+                    button.set_disabled(true, ctx);
+                } else {
+                    button = button.on_click(move |ctx| {
+                        ctx.dispatch_typed_action(CodeReviewAction::StageFile(stage_path.clone()))
+                    });
+                }
+                button
+            });
+
+            let unstage_path = file.file_diff.file_path.clone();
+            let unstage_disabled_tooltip = staging_disabled_tooltip.clone();
+            let unstage_button = ctx.add_typed_action_view(move |ctx| {
+                let mut button = ActionButton::new("", NakedTheme)
+                    .with_icon(Icon::MinusCircle)
+                    .with_size(ButtonSize::InlineActionHeader)
+                    .with_tooltip(if supports_staging && !git_operation_blocked {
+                        "Unstage file"
+                    } else {
+                        unstage_disabled_tooltip.as_str()
+                    });
+
+                if !supports_staging || git_operation_blocked {
+                    button.set_disabled(true, ctx);
+                } else {
+                    button = button.on_click(move |ctx| {
+                        ctx.dispatch_typed_action(CodeReviewAction::UnstageFile(
+                            unstage_path.clone(),
+                        ))
+                    });
+                }
+                button
+            });
+
             let discard_path = file.file_diff.file_path.clone();
             let discard_tooltip = discard_tooltip_text.clone();
             let discard_button = ctx.add_typed_action_view(move |ctx| {
@@ -2690,6 +2760,8 @@ impl CodeReviewView {
                 is_expanded,
                 chevron_button,
                 open_in_tab_button,
+                stage_button,
+                unstage_button,
                 discard_button,
                 add_context_button,
                 copy_path_button,
@@ -2987,6 +3059,7 @@ impl CodeReviewView {
             // PathBuf; for remote repos this yields a `RemotePath` with the
             // same host id as `repo_path`.
             let full_file_location = repo_path.join(&file.file_diff.file_path);
+            let supports_staging = self.diff_state_model.as_ref(ctx).supports_staging();
 
             let local_code_view = ctx.add_typed_action_view(|ctx| {
                 let editor = LocalCodeEditorView::new_with_global_buffer(
@@ -3016,12 +3089,18 @@ impl CodeReviewView {
                                 ctx,
                             )
                             .with_add_context_button() // Enable add context button for code review
-                            .with_revert_diff_hunk_button() // Enable revert diff button for code review
-                            .with_comment_button() // Enable comment button for code review
-                            .with_collapsible_diffs(false) // Disable collapsible diffs
-                            .disable_diff_indicator_expansion_on_hover()
-                            .with_gutter_hover_target(GutterHoverTarget::Line) // Show gutter element when hovering the line.
-                            .disable_find_and_replace(); // Disable find and replace since parts of the file are hidden from view
+                            .with_revert_diff_hunk_button(); // Enable revert diff button for code review
+
+                            if supports_staging {
+                                editor_view = editor_view.with_stage_diff_hunk_buttons();
+                            }
+
+                            editor_view = editor_view
+                                .with_comment_button() // Enable comment button for code review
+                                .with_collapsible_diffs(false) // Disable collapsible diffs
+                                .disable_diff_indicator_expansion_on_hover()
+                                .with_gutter_hover_target(GutterHoverTarget::Line) // Show gutter element when hovering the line.
+                                .disable_find_and_replace(); // Disable find and replace since parts of the file are hidden from view
 
                             editor_view.set_show_nav_bar(false);
 
@@ -3082,6 +3161,7 @@ impl CodeReviewView {
             None
         } else {
             let self_handle = ctx.handle();
+            let supports_staging = self.diff_state_model.as_ref(ctx).supports_staging();
             let code_editor_view = ctx.add_typed_action_view(|ctx| {
                 let mut editor_view = CodeEditorView::new(
                     None,
@@ -3098,12 +3178,18 @@ impl CodeReviewView {
                     ctx,
                 )
                 .with_add_context_button() // Enable add context button for code review
-                .with_revert_diff_hunk_button() // Enable revert diff button for code review
-                .with_comment_button() // Enable comment button for code review
-                .with_collapsible_diffs(false) // Disable collapsible diffs
-                .disable_diff_indicator_expansion_on_hover()
-                .with_gutter_hover_target(GutterHoverTarget::Line) // Show gutter element when hovering the line.
-                .disable_find_and_replace(); // Disable find and replace since parts of the file are hidden from view
+                .with_revert_diff_hunk_button(); // Enable revert diff button for code review
+
+                if supports_staging {
+                    editor_view = editor_view.with_stage_diff_hunk_buttons();
+                }
+
+                editor_view = editor_view
+                    .with_comment_button() // Enable comment button for code review
+                    .with_collapsible_diffs(false) // Disable collapsible diffs
+                    .disable_diff_indicator_expansion_on_hover()
+                    .with_gutter_hover_target(GutterHoverTarget::Line) // Show gutter element when hovering the line.
+                    .disable_find_and_replace(); // Disable find and replace since parts of the file are hidden from view
 
                 editor_view.set_show_nav_bar(false);
                 editor_view
@@ -4972,6 +5058,30 @@ impl CodeReviewView {
             );
         }
 
+        if self.diff_state_model.as_ref(app).supports_staging() {
+            right_row.add_child(
+                EventHandler::new(
+                    Container::new(ChildView::new(&file.stage_button).finish())
+                        .with_margin_left(4.)
+                        .finish(),
+                )
+                .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
+                .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+                .finish(),
+            );
+
+            right_row.add_child(
+                EventHandler::new(
+                    Container::new(ChildView::new(&file.unstage_button).finish())
+                        .with_margin_left(4.)
+                        .finish(),
+                )
+                .on_left_mouse_up(|_, _, _| DispatchEventResult::StopPropagation)
+                .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+                .finish(),
+            );
+        }
+
         if FeatureFlag::DiscardPerFileAndAllChanges.is_enabled() {
             right_row.add_child(
                 EventHandler::new(
@@ -5532,6 +5642,66 @@ impl CodeReviewView {
         FileStatusInfo { path, status }
     }
 
+    fn apply_index_operation_to_files(
+        &mut self,
+        file_paths: Vec<String>,
+        operation: GitIndexOperation,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let file_paths = file_paths.into_iter().map(PathBuf::from).collect();
+        self.diff_state_model.update(ctx, |model, ctx| {
+            model.apply_index_operation_to_files(file_paths, operation, ctx);
+        });
+    }
+
+    fn diff_hunk_for_line_range(
+        &self,
+        file_path: &str,
+        line_range: &Range<LineCount>,
+    ) -> Option<(GitFileStatus, DiffHunk)> {
+        let CodeReviewViewState::Loaded(state) = self.state() else {
+            return None;
+        };
+
+        let file_state = state.file_states.get(file_path)?;
+        let file_diff = &file_state.file_diff;
+
+        let requested_start = line_range.start.as_usize() + 1;
+        let requested_end = line_range.end.as_usize() + 1;
+
+        file_diff
+            .hunks
+            .iter()
+            .find(|hunk| {
+                let hunk_start = hunk.new_start_line;
+                let hunk_end = hunk_start + hunk.lines.len();
+                requested_start <= hunk_end && requested_end >= hunk_start
+            })
+            .cloned()
+            .map(|hunk| (file_diff.status.clone(), hunk))
+    }
+
+    fn apply_index_operation_to_hunk(
+        &mut self,
+        file_path: String,
+        line_range: Range<LineCount>,
+        operation: GitIndexOperation,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some((file_status, hunk)) = self.diff_hunk_for_line_range(&file_path, &line_range)
+        else {
+            log::warn!(
+                "Unable to find diff hunk for {file_path} at {line_range:?}",
+            );
+            return;
+        };
+
+        let file_path = PathBuf::from(file_path);
+        self.diff_state_model.update(ctx, |model, ctx| {
+            model.apply_index_operation_to_hunk(file_path, file_status, hunk, operation, ctx);
+        });
+    }
+
     fn discard_file(
         &mut self,
         path: StandardizedPath,
@@ -5591,6 +5761,22 @@ impl CodeReviewView {
         match event {
             CodeEditorEvent::DiffHunkContextAdded { line_range } => {
                 self.insert_diff_hunk_as_context(file_path, line_range.clone(), ctx);
+            }
+            CodeEditorEvent::DiffHunkStageRequested { line_range } => {
+                self.apply_index_operation_to_hunk(
+                    file_path,
+                    line_range.clone(),
+                    GitIndexOperation::Stage,
+                    ctx,
+                );
+            }
+            CodeEditorEvent::DiffHunkUnstageRequested { line_range } => {
+                self.apply_index_operation_to_hunk(
+                    file_path,
+                    line_range.clone(),
+                    GitIndexOperation::Unstage,
+                    ctx,
+                );
             }
             CodeEditorEvent::DiffReverted => {
                 send_telemetry_from_ctx!(
@@ -7414,6 +7600,20 @@ impl TypedActionView for CodeReviewView {
                     }
                 }
                 ctx.notify();
+            }
+            CodeReviewAction::StageFile(path) => {
+                self.apply_index_operation_to_files(
+                    vec![path.clone()],
+                    GitIndexOperation::Stage,
+                    ctx,
+                );
+            }
+            CodeReviewAction::UnstageFile(path) => {
+                self.apply_index_operation_to_files(
+                    vec![path.clone()],
+                    GitIndexOperation::Unstage,
+                    ctx,
+                );
             }
             CodeReviewAction::ConfirmDiscardFile => {
                 let is_discard_all = matches!(
