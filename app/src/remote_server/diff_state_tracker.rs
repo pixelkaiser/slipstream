@@ -380,6 +380,11 @@ impl RemoteDiffStateManager {
             | DiffStateModelEvent::BranchCommittedFilesReceived(_) => {
                 // Client-only events don't go through this tracker.
             }
+            DiffStateModelEvent::GitIndexOperationFinished { .. }
+            | DiffStateModelEvent::GitIndexOperationFailed { .. } => {
+                // Local UI-only feedback; remote diff subscribers will receive
+                // the resulting snapshot or metadata events after the operation.
+            }
         }
     }
 

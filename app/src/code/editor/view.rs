@@ -59,7 +59,8 @@ use crate::code::editor::comments::PendingComment;
 use crate::code::editor::diff::DiffStatus;
 use crate::code::editor::element::{
     AddAsContextButton, CommentButton, EditorWrapper, EditorWrapperStateHandle, GutterHoverTarget,
-    GutterRange, InnerEditor, LineNumberConfig, RevertHunkButton,
+    GutterRange, InnerEditor, LineNumberConfig, RevertHunkButton, StageHunkButton,
+    UnstageHunkButton,
 };
 use crate::code::editor::find::view::{CodeEditorFind as Find, Event as FindViewEvent};
 use crate::code::editor::goto_line::view::{Event as GoToLineEvent, GoToLineView};
@@ -120,6 +121,14 @@ pub enum CodeEditorEvent {
     },
     /// Emitted when a diff hunk is reverted
     DiffReverted,
+    /// Emitted when a diff hunk should be staged in git.
+    DiffHunkStageRequested {
+        line_range: Range<LineCount>,
+    },
+    /// Emitted when a diff hunk should be unstaged in git.
+    DiffHunkUnstageRequested {
+        line_range: Range<LineCount>,
+    },
     /// Emitted when the inline comment editor is opened.
     CommentEditorOpened,
     HiddenSectionExpanded,
@@ -178,6 +187,10 @@ struct CodeEditorViewDisplayOptions {
     diff_hunk_as_context: Option<AddAsContextButton>,
     /// The revert diff button, or `None` if it is not currently visible.
     revert_diff_hunk: Option<RevertHunkButton>,
+    /// The stage diff button, or `None` if it is not currently visible.
+    stage_diff_hunk: Option<StageHunkButton>,
+    /// The unstage diff button, or `None` if it is not currently visible.
+    unstage_diff_hunk: Option<UnstageHunkButton>,
     /// The add comment button, or `None` if it is not currently visible.
     comment_button: Option<CommentButton>,
     /// Whether to expand the width of the diff indicator in the gutter on hover.
@@ -398,6 +411,8 @@ impl CodeEditorView {
                 show_nav_bar: true,
                 diff_hunk_as_context: Default::default(),
                 revert_diff_hunk: Default::default(),
+                stage_diff_hunk: Default::default(),
+                unstage_diff_hunk: Default::default(),
                 comment_button: Default::default(),
                 // By default expand diff indicators on hover.
                 expand_diff_indicator_width_on_hover: true,
@@ -469,6 +484,15 @@ impl CodeEditorView {
     pub fn with_revert_diff_hunk_button(mut self) -> Self {
         self.display_options.revert_diff_hunk =
             Some(RevertHunkButton::new(true /* is_enabled */));
+        self
+    }
+
+    /// Enables the "stage" and "unstage" buttons on diff hunks. Only enable this for code review views.
+    pub fn with_stage_diff_hunk_buttons(mut self) -> Self {
+        self.display_options.stage_diff_hunk =
+            Some(StageHunkButton::new(true /* is_enabled */));
+        self.display_options.unstage_diff_hunk =
+            Some(UnstageHunkButton::new(true /* is_enabled */));
         self
     }
 
@@ -620,6 +644,8 @@ impl CodeEditorView {
             false,
             self.model.as_ref(ctx).diff_navigation_state().clone(),
             None,
+            Default::default(),
+            Default::default(),
             Default::default(),
             Default::default(),
             Default::default(),
@@ -2243,6 +2269,8 @@ impl View for CodeEditorView {
             },
             self.display_options.diff_hunk_as_context,
             self.display_options.revert_diff_hunk,
+            self.display_options.stage_diff_hunk,
+            self.display_options.unstage_diff_hunk,
             self.display_options.comment_button,
             self.comment_locations.clone(),
             self.display_options.expand_diff_indicator_width_on_hover,
