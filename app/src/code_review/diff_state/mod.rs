@@ -538,6 +538,17 @@ impl DiffStateModel {
         }
     }
 
+    pub(crate) fn supports_untracked_files_toggle(&self) -> bool {
+        matches!(self, Self::Local(_))
+    }
+
+    pub(crate) fn include_untracked_files(&self, ctx: &AppContext) -> bool {
+        match self {
+            Self::Local(m) => m.as_ref(ctx).include_untracked_files(),
+            Self::Remote(_) => false,
+        }
+    }
+
     pub(crate) fn get_uncommitted_stats(&self, ctx: &AppContext) -> Option<DiffStats> {
         match self {
             Self::Local(m) => m.as_ref(ctx).get_uncommitted_stats(),
@@ -663,6 +674,17 @@ impl DiffStateModel {
                     model.set_diff_mode(mode, true, preferred_session, ctx);
                 });
             }
+        }
+    }
+
+    pub(crate) fn set_include_untracked_files(&self, include: bool, ctx: &mut ModelContext<Self>) {
+        match self {
+            Self::Local(local) => {
+                local.update(ctx, |local, ctx| {
+                    local.set_include_untracked_files(include, ctx);
+                });
+            }
+            Self::Remote(_) => {}
         }
     }
 
