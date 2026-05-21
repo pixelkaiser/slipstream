@@ -12,6 +12,7 @@ pub(crate) struct FileInvalidationTask {
     pub(crate) repo_path: PathBuf,
     pub(crate) mode: DiffMode,
     pub(crate) merge_base: Option<String>,
+    pub(crate) include_untracked_files: bool,
 }
 
 impl SyncQueueTaskTrait for FileInvalidationTask {
@@ -28,6 +29,7 @@ impl SyncQueueTaskTrait for FileInvalidationTask {
         let file = self.file.clone();
         let mode = self.mode.clone();
         let merge_base = self.merge_base.clone();
+        let include_untracked_files = self.include_untracked_files;
         Box::pin(async move {
             // File invalidation runs local git commands against a local repo path,
             // so using LocalDiffStateModel directly is correct — remote repos use a
@@ -37,6 +39,7 @@ impl SyncQueueTaskTrait for FileInvalidationTask {
                 &file,
                 &mode,
                 merge_base.as_deref(),
+                include_untracked_files,
             )
             .await
             .map_err(DiffStateError::from)
