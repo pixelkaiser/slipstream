@@ -422,6 +422,56 @@ async fn run_command_round_trip() {
 }
 
 #[tokio::test]
+async fn dropped_run_command_sends_abort() {
+    let (client_stream, server_stream) = tokio::io::duplex(4096);
+    let (server_read, _server_write) = tokio::io::split(server_stream);
+    let (client_read, client_write) = tokio::io::split(client_stream);
+    let mut server_read = server_read.compat();
+
+    let executor = executor::Background::default();
+    let (client, _disconnect_rx, _failure_rx) =
+        RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
+    let client = std::sync::Arc::new(client);
+
+    let request_task = {
+        let client = std::sync::Arc::clone(&client);
+        tokio::spawn(async move {
+            client
+                .run_command(
+                    SessionId::from(42u64),
+                    "sleep 120".to_string(),
+                    None,
+                    Default::default(),
+                )
+                .await
+        })
+    };
+
+    let request = protocol::read_client_message(&mut server_read).await.unwrap();
+    let request_id = request.request_id.clone();
+    assert!(matches!(
+        request.message,
+        Some(client_message::Message::RunCommand(_))
+    ));
+
+    request_task.abort();
+
+    let abort = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        protocol::read_client_message(&mut server_read),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    match abort.message {
+        Some(client_message::Message::Abort(abort)) => {
+            assert_eq!(abort.request_id_to_abort, request_id);
+        }
+        other => panic!("Expected Abort, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn concurrent_in_flight_requests() {
     let (client, _disconnect_rx, _executor) = setup_mock_client(|_| {
         server_message::Message::InitializeResponse(InitializeResponse {
