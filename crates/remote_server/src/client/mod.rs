@@ -190,6 +190,45 @@ pub struct RemoteServerClient {
     failure_tx: async_channel::Sender<RequestFailedEvent>,
 }
 
+struct PendingRequestGuard {
+    request_id: RequestId,
+    pending_requests: Arc<DashMap<RequestId, oneshot::Sender<Result<ServerMessage, ClientError>>>>,
+    outbound_tx: async_channel::Sender<ClientMessage>,
+}
+
+impl PendingRequestGuard {
+    fn new(
+        request_id: RequestId,
+        pending_requests: Arc<
+            DashMap<RequestId, oneshot::Sender<Result<ServerMessage, ClientError>>>,
+        >,
+        outbound_tx: async_channel::Sender<ClientMessage>,
+    ) -> Self {
+        Self {
+            request_id,
+            pending_requests,
+            outbound_tx,
+        }
+    }
+
+    fn cancel_if_pending(&self) {
+        if self.pending_requests.remove(&self.request_id).is_some() {
+            let _ = self.outbound_tx.try_send(ClientMessage {
+                request_id: RequestId::new().to_string(),
+                message: Some(client_message::Message::Abort(Abort {
+                    request_id_to_abort: self.request_id.to_string(),
+                })),
+            });
+        }
+    }
+}
+
+impl Drop for PendingRequestGuard {
+    fn drop(&mut self) {
+        self.cancel_if_pending();
+    }
+}
+
 impl fmt::Debug for RemoteServerClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RemoteServerClient").finish_non_exhaustive()
@@ -1201,6 +1240,11 @@ impl RemoteServerClient {
     ) -> Result<ServerMessage, ClientError> {
         let (tx, rx) = oneshot::channel();
         self.pending_requests.insert(request_id.clone(), tx);
+        let guard = PendingRequestGuard::new(
+            request_id.clone(),
+            Arc::clone(&self.pending_requests),
+            self.outbound_tx.clone(),
+        );
 
         // Check if the reader task has already marked the connection as dead.
         // The DashMap lock from `insert` above synchronizes with the lock from
@@ -1221,8 +1265,7 @@ impl RemoteServerClient {
             Ok(Err(_)) => return Err(ClientError::ResponseChannelClosed),
             Err(_) => {
                 // Timed out — clean up and send abort.
-                self.pending_requests.remove(&request_id);
-                self.send_abort(&request_id);
+                guard.cancel_if_pending();
                 return Err(ClientError::Timeout(REQUEST_TIMEOUT));
             }
         };
@@ -1240,17 +1283,6 @@ impl RemoteServerClient {
         }
 
         Ok(response)
-    }
-
-    /// Sends an `Abort` notification for the given request ID.
-    fn send_abort(&self, request_id_to_abort: &RequestId) {
-        let msg = ClientMessage {
-            request_id: RequestId::new().to_string(),
-            message: Some(client_message::Message::Abort(Abort {
-                request_id_to_abort: request_id_to_abort.to_string(),
-            })),
-        };
-        self.send_notification(msg);
     }
 
     /// Sends a message without registering a pending request (fire-and-forget).
