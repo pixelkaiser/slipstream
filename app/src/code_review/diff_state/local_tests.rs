@@ -251,6 +251,30 @@ fn test_parse_git_status_untracked_file_with_spaces() {
 }
 
 #[test]
+fn test_parse_git_status_for_code_review_excludes_untracked_by_default() {
+    let status_output = "1 .M N... 100644 100644 100644 abc1234 def5678 tracked.txt\0\
+         ? generated.txt";
+    let result =
+        LocalDiffStateModel::parse_git_status_for_code_review(status_output, false).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].0, std::path::PathBuf::from("tracked.txt"));
+    assert_eq!(result[0].1, GitFileStatus::Modified);
+}
+
+#[test]
+fn test_parse_git_status_for_code_review_includes_untracked_when_enabled() {
+    let status_output = "1 .M N... 100644 100644 100644 abc1234 def5678 tracked.txt\0\
+         ? generated.txt";
+    let result =
+        LocalDiffStateModel::parse_git_status_for_code_review(status_output, true).unwrap();
+    assert_eq!(result.len(), 2);
+    assert_eq!(result[0].0, std::path::PathBuf::from("tracked.txt"));
+    assert_eq!(result[0].1, GitFileStatus::Modified);
+    assert_eq!(result[1].0, std::path::PathBuf::from("generated.txt"));
+    assert_eq!(result[1].1, GitFileStatus::Untracked);
+}
+
+#[test]
 fn test_parse_git_status_unmerged_file_with_spaces() {
     // Porcelain v2 unmerged entry (type u) with spaces in the path.
     // Format: u <xy> <sub> <m1> <m2> <m3> <mW> <h1> <h2> <h3> <path>

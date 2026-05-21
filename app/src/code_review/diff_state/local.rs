@@ -204,6 +204,10 @@ pub struct LocalDiffStateModel {
     /// Controls whether periodic throttled metadata refresh is active.
     /// Refresh is suppressed when the code review pane is not open.
     metadata_refresh_enabled: bool,
+    /// Whether code review should include untracked files in diff loads.
+    /// Defaults to false because generated artifacts and virtualenvs can make
+    /// the initial diff load prohibitively expensive.
+    include_untracked_files: bool,
     // TODO: Remove pending file invalidations — pause the queue instead.
     /// Files that have been invalidated but not yet processed when diff is still loading.
     #[cfg(feature = "local_fs")]
@@ -271,6 +275,7 @@ impl LocalDiffStateModel {
             refreshing_pr_info_handle: None,
             pr_info_attempted_for_branch: None,
             metadata_refresh_enabled: false,
+            include_untracked_files: false,
             file_invalidation: FileInvalidationState::new(queue),
             pending_file_updates: None,
         };
@@ -313,6 +318,7 @@ impl LocalDiffStateModel {
             refreshing_pr_info_handle: None,
             pr_info_attempted_for_branch: None,
             metadata_refresh_enabled: false,
+            include_untracked_files: false,
         }
     }
 
@@ -334,6 +340,10 @@ impl LocalDiffStateModel {
 
     pub fn diff_mode(&self) -> DiffMode {
         self.mode.clone()
+    }
+
+    pub fn include_untracked_files(&self) -> bool {
+        self.include_untracked_files
     }
 
     pub fn get_uncommitted_stats(&self) -> Option<DiffStats> {
@@ -475,6 +485,16 @@ impl LocalDiffStateModel {
         }
     }
 
+    pub fn set_include_untracked_files(&mut self, include: bool, ctx: &mut ModelContext<Self>) {
+        if self.include_untracked_files == include {
+            return;
+        }
+
+        self.include_untracked_files = include;
+        self.load_diffs_for_current_repo(false, ctx);
+        self.refresh_diff_metadata_for_current_repo(false, ctx);
+    }
+
     /// Like [`Self::set_diff_mode`], but also arranges for the next diff load
     /// to fetch the base branch from origin if it is not available locally.
     /// This is intended for the `insert_code_review_comments` flow where the
@@ -508,10 +528,17 @@ impl LocalDiffStateModel {
             .root_dir()
             .to_local_path_lossy();
         let mode = self.mode.clone();
+        let include_untracked_files = self.include_untracked_files;
         self.state = InternalDiffState::Loading;
         self.computing_diffs_abort_handle = Some(ctx.spawn(
             async move {
-                Self::load_diffs_for_repo(current_repository_path, mode, should_fetch_base).await
+                Self::load_diffs_for_repo(
+                    current_repository_path,
+                    mode,
+                    should_fetch_base,
+                    include_untracked_files,
+                )
+                .await
             },
             Self::handle_updated_state_for_repo,
         ));
@@ -871,9 +898,15 @@ impl LocalDiffStateModel {
 
         // Always include base branch metadata since only code review uses this model now.
         let include_base_branch = true;
+        let include_untracked_files = self.include_untracked_files;
         let abort_handle = ctx.spawn(
             async move {
-                Self::load_metadata_for_repo(current_repository_path, include_base_branch).await
+                Self::load_metadata_for_repo(
+                    current_repository_path,
+                    include_base_branch,
+                    include_untracked_files,
+                )
+                .await
             },
             move |me, res, ctx| me.handle_updated_metadata_for_repo(res, should_reload_diffs, ctx),
         );
@@ -911,9 +944,15 @@ impl LocalDiffStateModel {
             let new_repository_root = new_repository.as_ref(ctx).root_dir().to_local_path_lossy();
             // Always include base branch metadata since only code review uses this model now.
             let include_base_branch = true;
+            let include_untracked_files = self.include_untracked_files;
             let abort_handle = ctx.spawn(
                 async move {
-                    Self::load_metadata_for_repo(new_repository_root, include_base_branch).await
+                    Self::load_metadata_for_repo(
+                        new_repository_root,
+                        include_base_branch,
+                        include_untracked_files,
+                    )
+                    .await
                 },
                 move |me, res, ctx| me.handle_updated_metadata_for_repo(res, true, ctx),
             );
@@ -1098,6 +1137,7 @@ impl LocalDiffStateModel {
                 repo_path: repo_path.clone(),
                 mode: mode.clone(),
                 merge_base: merge_base.clone(),
+                include_untracked_files: self.include_untracked_files,
             };
             queue.enqueue(task, None, "file-invalidation");
         }
@@ -1261,6 +1301,7 @@ impl LocalDiffStateModel {
     async fn load_metadata_for_repo(
         repo_path: PathBuf,
         include_base_branch: bool,
+        include_untracked_files: bool,
     ) -> Result<DiffMetadata> {
         // Detect the main branch name first
         let main_branch_name = detect_main_branch(&repo_path).await?;
@@ -1271,9 +1312,17 @@ impl LocalDiffStateModel {
             .await
             .is_ok();
 
-        let diff_against_head = diff_metadata_against_head(&repo_path).await?;
+        let diff_against_head =
+            diff_metadata_against_head_impl(&repo_path, include_untracked_files).await?;
         let diff_against_base_branch = if include_base_branch {
-            Some(Self::diff_metadata_against_specific_branch(&repo_path, &main_branch_name).await?)
+            Some(
+                Self::diff_metadata_against_specific_branch(
+                    &repo_path,
+                    &main_branch_name,
+                    include_untracked_files,
+                )
+                .await?,
+            )
         } else {
             None
         };
@@ -1319,7 +1368,7 @@ impl LocalDiffStateModel {
         mode: DiffMode,
         repo_path: PathBuf,
     ) -> Option<GitDiffData> {
-        let diffs = Self::load_diffs_for_repo(repo_path, mode, false).await;
+        let diffs = Self::load_diffs_for_repo(repo_path, mode, false, false).await;
         diffs.changes.ok().map(|diff| diff.into())
     }
 
@@ -1332,7 +1381,7 @@ impl LocalDiffStateModel {
         mode: DiffMode,
         repo_path: PathBuf,
     ) -> Option<GitDiffWithBaseContent> {
-        let diffs = Self::load_diffs_for_repo(repo_path, mode, false).await;
+        let diffs = Self::load_diffs_for_repo(repo_path, mode, false, false).await;
         diffs.changes.ok()
     }
 
@@ -1340,15 +1389,28 @@ impl LocalDiffStateModel {
         repo_path: PathBuf,
         mode: DiffMode,
         should_fetch_base: bool,
+        include_untracked_files: bool,
     ) -> DiffsWithBaseContent {
         let diffs = match mode {
-            DiffMode::Head => Self::diff_state_against_head(&repo_path).await,
+            DiffMode::Head => {
+                Self::diff_state_against_head(&repo_path, include_untracked_files).await
+            }
             DiffMode::MainBranch => {
-                Self::diff_state_against_base_branch(&repo_path, should_fetch_base).await
+                Self::diff_state_against_base_branch(
+                    &repo_path,
+                    should_fetch_base,
+                    include_untracked_files,
+                )
+                .await
             }
             DiffMode::OtherBranch(branch) => {
-                Self::diff_state_against_specific_branch(&repo_path, branch, should_fetch_base)
-                    .await
+                Self::diff_state_against_specific_branch(
+                    &repo_path,
+                    branch,
+                    should_fetch_base,
+                    include_untracked_files,
+                )
+                .await
             }
         };
 
@@ -1496,29 +1558,60 @@ impl LocalDiffStateModel {
         Ok(count)
     }
 
-    async fn file_statuses_against_head(repo_path: &Path) -> Result<Vec<(PathBuf, GitFileStatus)>> {
+    fn untracked_files_arg(include_untracked_files: bool) -> &'static str {
+        if include_untracked_files {
+            "--untracked-files=all"
+        } else {
+            "--untracked-files=no"
+        }
+    }
+
+    fn parse_git_status_for_code_review(
+        status_output: &str,
+        include_untracked_files: bool,
+    ) -> Result<Vec<(PathBuf, GitFileStatus)>> {
+        let files = Self::parse_git_status(status_output)?;
+        if include_untracked_files {
+            Ok(files)
+        } else {
+            Ok(files
+                .into_iter()
+                .filter(|(_, status)| !matches!(status, GitFileStatus::Untracked))
+                .collect())
+        }
+    }
+
+    async fn file_statuses_against_head(
+        repo_path: &Path,
+        include_untracked_files: bool,
+    ) -> Result<Vec<(PathBuf, GitFileStatus)>> {
         // First, get the list of changed files with their status
+        let untracked_arg = Self::untracked_files_arg(include_untracked_files);
         log::debug!(
-            "[GIT OPERATION] local.rs file_statuses_against_head git --no-optional-locks status --untracked-files=all --branch --porcelain=2 -z"
+            "[GIT OPERATION] local.rs file_statuses_against_head git --no-optional-locks status {untracked_arg} --branch --porcelain=2 -z"
         );
         let status_output = run_git_command(
             repo_path,
             &[
                 "--no-optional-locks", // Avoid taking locks that might interfere with other git operations
                 "status",
-                "--untracked-files=all", // Get all untracked files
-                "--branch",              // Get branch information
-                "--porcelain=2",         // Use porcelain=2 to match git desktop implementation
-                "-z",                    // Split output by null characters
+                untracked_arg,
+                "--branch",      // Get branch information
+                "--porcelain=2", // Use porcelain=2 to match git desktop implementation
+                "-z",            // Split output by null characters
             ],
         )
         .await?;
 
-        Self::parse_git_status(&status_output)
+        Self::parse_git_status_for_code_review(&status_output, include_untracked_files)
     }
 
-    async fn diff_state_against_head(repo_path: &Path) -> Result<GitDiffWithBaseContent> {
-        let changed_files = Self::file_statuses_against_head(repo_path).await?;
+    async fn diff_state_against_head(
+        repo_path: &Path,
+        include_untracked_files: bool,
+    ) -> Result<GitDiffWithBaseContent> {
+        let changed_files =
+            Self::file_statuses_against_head(repo_path, include_untracked_files).await?;
 
         // Get binary file information using git diff --numstat
         let binary_files = Self::get_binary_files(repo_path).await?;
@@ -1558,11 +1651,18 @@ impl LocalDiffStateModel {
     async fn diff_state_against_base_branch(
         repo_path: &Path,
         should_fetch_base: bool,
+        include_untracked_files: bool,
     ) -> Result<GitDiffWithBaseContent> {
         // First detect the main branch
         let main_branch = detect_main_branch(repo_path).await?;
 
-        Self::diff_state_against_specific_branch(repo_path, main_branch, should_fetch_base).await
+        Self::diff_state_against_specific_branch(
+            repo_path,
+            main_branch,
+            should_fetch_base,
+            include_untracked_files,
+        )
+        .await
     }
 
     /// Returns the per-file status by running a scoped `git status` (Head mode)
@@ -1572,6 +1672,7 @@ impl LocalDiffStateModel {
         file: &Path,
         mode: &DiffMode,
         merge_base: Option<&str>,
+        include_untracked_files: bool,
     ) -> Result<Option<(PathBuf, GitFileStatus)>> {
         let relative = file
             .strip_prefix(repo_path)
@@ -1581,14 +1682,16 @@ impl LocalDiffStateModel {
 
         match (mode, merge_base) {
             (DiffMode::Head, _) => {
+                let untracked_arg = Self::untracked_files_arg(include_untracked_files);
                 log::debug!(
-                    "[GIT OPERATION] local.rs file_status_for_path git status -- {rel_str}"
+                    "[GIT OPERATION] local.rs file_status_for_path git status {untracked_arg} -- {rel_str}"
                 );
                 let output = run_git_command(
                     repo_path,
                     &[
                         "--no-optional-locks",
                         "status",
+                        untracked_arg,
                         "--porcelain=2",
                         "-z",
                         "--",
@@ -1596,7 +1699,8 @@ impl LocalDiffStateModel {
                     ],
                 )
                 .await?;
-                let statuses = Self::parse_git_status(&output)?;
+                let statuses =
+                    Self::parse_git_status_for_code_review(&output, include_untracked_files)?;
                 Ok(statuses.into_iter().find(|(p, _)| *p == relative))
             }
             (_, Some(base)) => {
@@ -1616,14 +1720,27 @@ impl LocalDiffStateModel {
                     return Ok(Some(entry));
                 }
 
+                if !include_untracked_files {
+                    return Ok(None);
+                }
+
                 // The file may be untracked (not in the base diff). Fall back to
                 // `git status` scoped to this path to detect untracked files.
                 log::debug!(
                     "[GIT OPERATION] local.rs file_status_for_path git status -- {rel_str} (untracked fallback)"
                 );
-                let status_output =
-                    run_git_command(repo_path, &["status", "--porcelain=2", "-z", "--", rel_str])
-                        .await?;
+                let status_output = run_git_command(
+                    repo_path,
+                    &[
+                        "status",
+                        "--untracked-files=all",
+                        "--porcelain=2",
+                        "-z",
+                        "--",
+                        rel_str,
+                    ],
+                )
+                .await?;
                 let status_files = Self::parse_git_status(&status_output)?;
                 Ok(status_files
                     .into_iter()
@@ -1668,6 +1785,7 @@ impl LocalDiffStateModel {
         file: &Path,
         mode: &DiffMode,
         merge_base: Option<&str>,
+        include_untracked_files: bool,
     ) -> Result<(PathBuf, Option<Arc<FileDiffAndContent>>)> {
         let relative = file
             .strip_prefix(repo_path)
@@ -1675,7 +1793,8 @@ impl LocalDiffStateModel {
             .unwrap_or_else(|_| file.to_path_buf());
 
         let Some((file_path, status)) =
-            Self::file_status_for_path(repo_path, file, mode, merge_base).await?
+            Self::file_status_for_path(repo_path, file, mode, merge_base, include_untracked_files)
+                .await?
         else {
             // File is no longer part of the diff.
             return Ok((relative, None));
@@ -1749,6 +1868,7 @@ impl LocalDiffStateModel {
     async fn file_statuses_against_base(
         repo_path: &Path,
         merge_base: &str,
+        include_untracked_files: bool,
     ) -> Result<Vec<(PathBuf, GitFileStatus)>> {
         log::debug!(
             "[GIT OPERATION] local.rs file_statuses_against_base git diff --name-status -z {merge_base}"
@@ -1757,11 +1877,15 @@ impl LocalDiffStateModel {
             run_git_command(repo_path, &["diff", "--name-status", "-z", merge_base]).await?;
 
         let mut changed_files = if diff_output.trim().is_empty() {
-            // No tracked changes, but we might have untracked files
+            // No tracked changes, but we might still include untracked files below.
             Vec::new()
         } else {
             Self::parse_git_diff_name_status(&diff_output)?
         };
+
+        if !include_untracked_files {
+            return Ok(changed_files);
+        }
 
         // Also get untracked files, as they should be included in branch comparisons
         log::debug!(
@@ -1790,6 +1914,7 @@ impl LocalDiffStateModel {
         repo_path: &Path,
         branch: String,
         should_fetch_base: bool,
+        include_untracked_files: bool,
     ) -> Result<GitDiffWithBaseContent> {
         // Get the merge base between HEAD and the specified branch.
         let merge_base_result = if should_fetch_base {
@@ -1810,7 +1935,9 @@ impl LocalDiffStateModel {
             }
         };
 
-        let changed_files = Self::file_statuses_against_base(repo_path, &merge_base).await?;
+        let changed_files =
+            Self::file_statuses_against_base(repo_path, &merge_base, include_untracked_files)
+                .await?;
 
         // If we have no changes at all (tracked or untracked), return empty result
         if changed_files.is_empty() {
@@ -1861,6 +1988,7 @@ impl LocalDiffStateModel {
     async fn diff_metadata_against_specific_branch(
         repo_path: &Path,
         branch: &str,
+        include_untracked_files: bool,
     ) -> Result<DiffMetadataAgainstBase> {
         // Get the merge base between HEAD and the main branch
         let Ok(merge_base) = Self::get_merge_base(repo_path, branch).await else {
@@ -1877,28 +2005,30 @@ impl LocalDiffStateModel {
             run_git_command(repo_path, &["diff", "--name-status", "-z", &merge_base]).await?;
 
         let mut changed_files = if diff_output.trim().is_empty() {
-            // No tracked changes, but we might have untracked files
+            // No tracked changes, but we might still include untracked files below.
             Vec::new()
         } else {
             Self::parse_git_diff_name_status(&diff_output)?
         };
 
-        // Also get untracked files, as they should be included in branch comparisons
-        log::debug!(
-            "[GIT OPERATION] local.rs diff_metadata_against_specific_branch git status --untracked-files=all --porcelain=2 -z"
-        );
-        let status_output = run_git_command(
-            repo_path,
-            &["status", "--untracked-files=all", "--porcelain=2", "-z"],
-        )
-        .await?;
+        if include_untracked_files {
+            // Also get untracked files, as they should be included in branch comparisons
+            log::debug!(
+                "[GIT OPERATION] local.rs diff_metadata_against_specific_branch git status --untracked-files=all --porcelain=2 -z"
+            );
+            let status_output = run_git_command(
+                repo_path,
+                &["status", "--untracked-files=all", "--porcelain=2", "-z"],
+            )
+            .await?;
 
-        let status_files = Self::parse_git_status(&status_output)?;
+            let status_files = Self::parse_git_status(&status_output)?;
 
-        // Add untracked files to the changed files list
-        for (file_path, status) in status_files {
-            if matches!(status, GitFileStatus::Untracked) {
-                changed_files.push((file_path, status));
+            // Add untracked files to the changed files list
+            for (file_path, status) in status_files {
+                if matches!(status, GitFileStatus::Untracked) {
+                    changed_files.push((file_path, status));
+                }
             }
         }
 
@@ -1917,7 +2047,7 @@ impl LocalDiffStateModel {
             if let Some(metadata) = num_stat_metadata.get(file_path) {
                 total_additions += metadata.lines_added;
                 total_deletions += metadata.lines_removed;
-            } else if matches!(status, GitFileStatus::Untracked) {
+            } else if include_untracked_files && matches!(status, GitFileStatus::Untracked) {
                 // Get total size of the file
                 let num_lines =
                     Self::num_lines_in_file_if_non_binary(&repo_path.join(file_path)).await?;
@@ -2545,21 +2675,32 @@ impl LocalDiffStateModel {
 pub(crate) async fn diff_metadata_against_head(
     repo_path: &Path,
 ) -> Result<DiffMetadataAgainstBase> {
+    diff_metadata_against_head_impl(repo_path, false).await
+}
+
+async fn diff_metadata_against_head_impl(
+    repo_path: &Path,
+    include_untracked_files: bool,
+) -> Result<DiffMetadataAgainstBase> {
     // First, get the list of changed files with their status
+    let untracked_arg = LocalDiffStateModel::untracked_files_arg(include_untracked_files);
     let status_output = run_git_command(
         repo_path,
         &[
             "--no-optional-locks", // Avoid taking locks that might interfere with other git operations
             "status",
-            "--untracked-files=all", // Get all untracked files
-            "--branch",              // Get branch information
-            "--porcelain=2",         // Use porcelain=2 to match git desktop implementation
-            "-z",                    // Split output by null characters
+            untracked_arg,
+            "--branch",      // Get branch information
+            "--porcelain=2", // Use porcelain=2 to match git desktop implementation
+            "-z",            // Split output by null characters
         ],
     )
     .await?;
 
-    let changed_files = LocalDiffStateModel::parse_git_status(&status_output)?;
+    let changed_files = LocalDiffStateModel::parse_git_status_for_code_review(
+        &status_output,
+        include_untracked_files,
+    )?;
     let num_stat_metadata =
         LocalDiffStateModel::get_diff_metadata_using_numstat(repo_path, "HEAD").await?;
 
@@ -2570,7 +2711,7 @@ pub(crate) async fn diff_metadata_against_head(
         if let Some(metadata) = num_stat_metadata.get(file_path) {
             total_additions += metadata.lines_added;
             total_deletions += metadata.lines_removed;
-        } else if matches!(status, GitFileStatus::Untracked) {
+        } else if include_untracked_files && matches!(status, GitFileStatus::Untracked) {
             let num_lines =
                 LocalDiffStateModel::num_lines_in_file_if_non_binary(&repo_path.join(file_path))
                     .await?;
@@ -2706,6 +2847,7 @@ impl LocalDiffStateModel {
             refreshing_pr_info_handle: None,
             pr_info_attempted_for_branch: None,
             metadata_refresh_enabled: false,
+            include_untracked_files: false,
             #[cfg(feature = "local_fs")]
             file_invalidation: FileInvalidationState::new(SyncQueue::new_streaming(
                 &ctx.background_executor(),
