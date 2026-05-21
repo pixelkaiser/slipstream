@@ -117,6 +117,28 @@ pub struct FileStatusInfo {
     pub status: GitFileStatus,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitIndexOperation {
+    Stage,
+    Unstage,
+}
+
+impl GitIndexOperation {
+    pub fn success_message(self) -> &'static str {
+        match self {
+            Self::Stage => "Changes staged",
+            Self::Unstage => "Changes unstaged",
+        }
+    }
+
+    pub fn failure_message(self) -> &'static str {
+        match self {
+            Self::Stage => "Failed to stage changes",
+            Self::Unstage => "Failed to unstage changes",
+        }
+    }
+}
+
 impl TryFrom<&str> for GitFileStatus {
     type Error = anyhow::Error;
 
@@ -395,6 +417,13 @@ pub enum DiffStateModelEvent {
     },
     /// Event dispatched when diff metadata (stats, branch info) is refreshed.
     MetadataRefreshed(Box<DiffMetadata>),
+    /// Event dispatched when staging or unstaging changes succeeds.
+    GitIndexOperationFinished { operation: GitIndexOperation },
+    /// Event dispatched when staging or unstaging changes fails.
+    GitIndexOperationFailed {
+        operation: GitIndexOperation,
+        message: String,
+    },
     /// The remote connection was lost. Stale diffs should be preserved while
     /// the model waits for a new subscription.
     ConnectionLost,
@@ -502,6 +531,17 @@ impl DiffStateModel {
             DiffStateModelEvent::MetadataRefreshed(metadata) => {
                 ctx.emit(DiffStateModelEvent::MetadataRefreshed(metadata.clone()));
             }
+            DiffStateModelEvent::GitIndexOperationFinished { operation } => {
+                ctx.emit(DiffStateModelEvent::GitIndexOperationFinished {
+                    operation: *operation,
+                });
+            }
+            DiffStateModelEvent::GitIndexOperationFailed { operation, message } => {
+                ctx.emit(DiffStateModelEvent::GitIndexOperationFailed {
+                    operation: *operation,
+                    message: message.clone(),
+                });
+            }
             DiffStateModelEvent::ConnectionLost => {
                 ctx.emit(DiffStateModelEvent::ConnectionLost);
             }
@@ -539,6 +579,10 @@ impl DiffStateModel {
     }
 
     pub(crate) fn supports_untracked_files_toggle(&self) -> bool {
+        matches!(self, Self::Local(_))
+    }
+
+    pub(crate) fn supports_staging(&self) -> bool {
         matches!(self, Self::Local(_))
     }
 
@@ -868,6 +912,56 @@ impl DiffStateModel {
             Self::Remote(model) => model.update(ctx, |model, ctx| {
                 model.fetch_committed_branch_files(ctx);
             }),
+        }
+    }
+
+    pub(crate) fn apply_index_operation_to_files(
+        &self,
+        file_paths: Vec<PathBuf>,
+        operation: GitIndexOperation,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match self {
+            Self::Local(local) => {
+                local.update(ctx, |local, ctx| {
+                    local.apply_index_operation_to_files(file_paths, operation, ctx);
+                });
+            }
+            Self::Remote(_) => {
+                ctx.emit(DiffStateModelEvent::GitIndexOperationFailed {
+                    operation,
+                    message: "Staging is not supported for remote code review yet.".to_string(),
+                });
+            }
+        }
+    }
+
+    pub(crate) fn apply_index_operation_to_hunk(
+        &self,
+        file_path: PathBuf,
+        file_status: GitFileStatus,
+        hunk: DiffHunk,
+        operation: GitIndexOperation,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        match self {
+            Self::Local(local) => {
+                local.update(ctx, |local, ctx| {
+                    local.apply_index_operation_to_hunk(
+                        file_path,
+                        file_status,
+                        hunk,
+                        operation,
+                        ctx,
+                    );
+                });
+            }
+            Self::Remote(_) => {
+                ctx.emit(DiffStateModelEvent::GitIndexOperationFailed {
+                    operation,
+                    message: "Staging is not supported for remote code review yet.".to_string(),
+                });
+            }
         }
     }
 
