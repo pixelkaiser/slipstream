@@ -11,7 +11,6 @@ use super::model::SecretHandle;
 use super::model::ansi::{CursorShape, CursorStyle};
 use super::model::grid::RespectDisplayedOutput;
 use super::model::image_map::StoredImageMetadata;
-use super::model::SecretHandle;
 use crate::settings::EnforceMinimumContrast;
 use crate::terminal::cursor_trail::{CursorTrailStateHandle, CursorTrailSurface};
 use crate::terminal::grid_renderer::{render_cursor, render_grid, CellGlyphCache};

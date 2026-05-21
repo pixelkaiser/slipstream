@@ -1990,6 +1990,7 @@ impl ProfileModelSelector {
                 .active_block()
                 .is_agent_in_control_or_tagged_in();
         drop(terminal_model);
+        let llm_preferences = LLMPreferences::as_ref(app);
 
         let model_display_name = if is_codex_conversation {
             #[cfg(not(target_family = "wasm"))]

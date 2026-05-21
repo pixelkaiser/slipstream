@@ -33,7 +33,6 @@ use crate::terminal::model::session::active_session::ActiveSession;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
 use crate::terminal::TerminalModel;
-use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
 use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 fn command_may_invoke_pager(command: &str) -> bool {

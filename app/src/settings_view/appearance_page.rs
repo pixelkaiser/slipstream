@@ -97,7 +97,6 @@ use crate::workspace::tab_settings::{
     TabSettingsChangedEvent, UseLatestUserPromptAsConversationTitleInTabNames, UseVerticalTabs,
     WorkspaceDecorationVisibility,
 };
-use crate::workspace::WorkspaceAction;
 use crate::{report_error, report_if_error, send_telemetry_from_ctx, themes};
 
 const FONT_SIZE_INPUT_BOX_WIDTH: f32 = 80.;
