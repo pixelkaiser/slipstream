@@ -319,6 +319,7 @@ pub enum CodeReviewAction {
     ToggleFileExpanded(String),
     OpenHeaderMenu,
     SetDiffMode(DiffMode),
+    ToggleIncludeUntrackedFiles,
     ToggleFileSidebar,
     FileSelected(usize),
     ToggleMaximize,
@@ -1205,6 +1206,7 @@ impl CodeReviewView {
             Menu::new()
                 .prevent_interaction_with_other_elements()
                 .with_drop_shadow()
+                .with_width(220.)
         });
         ctx.subscribe_to_view(&header_menu, move |me, _, event, ctx| match event {
             MenuEvent::ItemSelected | MenuEvent::Close { .. } => {
@@ -4123,8 +4125,13 @@ impl CodeReviewView {
             || FeatureFlag::DiffSetAsContext.is_enabled()
             || FeatureFlag::FileAndDiffSetComments.is_enabled();
         let has_changes = matches!(self.state(), CodeReviewViewState::Loaded(loaded) if !loaded.to_diff_stats().has_no_changes());
-        let has_header_menu_items =
+        let has_untracked_toggle = self
+            .diff_state_model
+            .as_ref(app)
+            .supports_untracked_files_toggle();
+        let has_contextual_menu_items =
             has_menu_flags && (!FeatureFlag::GitOperationsInCodeReview.is_enabled() || has_changes);
+        let has_header_menu_items = has_untracked_toggle || has_contextual_menu_items;
 
         let code_review_header_fields = CodeReviewHeaderFields {
             is_in_split_pane,
@@ -6595,6 +6602,10 @@ impl CodeReviewView {
     ) -> Vec<MenuItem<CodeReviewAction>> {
         let mut items = Vec::new();
 
+        if let Some(item) = self.include_untracked_files_menu_item(ctx) {
+            items.push(item);
+        }
+
         if !FeatureFlag::FileAndDiffSetComments.is_enabled() {
             return items;
         }
@@ -6636,6 +6647,10 @@ impl CodeReviewView {
     ) -> Vec<MenuItem<CodeReviewAction>> {
         let mut items = Vec::new();
 
+        if let Some(item) = self.include_untracked_files_menu_item(ctx) {
+            items.push(item);
+        }
+
         let has_changes = matches!(self.state(), CodeReviewViewState::Loaded(loaded) if !loaded.to_diff_stats().has_no_changes());
 
         let is_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
@@ -6674,6 +6689,29 @@ impl CodeReviewView {
         }
 
         items
+    }
+
+    fn include_untracked_files_menu_item(
+        &self,
+        app: &AppContext,
+    ) -> Option<MenuItem<CodeReviewAction>> {
+        let diff_state = self.diff_state_model.as_ref(app);
+        if !diff_state.supports_untracked_files_toggle() {
+            return None;
+        }
+
+        let include_untracked_files = diff_state.include_untracked_files(app);
+        let mut fields = MenuItemFields::new("Include untracked files")
+            .with_on_select_action(CodeReviewAction::ToggleIncludeUntrackedFiles)
+            .with_tooltip(if include_untracked_files {
+                "Hide untracked files from code review"
+            } else {
+                "Load untracked files in code review"
+            });
+        if include_untracked_files {
+            fields = fields.with_right_side_icon(Icon::Check);
+        }
+        Some(fields.into_item())
     }
 
     fn get_unsaved_file_paths(&self, app: &AppContext) -> Vec<String> {
@@ -7048,6 +7086,15 @@ impl TypedActionView for CodeReviewView {
             }
             CodeReviewAction::SetDiffMode(mode) => {
                 self.apply_diff_mode(mode.clone(), ctx);
+            }
+            CodeReviewAction::ToggleIncludeUntrackedFiles => {
+                let include = !self
+                    .diff_state_model
+                    .as_ref(ctx)
+                    .include_untracked_files(ctx);
+                self.diff_state_model.update(ctx, |model, ctx| {
+                    model.set_include_untracked_files(include, ctx);
+                });
             }
             CodeReviewAction::ToggleFileSidebar => {
                 if self.file_sidebar_expanded {
