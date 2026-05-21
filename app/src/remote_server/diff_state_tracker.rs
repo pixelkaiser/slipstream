@@ -377,6 +377,11 @@ impl RemoteDiffStateManager {
                 // Client-only event — the server model fetches branches
                 // directly via handle_get_branches, not through this tracker.
             }
+            DiffStateModelEvent::GitIndexOperationFinished { .. }
+            | DiffStateModelEvent::GitIndexOperationFailed { .. } => {
+                // Local UI-only feedback; remote diff subscribers will receive
+                // the resulting snapshot or metadata events after the operation.
+            }
         }
     }
 
