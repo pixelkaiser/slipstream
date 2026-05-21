@@ -16,6 +16,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use typed_path::{TypedPath, TypedPathBuf, WindowsPath};
 use warp_util::path::{
     convert_msys2_to_windows_native_path, convert_wsl_to_windows_host_path, msys2_exe_to_root,
@@ -27,6 +28,7 @@ use warp_completer::completer::{
     CommandExitStatus, CommandOutput, PathSeparators, TopLevelCommandCaseSensitivity,
 };
 use warpui::{platform::OperatingSystem, Entity, ModelContext, SingletonEntity};
+use warpui::r#async::FutureExt as _;
 
 #[cfg(feature = "local_tty")]
 use crate::features::FeatureFlag;
@@ -73,6 +75,8 @@ pub enum ReadHistoryContentsError {
 
 // SessionId is defined in warp_core and re-exported here for backward compatibility.
 pub use warp_core::SessionId;
+
+const LOAD_EXTERNAL_COMMANDS_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Information about the sessions within a given terminal pane/top-level
 /// shell.
@@ -1172,14 +1176,22 @@ impl Session {
                 .as_deref()
                 .map(|path| HashMap::from_iter([("PATH".to_string(), path.to_string())]));
 
-            let result = self
+            let result = match self
                 .execute_command(
                     shell_command_to_get_executables,
                     None,
                     env_vars,
                     ExecuteCommandOptions::default(),
                 )
-                .await;
+                .with_timeout(LOAD_EXTERNAL_COMMANDS_TIMEOUT)
+                .await
+            {
+                Ok(result) => result,
+                Err(_) => Err(anyhow::anyhow!(
+                    "external command loading timed out after {:?}",
+                    LOAD_EXTERNAL_COMMANDS_TIMEOUT
+                )),
+            };
 
             let is_msys2 =
                 self.info.launch_data.as_ref().is_some_and(|launch_data| {
