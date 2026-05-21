@@ -714,13 +714,7 @@ impl LeftPanelView {
         });
         #[cfg(not(target_family = "wasm"))]
         OpenCodeServerModel::handle(ctx).update(ctx, |model, model_ctx| {
-            model.set_project_roots(
-                active_directories
-                    .iter()
-                    .map(|directory| directory.path.clone())
-                    .collect(),
-                model_ctx,
-            );
+            model.set_project_roots(local_paths.clone(), model_ctx);
         });
 
         let local_directories = deduplicate_by_directory_name(local_paths);

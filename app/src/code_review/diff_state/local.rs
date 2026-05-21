@@ -583,7 +583,7 @@ impl LocalDiffStateModel {
         }
 
         self.include_untracked_files = include;
-        self.load_diffs_for_current_repo(false, ctx);
+        self.load_diffs_for_current_repo(false, false, ctx);
         self.refresh_diff_metadata_for_current_repo(false, ctx);
     }
 
@@ -1016,7 +1016,7 @@ impl LocalDiffStateModel {
             move |me, result, ctx| match result {
                 Ok(_) => {
                     ctx.emit(DiffStateModelEvent::GitIndexOperationFinished { operation });
-                    me.load_diffs_for_current_repo(false, ctx);
+                    me.load_diffs_for_current_repo(false, false, ctx);
                     me.refresh_diff_metadata_for_current_repo(false, ctx);
                 }
                 Err(err) => {
@@ -1151,7 +1151,7 @@ impl LocalDiffStateModel {
             move |me, result, ctx| match result {
                 Ok(_) => {
                     ctx.emit(DiffStateModelEvent::GitIndexOperationFinished { operation });
-                    me.load_diffs_for_current_repo(false, ctx);
+                    me.load_diffs_for_current_repo(false, false, ctx);
                     me.refresh_diff_metadata_for_current_repo(false, ctx);
                 }
                 Err(err) => {

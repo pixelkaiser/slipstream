@@ -39,8 +39,9 @@ use super::{
     AIAgentAction, AIAgentActionId, AIAgentActionResult, AIAgentActionResultType,
     AIAgentActionType, AIAgentContext, AIAgentExchange, AIAgentExchangeId, AIAgentInput,
     AIAgentOutput, AIAgentOutputStatus, AIAgentText, AIAgentTextSection, AIAgentTodo,
-    AgentOutputText, AnyFileContent, FileContext, FileLocations, FinishedAIAgentOutput, MessageId,
-    OutputModelInfo, ReadFilesRequest, ReadFilesResult, RenderableAIError,
+    AIAgentTodoId, AgentOutputText, AnyFileContent, FileContext, FileLocations,
+    FinishedAIAgentOutput, MessageId, OutputModelInfo, ReadFilesRequest, ReadFilesResult,
+    RenderableAIError,
     RequestCommandOutputResult, RequestCost, ServerOutputId, Shared, SuggestedLoggingId,
     Suggestions, UserQueryMode,
 };
