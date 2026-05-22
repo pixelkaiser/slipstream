@@ -1456,14 +1456,16 @@ impl Input {
 /// local action.
 ///
 /// This is the single source of truth for the "reiterated as a prompt vs handled immediately"
-/// distinction: only `/compact`, `/plan`, and `/orchestrate` are sent as prompts (mirroring the
-/// `command_that_just_sends_ai_request_with_prefix` arm in [`Input::execute_slash_command`]).
+/// distinction: only `/compact`, `/plan`, `/plan_exit`, and `/orchestrate` are sent as prompts
+/// (mirroring the `command_that_just_sends_ai_request_with_prefix` arm in
+/// [`Input::execute_slash_command`]).
 /// Every other slash command emits an immediate action (forking, switching model, opening a
 /// menu, etc.), so callers gating prompt queuing or shared-session forwarding should treat those
 /// as "run now".
 pub(crate) fn slash_command_is_submitted_as_prompt(command: &StaticCommand) -> bool {
     command.name == commands::COMPACT.name
         || command.name == commands::PLAN.name
+        || command.name == commands::PLAN_EXIT.name
         || command.name == commands::ORCHESTRATE.name
 }
 

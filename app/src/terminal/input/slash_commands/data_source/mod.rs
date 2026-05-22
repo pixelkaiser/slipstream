@@ -23,6 +23,8 @@ use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerE
 use crate::ai::blocklist::block::cli_controller::{CLISubagentController, CLISubagentEvent};
 use crate::ai::blocklist::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
 use crate::ai::skills::{SkillDescriptor, SkillManager};
+#[cfg(not(target_family = "wasm"))]
+use crate::codex_app_server::{CodexAppServerModel, CodexAppServerModelEvent};
 use crate::search::data_source::{Query, QueryResult};
 use crate::search::mixer::DataSourceRunErrorWrapper;
 use crate::search::slash_command_menu::fuzzy_match::SlashCommandFuzzyMatchResult;
@@ -57,6 +59,8 @@ struct ActiveCommandsContext {
     is_cloud_handoff_enabled: bool,
     #[cfg(not(target_family = "wasm"))]
     active_conversation_is_cloud_oz: bool,
+    #[cfg(not(target_family = "wasm"))]
+    active_conversation_is_codex_app_server: bool,
     has_default_host: bool,
     is_cli_agent_input: bool,
 }
@@ -185,6 +189,19 @@ impl SlashCommandDataSource {
                 }
             },
         );
+        // Recompute when Codex app-server threads are associated with Warp conversations so
+        // Codex-specific commands (e.g. /plan_exit) appear as soon as the conversation opens.
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_model(&CodexAppServerModel::handle(ctx), |me, _, event, ctx| {
+            if matches!(
+                event,
+                CodexAppServerModelEvent::OpenConversation { .. }
+                    | CodexAppServerModelEvent::ThreadsChanged
+                    | CodexAppServerModelEvent::ActiveThreadChanged
+            ) {
+                me.recompute_active_commands(ctx);
+            }
+        });
 
         let mut me = Self {
             active_session,
@@ -318,6 +335,9 @@ impl SlashCommandDataSource {
             is_cloud_handoff_enabled: ai_settings.is_cloud_handoff_enabled(ctx),
             #[cfg(not(target_family = "wasm"))]
             active_conversation_is_cloud_oz: self.active_conversation_is_cloud_oz(ctx),
+            #[cfg(not(target_family = "wasm"))]
+            active_conversation_is_codex_app_server: self
+                .active_conversation_is_codex_app_server(ctx),
             has_default_host,
             is_cli_agent_input,
         }
@@ -349,6 +369,12 @@ impl SlashCommandDataSource {
         #[cfg(not(target_family = "wasm"))]
         if command.name == commands::CONTINUE_LOCALLY.name
             && !context.active_conversation_is_cloud_oz
+        {
+            return false;
+        }
+        #[cfg(not(target_family = "wasm"))]
+        if command.name == commands::PLAN_EXIT.name
+            && !context.active_conversation_is_codex_app_server
         {
             return false;
         }
@@ -462,6 +488,22 @@ impl SlashCommandDataSource {
             Some(config) => config.harness_type == Harness::Oz,
             None => true,
         }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn active_conversation_is_codex_app_server(&self, ctx: &AppContext) -> bool {
+        let agent_view_state = self.agent_view_controller.as_ref(ctx).agent_view_state();
+        let conversation_id = match agent_view_state.active_conversation_id() {
+            Some(id) => id,
+            None => match BlocklistAIHistoryModel::as_ref(ctx)
+                .active_conversation(self.terminal_view_id)
+            {
+                Some(conv) => conv.id(),
+                None => return false,
+            },
+        };
+
+        CodexAppServerModel::as_ref(ctx).is_codex_conversation(conversation_id)
     }
 }
 
