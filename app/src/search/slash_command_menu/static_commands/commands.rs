@@ -350,6 +350,7 @@ pub static PROFILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 });
 
 pub const PLAN_NAME: &str = "/plan";
+pub const PLAN_EXIT_NAME: &str = "/plan_exit";
 
 pub static PLAN: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: PLAN_NAME,
@@ -358,6 +359,17 @@ pub static PLAN: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text("<describe your task>")),
+});
+
+pub static PLAN_EXIT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: PLAN_EXIT_NAME,
+    description: "Exit Codex Plan Mode and continue in default mode",
+    icon_path: "bundled/svg/file-06.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::ACTIVE_CONVERSATION
+        | Availability::AI_ENABLED,
+    auto_enter_ai_mode: true,
+    argument: Some(Argument::optional().with_hint_text("<optional prompt>")),
 });
 
 pub const ORCHESTRATE_NAME: &str = "/orchestrate";
@@ -626,6 +638,7 @@ fn all_commands() -> Vec<StaticCommand> {
         AGENT.clone(),
         NEW.clone(),
         PLAN.clone(),
+        PLAN_EXIT.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
         USAGE,
