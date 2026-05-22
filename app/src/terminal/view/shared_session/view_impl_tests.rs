@@ -769,6 +769,7 @@ fn test_ambient_session_join_auto_opens_details_panel() {
                 ReplicaId::random(),
                 Box::new(ParticipantList::default()),
                 SessionId::new(),
+                None,
                 SessionSourceType::AmbientAgent { task_id: None },
                 ctx,
             );
@@ -818,6 +819,7 @@ fn test_local_to_cloud_handoff_session_join_keeps_details_panel_hidden() {
                 ReplicaId::random(),
                 Box::new(ParticipantList::default()),
                 SessionId::new(),
+                None,
                 SessionSourceType::AmbientAgent { task_id: None },
                 ctx,
             );
@@ -875,6 +877,7 @@ fn test_cloud_cloud_handoff_session_join_keeps_closed_details_panel_hidden() {
                 ReplicaId::random(),
                 Box::new(ParticipantList::default()),
                 SessionId::new(),
+                None,
                 SessionSourceType::AmbientAgent {
                     task_id: Some(task_id.to_string()),
                 },
@@ -939,6 +942,7 @@ fn test_cloud_cloud_handoff_session_join_respects_details_panel_closed_after_fol
                 ReplicaId::random(),
                 Box::new(ParticipantList::default()),
                 SessionId::new(),
+                None,
                 SessionSourceType::AmbientAgent {
                     task_id: Some(task_id.to_string()),
                 },
