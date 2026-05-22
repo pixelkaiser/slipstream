@@ -25,7 +25,8 @@ use warp_editor::model::{CoreEditorModel, PlainTextEditorModel};
 use warp_editor::multiline::AnyMultilineString;
 use warp_editor::render::element::lens_element::RichTextElementLens;
 use warp_editor::render::element::{
-    DisplayOptions, DisplayStateHandle, RichTextElement, VerticalExpansionBehavior,
+    DisplayOptions, DisplayStateHandle, EditorCursorTrailStateHandle, RichTextElement,
+    VerticalExpansionBehavior,
 };
 use warp_editor::render::model::{
     AutoScrollMode, BlockSpacing, Decoration, ExpansionType, LineCount, ParagraphStyles,
@@ -80,6 +81,7 @@ use crate::editor::InteractionState;
 use crate::features::FeatureFlag;
 use crate::notebooks::editor::rich_text_styles;
 use crate::settings::{AppEditorSettings, CodeEditorLineNumberMode, FontSettings};
+use crate::terminal::settings::TerminalSettings;
 use crate::view_components::find::FindDirection;
 
 mod actions;
@@ -169,6 +171,7 @@ struct DisplayHandles {
     vertical_scroll_state: ScrollStateHandle,
     horizontal_scroll_state: ScrollStateHandle,
     display_state: DisplayStateHandle,
+    cursor_trail_state: EditorCursorTrailStateHandle,
     wrapper_state_handle: EditorWrapperStateHandle,
 }
 
@@ -2214,6 +2217,7 @@ impl View for CodeEditorView {
             .iter()
             .map(|t| t.saturating_sub(&CharOffset::from(1)))
             .collect::<Vec<_>>();
+        let cursor_trail_enabled = *TerminalSettings::as_ref(app).cursor_trail_enabled.value();
         let editor_rich_content = RichTextElement::<Self>::new(
             render_state.clone(),
             self.self_handle.clone(),
@@ -2221,6 +2225,10 @@ impl View for CodeEditorView {
             self.display_states.display_state.clone(),
             self.vim_mode(app),
             vim_visual_tails,
+        )
+        .with_cursor_trail(
+            self.display_states.cursor_trail_state.clone(),
+            cursor_trail_enabled,
         );
 
         let collapsible_diffs = self.display_options.collapsible_diffs;

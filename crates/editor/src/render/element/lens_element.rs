@@ -138,6 +138,8 @@ impl<V: EditorView> Element for RichTextElementLens<V> {
             model,
             ctx,
             None,
+            false,
+            None,
             &[],
         );
         for block in self.blocks.as_mut().unwrap().iter_mut() {

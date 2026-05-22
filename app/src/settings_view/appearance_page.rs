@@ -4633,7 +4633,7 @@ impl SettingsWidget for CursorTrailWidget {
     type View = AppearanceSettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "cursor trail terminal cursor effect experimental"
+        "cursor trail terminal file editor code editor cursor effect experimental"
     }
 
     fn render(
