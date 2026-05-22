@@ -2488,7 +2488,7 @@ pub fn render_cursor(
                 },
                 bounds: geometry.bounds,
                 cell_size: geometry.cell_size,
-                shape: geometry.shape,
+                visible: geometry.shape != CursorShape::Hidden,
                 color,
             }),
             Instant::now(),
