@@ -79,6 +79,32 @@ fn continue_locally_command_is_registered() {
 }
 
 #[test]
+fn plan_exit_command_is_registered() {
+    let command = COMMAND_REGISTRY
+        .get_command_with_name(PLAN_EXIT.name)
+        .expect("expected /plan_exit to be registered");
+
+    assert_eq!(command.name, "/plan_exit");
+    assert_eq!(
+        command.description,
+        "Exit Codex Plan Mode and continue in default mode"
+    );
+    assert!(command.auto_enter_ai_mode);
+    assert_eq!(
+        command.availability,
+        Availability::AGENT_VIEW | Availability::ACTIVE_CONVERSATION | Availability::AI_ENABLED
+    );
+
+    let argument = command
+        .argument
+        .as_ref()
+        .expect("expected /plan_exit to declare an argument");
+    assert!(argument.is_optional);
+    assert!(!argument.should_execute_on_selection);
+    assert_eq!(argument.hint_text, Some("<optional prompt>"));
+}
+
+#[test]
 fn set_tab_color_command_requires_argument() {
     let command = COMMAND_REGISTRY
         .get_command_with_name(SET_TAB_COLOR.name)

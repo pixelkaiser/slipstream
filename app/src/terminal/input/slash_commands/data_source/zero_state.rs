@@ -60,6 +60,7 @@ impl SyncDataSource for ZeroStateDataSource {
             &commands::CONVERSATIONS,
             &commands::PROMPTS,
             &*commands::PLAN,
+            &*commands::PLAN_EXIT,
             &commands::AGENT,
         ];
 

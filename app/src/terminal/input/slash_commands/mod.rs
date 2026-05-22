@@ -1165,6 +1165,7 @@ impl Input {
             command_that_just_sends_ai_request_with_prefix
                 if command.name == commands::COMPACT.name
                     || command.name == commands::PLAN.name
+                    || command.name == commands::PLAN_EXIT.name
                     || command.name == commands::ORCHESTRATE.name =>
             {
                 // These slash commands just send AI requests with the slash command text as a
