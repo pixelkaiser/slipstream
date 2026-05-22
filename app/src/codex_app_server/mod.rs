@@ -420,6 +420,7 @@ struct CodexRefreshSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CodexPromptCollaborationMode {
     Plan,
+    Default,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1902,11 +1903,18 @@ fn parse_codex_prompt_request(prompt: &str) -> Option<CodexPromptRequest> {
         return None;
     }
 
-    strip_codex_command(prompt, "/plan")
-        .or_else(|| strip_codex_command(prompt, "/codex-plan"))
+    strip_codex_command(prompt, "/plan_exit")
         .map(|prompt| CodexPromptRequest {
             prompt: prompt.trim_start().to_string(),
-            collaboration_mode: Some(CodexPromptCollaborationMode::Plan),
+            collaboration_mode: Some(CodexPromptCollaborationMode::Default),
+        })
+        .or_else(|| {
+            strip_codex_command(prompt, "/plan")
+                .or_else(|| strip_codex_command(prompt, "/codex-plan"))
+                .map(|prompt| CodexPromptRequest {
+                    prompt: prompt.trim_start().to_string(),
+                    collaboration_mode: Some(CodexPromptCollaborationMode::Plan),
+                })
         })
         .or_else(|| {
             Some(CodexPromptRequest {
@@ -1931,6 +1939,12 @@ fn display_codex_prompt_request(request: &CodexPromptRequest) -> String {
             "/plan".to_string()
         }
         Some(CodexPromptCollaborationMode::Plan) => format!("/plan {}", request.prompt),
+        Some(CodexPromptCollaborationMode::Default) if request.prompt.is_empty() => {
+            "/plan_exit".to_string()
+        }
+        Some(CodexPromptCollaborationMode::Default) => {
+            format!("/plan_exit {}", request.prompt)
+        }
         None => request.prompt.clone(),
     }
 }
@@ -2089,6 +2103,14 @@ fn codex_collaboration_mode_params(
     match collaboration_mode {
         CodexPromptCollaborationMode::Plan => json!({
             "mode": "plan",
+            "settings": {
+                "model": model_id,
+                "developer_instructions": null,
+                "reasoning_effort": null,
+            },
+        }),
+        CodexPromptCollaborationMode::Default => json!({
+            "mode": "default",
             "settings": {
                 "model": model_id,
                 "developer_instructions": null,
@@ -3681,10 +3703,48 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_codex_prompt_request("/plan_exit okay let's implement it"),
+            Some(CodexPromptRequest {
+                prompt: "okay let's implement it".to_string(),
+                collaboration_mode: Some(CodexPromptCollaborationMode::Default),
+            })
+        );
+        assert_eq!(
             parse_codex_prompt_request("/planetary work")
                 .unwrap()
                 .collaboration_mode,
             None
+        );
+        assert_eq!(
+            parse_codex_prompt_request("/plan_exitnow")
+                .unwrap()
+                .collaboration_mode,
+            None
+        );
+    }
+
+    #[test]
+    fn displays_codex_prompt_commands() {
+        assert_eq!(
+            display_codex_prompt_request(&CodexPromptRequest {
+                prompt: "inspect the diff".to_string(),
+                collaboration_mode: Some(CodexPromptCollaborationMode::Plan),
+            }),
+            "/plan inspect the diff"
+        );
+        assert_eq!(
+            display_codex_prompt_request(&CodexPromptRequest {
+                prompt: String::new(),
+                collaboration_mode: Some(CodexPromptCollaborationMode::Default),
+            }),
+            "/plan_exit"
+        );
+        assert_eq!(
+            display_codex_prompt_request(&CodexPromptRequest {
+                prompt: "okay let's implement it".to_string(),
+                collaboration_mode: Some(CodexPromptCollaborationMode::Default),
+            }),
+            "/plan_exit okay let's implement it"
         );
     }
 
@@ -3713,6 +3773,36 @@ mod tests {
                 "input": [{
                     "type": "text",
                     "text": "inspect the diff",
+                }],
+            })
+        );
+    }
+
+    #[test]
+    fn codex_plan_exit_turn_params_include_default_collaboration_mode() {
+        assert_eq!(
+            turn_start_params(
+                "thread-1",
+                "okay let's implement it",
+                None,
+                Some(CodexPromptCollaborationMode::Default),
+                Some("gpt-5.4-codex"),
+            ),
+            json!({
+                "threadId": "thread-1",
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
+                "collaborationMode": {
+                    "mode": "default",
+                    "settings": {
+                        "model": "gpt-5.4-codex",
+                        "developer_instructions": null,
+                        "reasoning_effort": null,
+                    },
+                },
+                "input": [{
+                    "type": "text",
+                    "text": "okay let's implement it",
                 }],
             })
         );

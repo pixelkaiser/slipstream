@@ -350,6 +350,7 @@ pub static PROFILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
 });
 
 pub const PLAN_NAME: &str = "/plan";
+pub const PLAN_EXIT_NAME: &str = "/plan_exit";
 
 pub static PLAN: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: PLAN_NAME,
@@ -358,6 +359,17 @@ pub static PLAN: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     availability: Availability::AI_ENABLED,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text("<describe your task>")),
+});
+
+pub static PLAN_EXIT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: PLAN_EXIT_NAME,
+    description: "Exit Codex Plan Mode and continue in default mode",
+    icon_path: "bundled/svg/file-06.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::ACTIVE_CONVERSATION
+        | Availability::AI_ENABLED,
+    auto_enter_ai_mode: true,
+    argument: Some(Argument::optional().with_hint_text("<optional prompt>")),
 });
 
 pub const ORCHESTRATE_NAME: &str = "/orchestrate";
@@ -627,6 +639,7 @@ fn all_commands() -> Vec<StaticCommand> {
         AGENT.clone(),
         NEW.clone(),
         PLAN.clone(),
+        PLAN_EXIT.clone(),
         RENAME_TAB.clone(),
         SET_TAB_COLOR.clone(),
         USAGE,
@@ -782,7 +795,9 @@ mod tests {
         assert!(command.auto_enter_ai_mode);
         assert_eq!(
             command.availability,
-            Availability::AGENT_VIEW | Availability::ACTIVE_CONVERSATION | Availability::AI_ENABLED
+            Availability::AGENT_VIEW
+                | Availability::ACTIVE_CONVERSATION
+                | Availability::AI_ENABLED
         );
 
         let argument = command
@@ -795,6 +810,34 @@ mod tests {
             argument.hint_text,
             Some("<optional prompt to send in forked conversation>")
         );
+    }
+
+    #[test]
+    fn plan_exit_command_is_registered() {
+        let command = COMMAND_REGISTRY
+            .get_command_with_name(PLAN_EXIT.name)
+            .expect("expected /plan_exit to be registered");
+
+        assert_eq!(command.name, "/plan_exit");
+        assert_eq!(
+            command.description,
+            "Exit Codex Plan Mode and continue in default mode"
+        );
+        assert!(command.auto_enter_ai_mode);
+        assert_eq!(
+            command.availability,
+            Availability::AGENT_VIEW
+                | Availability::ACTIVE_CONVERSATION
+                | Availability::AI_ENABLED
+        );
+
+        let argument = command
+            .argument
+            .as_ref()
+            .expect("expected /plan_exit to declare an argument");
+        assert!(argument.is_optional);
+        assert!(!argument.should_execute_on_selection);
+        assert_eq!(argument.hint_text, Some("<optional prompt>"));
     }
 
     #[test]
