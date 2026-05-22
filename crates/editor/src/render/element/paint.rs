@@ -2,10 +2,15 @@
 
 use std::ops::Range;
 
+use instant::Instant;
 use string_offset::CharOffset;
 use vim::vim::VimMode;
 use warp_core::ui::appearance::DEFAULT_UI_FONT_SIZE;
 use warpui::PaintContext;
+use warpui::cursor_trail::{
+    CursorTrailConfig, CursorTrailKey, CursorTrailSnapshot, CursorTrailStateHandle,
+    cursor_trail_repaint_interval,
+};
 use warpui::elements::{CornerRadius, Point, Radius};
 use warpui::geometry::rect::RectF;
 use warpui::geometry::vector::{Vector2F, vec2f};
@@ -28,6 +33,33 @@ pub enum CursorDisplayType {
     Block,
     Underline,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EditorCursorTrailKey {
+    row: i64,
+    col: i64,
+}
+
+impl EditorCursorTrailKey {
+    fn from_content_position(content_position: Vector2F, cell_size: Vector2F) -> Self {
+        Self {
+            row: cell_index(content_position.y(), cell_size.y()),
+            col: cell_index(content_position.x(), cell_size.x()),
+        }
+    }
+}
+
+impl CursorTrailKey for EditorCursorTrailKey {
+    fn cell_distance_to(self, other: Self) -> usize {
+        let distance = self
+            .row
+            .abs_diff(other.row)
+            .saturating_add(self.col.abs_diff(other.col));
+        usize::try_from(distance).unwrap_or(usize::MAX)
+    }
+}
+
+pub type EditorCursorTrailStateHandle = CursorTrailStateHandle<EditorCursorTrailKey>;
 
 /// Cursor data struct for rendering block and underline cursors in vim mode
 #[derive(Default)]
@@ -69,6 +101,9 @@ pub struct RenderContext<'a, 'b> {
     pub paint: &'a mut PaintContext<'b>,
     saved_positions: &'a SavedPositions,
     pub viewport_size: Vector2F,
+    cursor_trail_state: Option<EditorCursorTrailStateHandle>,
+    cursor_trail_enabled: bool,
+    primary_cursor_trail_updated: bool,
     /// Current VimMode of the rich text element, if there is one.
     pub vim_mode: Option<VimMode>,
     /// Vim visual tails - stored cursor positions when entering vim visual mode
@@ -88,6 +123,8 @@ impl<'a, 'b> RenderContext<'a, 'b> {
         viewport_size: Vector2F,
         model: &'a RenderState,
         paint: &'a mut PaintContext<'b>,
+        cursor_trail_state: Option<EditorCursorTrailStateHandle>,
+        cursor_trail_enabled: bool,
         vim_mode: Option<VimMode>,
         vim_visual_tails: &'a [CharOffset],
     ) -> Self {
@@ -105,6 +142,9 @@ impl<'a, 'b> RenderContext<'a, 'b> {
             paint,
             saved_positions: model.saved_positions(),
             viewport_size,
+            cursor_trail_state,
+            cursor_trail_enabled,
+            primary_cursor_trail_updated: false,
             vim_mode,
             vim_visual_tails,
         }
@@ -134,6 +174,61 @@ impl<'a, 'b> RenderContext<'a, 'b> {
     /// bounds checking.
     pub fn content_rect_to_screen(&self, rect: RectF) -> RectF {
         RectF::new(self.content_to_screen(rect.origin()), rect.size())
+    }
+
+    pub fn finish_cursor_trail(&mut self) {
+        if self.primary_cursor_trail_updated {
+            return;
+        }
+
+        if let Some(cursor_trail_state) = &self.cursor_trail_state {
+            cursor_trail_state.update(
+                CursorTrailConfig::from_enabled(self.cursor_trail_enabled),
+                None,
+                Instant::now(),
+            );
+        }
+    }
+
+    fn draw_cursor_trail(
+        &mut self,
+        content_position: Vector2F,
+        bounds: RectF,
+        cell_size: Vector2F,
+        styles: &RichTextStyles,
+    ) {
+        if self.primary_cursor_trail_updated {
+            return;
+        }
+        self.primary_cursor_trail_updated = true;
+
+        let Some(cursor_trail_state) = &self.cursor_trail_state else {
+            return;
+        };
+
+        let snapshot = self.cursors_visible().then(|| CursorTrailSnapshot {
+            key: EditorCursorTrailKey::from_content_position(content_position, cell_size),
+            bounds,
+            cell_size,
+            visible: true,
+            color: styles.cursor_fill.start_color(),
+        });
+
+        let update = cursor_trail_state.update(
+            CursorTrailConfig::from_enabled(self.cursor_trail_enabled),
+            snapshot,
+            Instant::now(),
+        );
+        if let Some(primitive) = update.primitive {
+            self.paint.scene.draw_cursor_trail_without_hit_recording(
+                primitive.corners,
+                primitive.cursor_bounds,
+                primitive.color,
+            );
+        }
+        if update.needs_repaint {
+            self.paint.repaint_after(cursor_trail_repaint_interval());
+        }
     }
 
     /// Paint a paragraph of text, along with any decorations indicated by the rendering model.
@@ -304,6 +399,8 @@ impl<'a, 'b> RenderContext<'a, 'b> {
         };
 
         let bounds = RectF::new(cursor_origin, cursor_size);
+        let cell_size = vec2f(block_width.max(1.), height.max(1.));
+        self.draw_cursor_trail(content_position, bounds, cell_size, styles);
 
         let cursor_corner_radius = match cursor_display_type {
             CursorDisplayType::Block | CursorDisplayType::Underline => Radius::Pixels(0.),
@@ -334,4 +431,8 @@ impl<'a, 'b> RenderContext<'a, 'b> {
         let origin = Point::from_vec2f(rect.origin(), self.paint.scene.z_index());
         self.paint.scene.visible_rect(origin, rect.size()).is_some()
     }
+}
+
+fn cell_index(value: f32, cell_size: f32) -> i64 {
+    (value / cell_size.max(1.)).round() as i64
 }
