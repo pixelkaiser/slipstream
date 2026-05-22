@@ -32,7 +32,10 @@ use self::horizontal_rule::HorizontalRule;
 use self::image::RenderableImage;
 use self::mermaid::RenderableMermaidDiagram;
 use self::ordered_list::RenderableOrderedListItem;
-pub use self::paint::{CursorData, CursorDisplayType, RenderContext};
+pub use self::paint::{
+    CursorData, CursorDisplayType, EditorCursorTrailKey, EditorCursorTrailStateHandle,
+    RenderContext,
+};
 use self::paragraph::RenderableParagraph;
 use self::runnable_command::RenderableRunnableCommand;
 use self::table::RenderableTable;
@@ -101,6 +104,8 @@ pub struct RichTextElement<V: EditorView> {
     pending_edits_flushed: bool,
     display_state: DisplayStateHandle,
     display_options: DisplayOptions,
+    cursor_trail_state: Option<EditorCursorTrailStateHandle>,
+    cursor_trail_enabled: bool,
     max_width: Option<Pixels>,
     /// We need some information about the view that contains this rich text element,
     /// in order to dispatch actions to it. Using a [`WeakViewHandle`] prevents
@@ -430,6 +435,8 @@ impl<V: EditorView> RichTextElement<V> {
             display_state,
             parent_view,
             display_options,
+            cursor_trail_state: None,
+            cursor_trail_enabled: false,
             child_max_z_index: None,
             content_z_index: None,
             max_width: None,
@@ -452,6 +459,12 @@ impl<V: EditorView> RichTextElement<V> {
 
     pub fn with_max_width(mut self, max_width: Option<Pixels>) -> Self {
         self.max_width = max_width;
+        self
+    }
+
+    pub fn with_cursor_trail(mut self, state: EditorCursorTrailStateHandle, enabled: bool) -> Self {
+        self.cursor_trail_state = Some(state);
+        self.cursor_trail_enabled = enabled;
         self
     }
 
@@ -1124,6 +1137,8 @@ impl<V: EditorView> Element for RichTextElement<V> {
             viewport_size,
             model,
             ctx,
+            self.cursor_trail_state.clone(),
+            self.cursor_trail_enabled,
             self.vim_mode,
             &self.vim_visual_tails,
         );
@@ -1152,6 +1167,7 @@ impl<V: EditorView> Element for RichTextElement<V> {
             None => log::error!("Rich-text blocks missing after layout"),
         }
 
+        ctx.finish_cursor_trail();
         ctx.paint.scene.stop_layer();
         self.child_max_z_index = Some(ctx.paint.scene.max_active_z_index());
     }
