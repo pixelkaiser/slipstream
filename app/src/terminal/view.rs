@@ -348,7 +348,8 @@ use crate::pane_group::{
 use crate::persistence::{self, FinishedCommandMetadata};
 use crate::projects::ProjectManagementModel;
 use crate::remote_server::manager::{
-    RemoteServerInitPhase, RemoteServerManager, RemoteServerManagerEvent,
+    RemoteServerErrorKind, RemoteServerInitPhase, RemoteServerManager, RemoteServerManagerEvent,
+    RemoteServerOperation,
 };
 use crate::resource_center::{
     mark_feature_used_and_write_to_user_defaults, Tip, TipHint, TipsCompleted,
@@ -4608,6 +4609,25 @@ impl TerminalView {
                             },
                             ctx
                         );
+
+                        if matches!(
+                            (*operation, *error_kind),
+                            (RemoteServerOperation::RunCommand, RemoteServerErrorKind::Timeout)
+                        ) {
+                            let disabled_remote_execution =
+                                me.sessions.update(ctx, |sessions, _| {
+                                    sessions
+                                        .disable_remote_command_execution_for_session(*session_id)
+                                });
+                            if disabled_remote_execution {
+                                log::warn!(
+                                    "Disabled remote command execution for session {session_id:?} after SSH extension RunCommand timeout"
+                                );
+                            }
+                            RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                                mgr.deregister_session(*session_id, ctx);
+                            });
+                        }
                     }
                     RemoteServerManagerEvent::ServerMessageDecodingError { session_id } => {
                         let (remote_os, remote_arch) = RemoteServerManager::handle(ctx)
