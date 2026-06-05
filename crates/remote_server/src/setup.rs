@@ -49,6 +49,10 @@ pub enum RemoteServerSetupState {
     /// clean fall-back to the legacy ControlMaster-backed SSH flow,
     /// distinct from `Failed` (which is rendered as a real error).
     Unsupported { reason: UnsupportedReason },
+    /// The user or settings explicitly opted out of installing the remote
+    /// server binary for this SSH session. This is a terminal setup state and
+    /// falls back to the legacy SSH flow without surfacing an error.
+    Skipped,
 }
 
 impl RemoteServerSetupState {
@@ -65,7 +69,10 @@ impl RemoteServerSetupState {
     }
 
     pub fn is_terminal(&self) -> bool {
-        self.is_ready() || self.is_failed() || self.is_unsupported()
+        self.is_ready()
+            || self.is_failed()
+            || self.is_unsupported()
+            || matches!(self, Self::Skipped)
     }
 
     pub fn is_in_progress(&self) -> bool {
