@@ -1137,6 +1137,7 @@ pub struct Workspace {
     file_upload_sessions: FileUploadSessions,
     ai_fact_view: ViewHandle<AIFactView>,
     left_panel_open: bool,
+    has_auto_opened_conversation_list: bool,
     vertical_tabs_panel_open: bool,
     vertical_tabs_panel: VerticalTabsPanelState,
     left_panel_view: ViewHandle<LeftPanelView>,
@@ -3450,6 +3451,7 @@ impl Workspace {
             file_upload_sessions: Default::default(),
             ai_fact_view,
             left_panel_open: false,
+            has_auto_opened_conversation_list: false,
             vertical_tabs_panel_open: false,
             vertical_tabs_panel: Default::default(),
             left_panel_view,
@@ -9057,9 +9059,7 @@ impl Workspace {
         ctx.notify();
     }
 
-    /// Auto-opens the conversation list on first app start.
-    /// Once we've done this once, we persist a preference so subsequent restarts
-    /// will respect the user's visibility preference (restored from workspace state).
+    /// Auto-opens the conversation list once for this workspace.
     fn maybe_auto_open_conversation_list(&mut self, ctx: &mut ViewContext<Self>) {
         if !FeatureFlag::AgentViewConversationListView.is_enabled()
             || !AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
@@ -9067,8 +9067,7 @@ impl Workspace {
             return;
         }
 
-        let has_auto_opened = *AISettings::as_ref(ctx).has_auto_opened_conversation_list;
-        if has_auto_opened {
+        if self.has_auto_opened_conversation_list {
             return;
         }
 
@@ -9089,12 +9088,7 @@ impl Workspace {
             lp.restore_active_view_from_snapshot(ToolPanelView::ConversationListView, ctx);
         });
 
-        // Mark that we've done the one-time auto-open
-        AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(settings
-                .has_auto_opened_conversation_list
-                .set_value(true, ctx));
-        });
+        self.has_auto_opened_conversation_list = true;
     }
 
     fn close_left_panel(&mut self, ctx: &mut ViewContext<Self>) {

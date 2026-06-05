@@ -100,7 +100,7 @@ impl PaneGroup {
                     task_id: _,
                 }) => {
                     let (view, terminal_manager) = Self::create_shared_session_viewer(
-                        session_id,
+                        session_id.into(),
                         resources.clone(),
                         view_size,
                         true, // enable_orchestration_polling
