@@ -347,7 +347,7 @@ impl PaneGroup {
         // hidden child viewers aren't snapshotted, so `is_cloud_mode` stays
         // `false` (no `ambient_agent_view_model` needed for snapshot round-trip).
         let (new_terminal_view, terminal_manager) = Self::create_shared_session_viewer(
-            child_session_id,
+            child_session_id.into(),
             resources,
             view_size,
             false, // enable_orchestration_polling
