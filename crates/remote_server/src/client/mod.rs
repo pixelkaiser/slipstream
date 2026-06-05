@@ -224,12 +224,11 @@ impl PendingRequestGuard {
 
     fn cancel_if_pending(&self) {
         if self.pending_requests.remove(&self.request_id).is_some() {
-            let _ = self.outbound_tx.try_send(ClientMessage {
-                request_id: RequestId::new().to_string(),
-                message: Some(client_message::Message::Abort(Abort {
+            let _ = self
+                .outbound_tx
+                .try_send(ClientMessage::notification(notification::Message::Abort(Abort {
                     request_id_to_abort: self.request_id.to_string(),
-                })),
-            });
+                })));
         }
     }
 }
