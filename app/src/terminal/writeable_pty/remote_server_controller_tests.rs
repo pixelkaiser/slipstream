@@ -1,6 +1,8 @@
+use remote_server::setup::UnsupportedReason;
+
 use super::{
     connection_label_from_session_hosts, connection_label_from_ssh_host,
-    connection_label_from_user_and_host,
+    connection_label_from_user_and_host, should_use_macos_remote_bootstrap_workaround,
 };
 
 #[test]
@@ -46,4 +48,28 @@ fn connection_label_from_user_and_host_matches_udi_format() {
         "ssh-testing"
     );
     assert_eq!(connection_label_from_user_and_host("", None), "Remote host");
+}
+
+#[test]
+fn macos_remote_bootstrap_workaround_is_only_for_macos() {
+    assert!(should_use_macos_remote_bootstrap_workaround(
+        &UnsupportedReason::UnsupportedOs {
+            os: "macos".to_string(),
+        }
+    ));
+    assert!(should_use_macos_remote_bootstrap_workaround(
+        &UnsupportedReason::UnsupportedOs {
+            os: "Darwin".to_string(),
+        }
+    ));
+    assert!(!should_use_macos_remote_bootstrap_workaround(
+        &UnsupportedReason::UnsupportedOs {
+            os: "linux".to_string(),
+        }
+    ));
+    assert!(!should_use_macos_remote_bootstrap_workaround(
+        &UnsupportedReason::UnsupportedArch {
+            arch: "s390x".to_string(),
+        }
+    ));
 }

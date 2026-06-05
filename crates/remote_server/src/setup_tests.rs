@@ -183,6 +183,7 @@ fn state_is_terminal() {
         }
     }
     .is_terminal());
+    assert!(RemoteServerSetupState::Skipped.is_terminal());
     assert!(!RemoteServerSetupState::Checking.is_terminal());
     assert!(!RemoteServerSetupState::Installing {
         progress_percent: None,
