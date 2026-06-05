@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
 use parking_lot::FairMutex;
@@ -35,6 +36,8 @@ const SWITCH_TO_PS1_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'p'];
 /// Used to let the shell know we are switching to the Warp prompt via a bindkey \ew. This will
 /// unset the PS1 to ensure we don't have a double prompt (PS1 and Warp prompt).
 const SWITCH_TO_WARP_PROMPT_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'w'];
+const MACOS_REMOTE_BOOTSTRAP_CHUNK_SIZE: usize = 1000;
+const MACOS_REMOTE_BOOTSTRAP_CHUNK_DELAY_MS: u64 = 10;
 
 /// Represents a single call to write bytes to the PTY asynchronously.
 enum PtyWrite {
@@ -370,6 +373,33 @@ impl<T: EventLoopSender> PtyController<T> {
         self.write_bootstrap_script_to_shell(pending_session_info, ctx, shell_type, bootstrap);
     }
 
+    /// Writes the bootstrap script in small chunks for macOS remotes.
+    ///
+    /// macOS 15+ PTYs can drop or corrupt larger pasted writes. The manual SSH
+    /// warpify flow uses the same 1000-byte chunk size to avoid leaving the
+    /// remote shell waiting forever mid-bootstrap.
+    pub(super) fn initialize_shell_with_macos_remote_pty_workaround(
+        &mut self,
+        pending_session_info: &SessionInfo,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let shell_type = pending_session_info.shell.shell_type();
+
+        #[cfg(feature = "local_fs")]
+        if let Some(path) = permanent_bootstrap_file(shell_type, pending_session_info) {
+            self.source_bootstrap_script(path, shell_type, ctx);
+            return;
+        }
+
+        let bootstrap = bootstrap::script_for_shell(shell_type, &crate::ASSETS);
+        self.write_bootstrap_script_to_shell_in_chunks(
+            bootstrap,
+            MACOS_REMOTE_BOOTSTRAP_CHUNK_SIZE,
+            MACOS_REMOTE_BOOTSTRAP_CHUNK_DELAY_MS,
+            ctx,
+        );
+    }
+
     /// Writes the bytes to to terminate and run the bootstrap script.
     #[cfg(feature = "local_fs")]
     fn write_terminating_bootstrap_bytes(&mut self, ctx: &mut ModelContext<PtyController<T>>) {
@@ -444,6 +474,30 @@ impl<T: EventLoopSender> PtyController<T> {
             }
         } else {
             self.write_bytes(bootstrap, ctx);
+        }
+    }
+
+    fn write_bootstrap_script_to_shell_in_chunks(
+        &mut self,
+        bootstrap: Cow<'static, [u8]>,
+        chunk_size: usize,
+        delay_ms: u64,
+        ctx: &mut ModelContext<PtyController<T>>,
+    ) {
+        let bytes = bootstrap.into_owned();
+        let chunks: Vec<Vec<u8>> = bytes
+            .chunks(chunk_size)
+            .map(|chunk| chunk.to_vec())
+            .collect();
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            if i == 0 {
+                self.write_bytes(chunk, ctx);
+            } else {
+                ctx.spawn(
+                    warpui::r#async::Timer::after(Duration::from_millis(i as u64 * delay_ms)),
+                    move |me, _, ctx| me.write_bytes(chunk, ctx),
+                );
+            }
         }
     }
 

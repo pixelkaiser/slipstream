@@ -199,6 +199,22 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         }
     }
 
+    /// Extracts the `SessionInfo` from the stash and writes the bootstrap
+    /// script through the macOS remote PTY workaround.
+    fn flush_stashed_bootstrap_with_macos_remote_pty_workaround(
+        &mut self,
+        session_info: SessionInfo,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(pty) = self.pty_controller.upgrade(ctx) {
+            pty.update(ctx, |pty, ctx| {
+                pty.initialize_shell_with_macos_remote_pty_workaround(&session_info, ctx);
+            });
+        } else {
+            log::warn!("Remote server PtyController dropped before bootstrap could be flushed");
+        }
+    }
+
     /// Idle -> AwaitingCheck
     fn on_ssh_init_shell_requested(&mut self, info: SessionInfo, ctx: &mut ModelContext<Self>) {
         let IsSSHWrapperSession::Yes {
@@ -287,7 +303,11 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         }) = preinstall_check.as_ref()
         {
             send_unsupported_telemetry(self.remote_platform.as_ref(), reason, Some(libc), ctx);
-            self.flush_stashed_bootstrap(session_info, ctx);
+            if should_use_macos_remote_bootstrap_workaround(reason) {
+                self.flush_stashed_bootstrap_with_macos_remote_pty_workaround(session_info, ctx);
+            } else {
+                self.flush_stashed_bootstrap(session_info, ctx);
+            }
             return;
         }
 
@@ -353,6 +373,9 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                         });
                     }
                     SshExtensionInstallMode::NeverInstall => {
+                        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                            mgr.mark_setup_skipped(session_id, ctx);
+                        });
                         self.flush_stashed_bootstrap(session_info, ctx);
                     }
                 }
@@ -466,11 +489,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         }
     }
 
-    fn send_setup_duration_telemetry(
-        &self,
-        setup_start: Instant,
-        ctx: &mut ModelContext<Self>,
-    ) {
+    fn send_setup_duration_telemetry(&self, setup_start: Instant, ctx: &mut ModelContext<Self>) {
         let duration_ms = Instant::now()
             .duration_since(setup_start)
             .as_millis()
@@ -543,6 +562,9 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             log::warn!("Remote server skip requested in unexpected state: session={session_id:?}");
             return;
         };
+        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.mark_setup_skipped(session_id, ctx);
+        });
         self.flush_stashed_bootstrap(session_info, ctx);
     }
 
@@ -706,6 +728,15 @@ fn connection_label_from_ssh_host(host: &str) -> String {
         .map_or(host, |(_user, host)| host)
         .to_string()
 }
+
+fn should_use_macos_remote_bootstrap_workaround(reason: &UnsupportedReason) -> bool {
+    matches!(
+        reason,
+        UnsupportedReason::UnsupportedOs { os }
+            if os.eq_ignore_ascii_case("macos") || os.eq_ignore_ascii_case("darwin")
+    )
+}
+
 /// Describes a [`RemoteLibc`] as a short string for telemetry.
 fn describe_libc(libc: &RemoteLibc) -> String {
     match libc {
