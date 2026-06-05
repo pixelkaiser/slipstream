@@ -366,6 +366,7 @@ impl FileMCPWatcher {
                     if was_deleted {
                         ctx.emit(FileMCPWatcherEvent::ConfigRemoved {
                             root_path: home_dir.clone(),
+                            config_path: config_path.clone(),
                             provider,
                         });
                     }
@@ -410,6 +411,7 @@ impl FileMCPWatcher {
                         }
                         ctx.emit(FileMCPWatcherEvent::ConfigRemoved {
                             root_path: home_dir.clone(),
+                            config_path: home_dir.join(provider.home_config_path()),
                             provider,
                         });
                     }
@@ -531,6 +533,7 @@ impl FileMCPWatcher {
         if was_deleted {
             ctx.emit(FileMCPWatcherEvent::ConfigRemoved {
                 root_path: root_path.clone(),
+                config_path: config_path.clone(),
                 provider,
             });
         }
@@ -546,11 +549,13 @@ impl FileMCPWatcher {
         ctx: &mut ModelContext<Self>,
     ) {
         let root_path_for_callback = root_path.clone();
+        let config_path_for_callback = config_path.clone();
         let _ = ctx.spawn(
             async move { parse_mcp_config_file(&config_path, provider).await },
             move |_me, parsed, ctx| {
                 ctx.emit(FileMCPWatcherEvent::ConfigParsed {
-                    root_path: root_path_for_callback,
+                    root_path: root_path_for_callback.clone(),
+                    config_path: config_path_for_callback.clone(),
                     provider,
                     servers: parsed,
                 });
@@ -568,12 +573,14 @@ impl FileMCPWatcher {
         ctx: &mut ModelContext<Self>,
     ) {
         let config_file_path = config_file_path.to_path_buf();
+        let config_path_for_callback = config_file_path.clone();
         let _ = ctx.spawn(
             async move { parse_mcp_config_file(&config_file_path, provider).await },
             move |me, servers, ctx| {
                 let repo_path_for_countdown = root_path.clone();
                 ctx.emit(FileMCPWatcherEvent::ConfigParsed {
-                    root_path,
+                    root_path: root_path.clone(),
+                    config_path: config_path_for_callback.clone(),
                     provider,
                     servers,
                 });
@@ -723,15 +730,18 @@ async fn parse_mcp_config_file(
 
 /// Events sent from [`FileMCPWatcher`] to [`FileBasedMCPManager`] via the watcher channel.
 pub enum FileMCPWatcherEvent {
-    /// A config file was successfully parsed; delivers the full snapshot for `(root_path, provider)`.
+    /// A config file was successfully parsed; delivers the full snapshot for
+    /// `(root_path, provider)` and the concrete config file path it came from.
     ConfigParsed {
         root_path: PathBuf,
+        config_path: PathBuf,
         provider: MCPProvider,
         servers: Vec<ParsedTemplatableMCPServerResult>,
     },
     /// A config file was deleted; all servers for `(root_path, provider)` should be removed.
     ConfigRemoved {
         root_path: PathBuf,
+        config_path: PathBuf,
         provider: MCPProvider,
     },
     /// All provider config files for a cloud environment repo have been parsed.
