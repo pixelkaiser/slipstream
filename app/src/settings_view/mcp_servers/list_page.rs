@@ -654,6 +654,16 @@ impl MCPServersListPageView {
             ServerCardEvent::Edit(item_id) => {
                 ctx.emit(MCPServersListPageViewEvent::Edit(*item_id));
             }
+            ServerCardEvent::Remove(item_id) => match item_id {
+                ServerCardItemId::FileBasedMCP(uuid) => {
+                    self.remove_file_based_server_from_my_mcps(*uuid, ctx);
+                }
+                ServerCardItemId::TemplatableMCP(_)
+                | ServerCardItemId::TemplatableMCPInstallation(_)
+                | ServerCardItemId::GalleryMCP(_) => {
+                    log::error!("Remove from My MCPs is only supported for file-based MCP servers.")
+                }
+            },
             ServerCardEvent::Share(item_id) => match item_id {
                 ServerCardItemId::TemplatableMCP(template_uuid) => {
                     self.share_templatable_mcp_server(*template_uuid, ctx);
@@ -1606,6 +1616,58 @@ impl MCPServersListPageView {
         title_chips
     }
 
+    fn file_based_config_path_description(
+        uuid: Uuid,
+        provider_filter: Option<MCPProvider>,
+        ctx: &AppContext,
+    ) -> Option<String> {
+        let providers = match provider_filter {
+            Some(provider) => vec![provider],
+            None => MCPProvider::iter().collect(),
+        };
+
+        let mut paths: Vec<String> = providers
+            .into_iter()
+            .flat_map(|provider| {
+                FileBasedMCPManager::as_ref(ctx)
+                    .config_file_paths_for_installation_and_provider(uuid, provider)
+            })
+            .map(|path| path.display().to_string())
+            .collect();
+        paths.sort();
+        paths.dedup();
+
+        match paths.as_slice() {
+            [] => None,
+            [path] => Some(format!("Detected from config file: {path}")),
+            _ => Some(format!(
+                "Detected from config files: {}",
+                paths.join(", ")
+            )),
+        }
+    }
+
+    fn file_based_card_description(
+        installation: &TemplatableMCPServerInstallation,
+        provider_filter: Option<MCPProvider>,
+        ctx: &AppContext,
+    ) -> Option<String> {
+        let source_description =
+            Self::file_based_config_path_description(installation.uuid(), provider_filter, ctx);
+
+        match (
+            installation.templatable_mcp_server().description.clone(),
+            source_description,
+        ) {
+            (Some(description), Some(source)) if !description.trim().is_empty() => {
+                Some(format!("{description} {source}"))
+            }
+            (Some(description), _) if !description.trim().is_empty() => Some(description),
+            (_, Some(source)) => Some(source),
+            _ => Some("Detected from config file".to_string()),
+        }
+    }
+
     fn register_file_based_template_card(
         &mut self,
         provider: MCPProvider,
@@ -1642,11 +1704,7 @@ impl MCPServersListPageView {
             let server_card = ServerCardView::new(
                 ServerCardItemId::FileBasedMCP(uuid),
                 installation.templatable_mcp_server().name.clone(),
-                installation
-                    .templatable_mcp_server()
-                    .description
-                    .clone()
-                    .or_else(|| Some("Detected from config file".to_string())),
+                Self::file_based_card_description(installation, Some(provider), ctx),
                 None, // tools only available when running
                 None, // no error when not yet started
                 title_chips,
@@ -1675,6 +1733,7 @@ impl MCPServersListPageView {
                 None => ServerCardStatus::Installed,
             };
         let title_chips = Self::get_file_based_title_chips(uuid, None, ctx);
+        let description = Self::file_based_card_description(installation, None, ctx);
         let tools = (server_card_status == ServerCardStatus::Running).then_some(
             TemplatableMCPServerManager::as_ref(ctx)
                 .tools_for_server(uuid)
@@ -1693,7 +1752,7 @@ impl MCPServersListPageView {
         let server_card = ServerCardView::new(
             item_id,
             installation.templatable_mcp_server().name.clone(),
-            installation.templatable_mcp_server().description.clone(),
+            description,
             tools,
             error_text,
             title_chips,
@@ -1701,6 +1760,9 @@ impl MCPServersListPageView {
                 // File-based servers cannot be edited or shared from settings.
                 show_log_out_icon_button: uses_oauth,
                 show_edit_config_icon_button: false,
+                show_remove_icon_button: server_card_status != ServerCardStatus::Error,
+                show_edit_config_text_button: false,
+                show_remove_text_button: server_card_status == ServerCardStatus::Error,
                 show_share_icon_button: false,
                 ..server_card_status.into()
             },
@@ -1747,6 +1809,16 @@ impl MCPServersListPageView {
     ) {
         FileBasedMCPManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.set_server_activation(uuid, switch_state, ctx);
+        });
+    }
+
+    fn remove_file_based_server_from_my_mcps(
+        &self,
+        uuid: Uuid,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        FileBasedMCPManager::handle(ctx).update(ctx, |mgr, ctx| {
+            mgr.set_server_activation(uuid, false, ctx);
         });
     }
 

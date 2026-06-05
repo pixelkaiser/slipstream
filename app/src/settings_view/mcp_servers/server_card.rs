@@ -57,6 +57,7 @@ pub enum ServerCardAction {
     ToggleToolsExpanded,
     ToggleRunningSwitch,
     Edit(ServerCardItemId),
+    Remove(ServerCardItemId),
     Share(ServerCardItemId),
     Install(ServerCardItemId),
     InstallServerUpdate(ServerCardItemId),
@@ -68,6 +69,7 @@ pub enum ServerCardAction {
 #[derive(Debug, Clone)]
 pub enum ServerCardEvent {
     Edit(ServerCardItemId),
+    Remove(ServerCardItemId),
     Share(ServerCardItemId),
     ToggleRunningSwitch(ServerCardItemId, bool),
     Install(ServerCardItemId),
@@ -82,10 +84,12 @@ pub struct ServerCardMouseHandles {
     logout_icon_button: MouseStateHandle,
     share_icon_button: MouseStateHandle,
     edit_icon_button: MouseStateHandle,
+    remove_icon_button: MouseStateHandle,
     update_icon_button: MouseStateHandle,
 
     view_logs_button: MouseStateHandle,
     edit_config_button: MouseStateHandle,
+    remove_button: MouseStateHandle,
     setup_button: MouseStateHandle,
 
     tools_expandable_hover: MouseStateHandle,
@@ -130,9 +134,11 @@ pub struct ServerCardOptions {
     pub show_log_out_icon_button: bool,
     pub show_share_icon_button: bool,
     pub show_edit_config_icon_button: bool,
+    pub show_remove_icon_button: bool,
     pub show_update_available_icon_button: bool,
     pub show_view_logs_text_button: bool,
     pub show_edit_config_text_button: bool,
+    pub show_remove_text_button: bool,
     pub show_setup_text_button: bool,
     pub show_add_icon: bool,
 
@@ -177,9 +183,11 @@ impl From<ServerCardStatus> for ServerCardOptions {
                 show_log_out_icon_button: false,
                 show_share_icon_button: false,
                 show_edit_config_icon_button: false,
+                show_remove_icon_button: false,
                 show_update_available_icon_button: false,
                 show_view_logs_text_button: false,
                 show_edit_config_text_button: false,
+                show_remove_text_button: false,
                 show_setup_text_button: false,
                 show_add_icon: true,
 
@@ -194,9 +202,11 @@ impl From<ServerCardStatus> for ServerCardOptions {
                 show_log_out_icon_button: false,
                 show_share_icon_button: false,
                 show_edit_config_icon_button: true,
+                show_remove_icon_button: false,
                 show_update_available_icon_button: false,
                 show_view_logs_text_button: false,
                 show_edit_config_text_button: false,
+                show_remove_text_button: false,
                 show_setup_text_button: true,
                 show_add_icon: false,
 
@@ -211,9 +221,11 @@ impl From<ServerCardStatus> for ServerCardOptions {
                 show_log_out_icon_button: false,
                 show_share_icon_button: false,
                 show_edit_config_icon_button: true,
+                show_remove_icon_button: false,
                 show_update_available_icon_button: false,
                 show_view_logs_text_button: false,
                 show_edit_config_text_button: false,
+                show_remove_text_button: false,
                 show_setup_text_button: false,
                 show_add_icon: false,
 
@@ -231,9 +243,11 @@ impl From<ServerCardStatus> for ServerCardOptions {
                 show_log_out_icon_button: false,
                 show_share_icon_button: false,
                 show_edit_config_icon_button: true,
+                show_remove_icon_button: false,
                 show_update_available_icon_button: false,
                 show_view_logs_text_button: false,
                 show_edit_config_text_button: false,
+                show_remove_text_button: false,
                 show_setup_text_button: false,
                 show_add_icon: false,
 
@@ -251,9 +265,11 @@ impl From<ServerCardStatus> for ServerCardOptions {
                 show_log_out_icon_button: false,
                 show_share_icon_button: false,
                 show_edit_config_icon_button: true,
+                show_remove_icon_button: false,
                 show_update_available_icon_button: false,
                 show_view_logs_text_button: false,
                 show_edit_config_text_button: false,
+                show_remove_text_button: false,
                 show_setup_text_button: false,
                 show_add_icon: false,
 
@@ -271,9 +287,11 @@ impl From<ServerCardStatus> for ServerCardOptions {
                 show_log_out_icon_button: false,
                 show_share_icon_button: false,
                 show_edit_config_icon_button: true,
+                show_remove_icon_button: false,
                 show_update_available_icon_button: false,
                 show_view_logs_text_button: false,
                 show_edit_config_text_button: false,
+                show_remove_text_button: false,
                 show_setup_text_button: false,
                 show_add_icon: false,
 
@@ -291,9 +309,11 @@ impl From<ServerCardStatus> for ServerCardOptions {
                 show_log_out_icon_button: false,
                 show_share_icon_button: false,
                 show_edit_config_icon_button: true,
+                show_remove_icon_button: false,
                 show_update_available_icon_button: false,
                 show_view_logs_text_button: false,
                 show_edit_config_text_button: false,
+                show_remove_text_button: false,
                 show_setup_text_button: false,
                 show_add_icon: false,
 
@@ -311,9 +331,11 @@ impl From<ServerCardStatus> for ServerCardOptions {
                 show_log_out_icon_button: false,
                 show_share_icon_button: false,
                 show_edit_config_icon_button: false,
+                show_remove_icon_button: false,
                 show_update_available_icon_button: false,
                 show_view_logs_text_button: true,
                 show_edit_config_text_button: true,
+                show_remove_text_button: false,
                 show_setup_text_button: false,
                 show_add_icon: false,
 
@@ -804,6 +826,21 @@ impl ServerCardView {
                     .finish(),
                 );
             }
+
+            if self.render_options.show_remove_icon_button {
+                actions_row = actions_row.with_child(
+                    self.build_icon_button(
+                        appearance,
+                        Icon::Trash,
+                        "Remove from My MCPs".to_string(),
+                        self.mouse_handles.remove_icon_button.clone(),
+                    )
+                    .on_click(move |ctx, _, _| {
+                        ctx.dispatch_typed_action(ServerCardAction::Remove(item_id));
+                    })
+                    .finish(),
+                );
+            }
         }
 
         if self.render_options.show_update_available_icon_button {
@@ -840,6 +877,22 @@ impl ServerCardView {
                 })
                 .finish();
             actions_row = actions_row.with_child(edit_config_button);
+        }
+
+        if self.render_options.show_remove_text_button {
+            let remove_button = appearance
+                .ui_builder()
+                .button(
+                    ButtonVariant::Error,
+                    self.mouse_handles.remove_button.clone(),
+                )
+                .with_centered_text_label("Remove".to_string())
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(ServerCardAction::Remove(item_id));
+                })
+                .finish();
+            actions_row = actions_row.with_child(remove_button);
         }
 
         if self.render_options.show_setup_text_button {
@@ -932,6 +985,9 @@ impl ServerCardView {
         if self.render_options.show_edit_config_text_button {
             number_of_buttons += 1;
         }
+        if self.render_options.show_remove_text_button {
+            number_of_buttons += 1;
+        }
 
         if number_of_buttons > 1 {
             style::SERVER_CARD_ACTIONS_WIDE_WIDTH
@@ -974,6 +1030,10 @@ impl TypedActionView for ServerCardView {
             }
             ServerCardAction::Edit(item_id) => {
                 ctx.emit(ServerCardEvent::Edit(*item_id));
+                ctx.notify();
+            }
+            ServerCardAction::Remove(item_id) => {
+                ctx.emit(ServerCardEvent::Remove(*item_id));
                 ctx.notify();
             }
             ServerCardAction::Install(item_id) => {
