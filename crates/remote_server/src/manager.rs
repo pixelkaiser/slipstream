@@ -805,6 +805,13 @@ impl RemoteServerManager {
             .find_map(|session_id| self.session_labels.get(session_id).map(String::as_str))
     }
 
+    pub fn mark_setup_skipped(&mut self, session_id: SessionId, ctx: &mut ModelContext<Self>) {
+        ctx.emit(RemoteServerManagerEvent::SetupStateChanged {
+            session_id,
+            state: RemoteServerSetupState::Skipped,
+        });
+    }
+
     /// Checks if the remote server binary is installed and executable.
     /// Emits `BinaryCheckComplete { result }`.
     ///
@@ -864,11 +871,29 @@ impl RemoteServerManager {
                             None
                         }
                     };
+                    if let Some(p) = &platform {
+                        if matches!(p.os, RemoteOs::MacOs) {
+                            log::info!(
+                                "Remote server platform is macOS, falling back to legacy SSH: session={session_id:?}"
+                            );
+                            Self::emit_unsupported_preinstall_check(
+                                &spawner,
+                                session_id,
+                                Some(p.clone()),
+                                PreinstallCheckResult::unsupported(
+                                    UnsupportedReason::UnsupportedOs {
+                                        os: p.os.as_str().to_owned(),
+                                    },
+                                ),
+                            )
+                            .await;
+                            return;
+                        }
+                    }
                     // Run the preinstall check after platform detection
-                    // resolves, only on Linux. macOS hosts pay zero extra
-                    // round-trips. SSH-level failures are logged and
-                    // surfaced as `None`, which the controller treats as
-                    // inconclusive (fail open).
+                    // resolves, only on Linux. SSH-level failures are
+                    // logged and surfaced as `None`, which the controller
+                    // treats as inconclusive (fail open).
                     let preinstall = match &platform {
                         Some(p) if matches!(p.os, RemoteOs::Linux) => {
                             match transport.run_preinstall_check().await {
