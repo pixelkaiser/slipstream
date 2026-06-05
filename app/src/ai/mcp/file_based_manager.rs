@@ -24,6 +24,8 @@ pub struct FileBasedMCPManager {
     file_based_servers: HashMap<u64, TemplatableMCPServerInstallation>,
     /// Reverse mapping: logical root path → provider → set of server hashes.
     file_based_servers_by_root: HashMap<PathBuf, HashMap<MCPProvider, HashSet<u64>>>,
+    /// Concrete config file path for each `(logical root path, provider)` source.
+    config_paths_by_root_provider: HashMap<PathBuf, HashMap<MCPProvider, PathBuf>>,
     /// UUIDs that were actually auto-start requested while parsing each `(root, provider)`.
     /// They are temporarily stored here and removed to emit FileBasedMCPManagerEvent::CloudEnvMcpScanComplete
     pending_scan_auto_started_servers_by_root:
@@ -57,6 +59,7 @@ impl FileBasedMCPManager {
         Self {
             file_based_servers: Default::default(),
             file_based_servers_by_root: Default::default(),
+            config_paths_by_root_provider: Default::default(),
             pending_scan_auto_started_servers_by_root: Default::default(),
             activated_file_based_server_uuids: activated_file_based_server_uuids
                 .into_iter()
@@ -69,16 +72,24 @@ impl FileBasedMCPManager {
         match event {
             FileMCPWatcherEvent::ConfigParsed {
                 root_path,
+                config_path,
                 provider,
                 servers,
             } => {
-                self.apply_parsed_servers(root_path.clone(), *provider, servers.clone(), ctx);
+                self.apply_parsed_servers_from_config(
+                    root_path.clone(),
+                    *provider,
+                    config_path.clone(),
+                    servers.clone(),
+                    ctx,
+                );
             }
             FileMCPWatcherEvent::ConfigRemoved {
                 root_path,
+                config_path,
                 provider,
             } => {
-                self.remove_servers_for_root_provider(root_path, *provider, ctx);
+                self.remove_servers_for_root_provider(root_path, *provider, config_path, ctx);
             }
             FileMCPWatcherEvent::CloudEnvMcpScanComplete { repo_path } => {
                 self.handle_cloud_environment_scan_complete(repo_path, ctx);
@@ -119,12 +130,30 @@ impl FileBasedMCPManager {
         &mut self,
         root_path: &PathBuf,
         provider: MCPProvider,
+        config_path: &Path,
         ctx: &mut ModelContext<Self>,
     ) {
         let hashes = self
             .file_based_servers_by_root
             .get_mut(root_path)
             .and_then(|m| m.remove(&provider));
+
+        let should_remove_config_root =
+            if let Some(provider_map) = self.config_paths_by_root_provider.get_mut(root_path) {
+                if provider_map
+                    .get(&provider)
+                    .is_some_and(|stored_config_path| stored_config_path == config_path)
+                {
+                    provider_map.remove(&provider);
+                }
+                provider_map.is_empty()
+            } else {
+                false
+            };
+        if should_remove_config_root {
+            self.config_paths_by_root_provider.remove(root_path);
+        }
+
         if let Some(hashes) = hashes {
             self.remove_if_orphaned(hashes, ctx);
         }
@@ -179,6 +208,7 @@ impl FileBasedMCPManager {
 
     /// Applies a parsed list of MCP servers
     /// spawning new servers and removing servers that are no longer present.
+    #[cfg(test)]
     fn apply_parsed_servers(
         &mut self,
         root_path: PathBuf,
@@ -186,6 +216,23 @@ impl FileBasedMCPManager {
         parsed_servers: Vec<ParsedTemplatableMCPServerResult>,
         ctx: &mut ModelContext<Self>,
     ) {
+        let config_path = Self::default_config_path_for_root_provider(&root_path, provider);
+        self.apply_parsed_servers_from_config(root_path, provider, config_path, parsed_servers, ctx);
+    }
+
+    fn apply_parsed_servers_from_config(
+        &mut self,
+        root_path: PathBuf,
+        provider: MCPProvider,
+        config_path: PathBuf,
+        parsed_servers: Vec<ParsedTemplatableMCPServerResult>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.config_paths_by_root_provider
+            .entry(root_path.clone())
+            .or_default()
+            .insert(provider, config_path);
+
         let previous_scanned_servers: HashSet<u64> = self
             .file_based_servers_by_root
             .get(&root_path)
@@ -255,6 +302,24 @@ impl FileBasedMCPManager {
             self.file_based_servers_by_root.remove(&root_path);
         }
 
+        let provider_removed = self
+            .file_based_servers_by_root
+            .get(&root_path)
+            .is_none_or(|provider_map| !provider_map.contains_key(&provider));
+        if provider_removed {
+            let should_remove_config_root = if let Some(provider_map) =
+                self.config_paths_by_root_provider.get_mut(&root_path)
+            {
+                provider_map.remove(&provider);
+                provider_map.is_empty()
+            } else {
+                false
+            };
+            if should_remove_config_root {
+                self.config_paths_by_root_provider.remove(&root_path);
+            }
+        }
+
         // If orphaned servers are found, remove them and purge their credentials.
         self.remove_if_orphaned(servers_to_remove, ctx);
     }
@@ -303,6 +368,23 @@ impl FileBasedMCPManager {
 
     fn is_global_warp_root(root_path: &Path) -> bool {
         warp_managed_mcp_config_path().is_some_and(|path| root_path == path.root_path.as_path())
+    }
+
+    fn default_config_path_for_root_provider(root_path: &Path, provider: MCPProvider) -> PathBuf {
+        if provider == MCPProvider::Warp && Self::is_global_warp_root(root_path) {
+            return warp_managed_mcp_config_path()
+                .map(|path| path.config_path)
+                .unwrap_or_else(|| root_path.join(provider.home_config_path()));
+        }
+
+        if dirs::home_dir()
+            .as_ref()
+            .is_some_and(|home_dir| root_path == home_dir)
+        {
+            return root_path.join(provider.home_config_path());
+        }
+
+        root_path.join(provider.project_config_path())
     }
     fn auto_start_decision(&self, hash: u64, file_based_mcp_enabled: bool) -> AutoStartDecision {
         let server_type = if self.is_global_warp_server(hash) {
@@ -555,6 +637,37 @@ impl FileBasedMCPManager {
             .map(|(root, _)| root.clone())
             .sorted()
             .collect()
+    }
+
+    /// Returns the concrete config file paths where a file-based MCP installation
+    /// was detected for a specific provider.
+    pub fn config_file_paths_for_installation_and_provider(
+        &self,
+        uuid: Uuid,
+        provider: MCPProvider,
+    ) -> Vec<PathBuf> {
+        let Some(hash) = self.get_hash_by_uuid(uuid) else {
+            return vec![];
+        };
+        let mut config_paths = self
+            .file_based_servers_by_root
+            .iter()
+            .filter(|(_, provider_map)| {
+                provider_map
+                    .get(&provider)
+                    .is_some_and(|hashes| hashes.contains(&hash))
+            })
+            .map(|(root, _)| {
+                self.config_paths_by_root_provider
+                    .get(root)
+                    .and_then(|provider_map| provider_map.get(&provider))
+                    .cloned()
+                    .unwrap_or_else(|| Self::default_config_path_for_root_provider(root, provider))
+            })
+            .collect_vec();
+        config_paths.sort();
+        config_paths.dedup();
+        config_paths
     }
 
     /// Returns the directory a file-based MCP installation should be spawned from

@@ -47,6 +47,14 @@ impl FileBasedMCPManager {
         vec![]
     }
 
+    pub fn config_file_paths_for_installation_and_provider(
+        &self,
+        _uuid: Uuid,
+        _provider: MCPProvider,
+    ) -> Vec<PathBuf> {
+        vec![]
+    }
+
     pub fn set_server_activation(
         &mut self,
         _installation_uuid: Uuid,
