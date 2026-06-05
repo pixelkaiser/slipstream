@@ -214,6 +214,34 @@ fn test_activated_project_file_based_server_spawns_when_detected() {
 }
 
 #[test]
+fn test_deactivating_file_based_server_emits_despawn() {
+    let repo_path = PathBuf::from("/tmp/test-repo");
+    let parsed = parse_config_mcp_json(
+        r#"{"mcpServers": {"test-server": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-example"]}}}"#,
+    );
+    let installation_uuid = parsed[0]
+        .templatable_mcp_server_installation
+        .as_ref()
+        .expect("server should have an installation")
+        .uuid();
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app_with_activated_servers(&mut app, vec![installation_uuid]);
+        let events = subscribe_events(&mut app, &manager_handle);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.apply_parsed_servers(repo_path.clone(), MCPProvider::Claude, parsed, ctx);
+            manager.set_server_activation(installation_uuid, false, ctx);
+        });
+
+        events.read(&app, |events, _| {
+            assert_eq!(events.spawned_uuids, vec![installation_uuid]);
+            assert_eq!(events.despawned_uuids, vec![installation_uuid]);
+        });
+    });
+}
+
+#[test]
 fn test_update_file_based_servers_adds_reference_to_existing_server() {
     let json = r#"{"shared-server": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-example"]}}"#;
     let repo1 = PathBuf::from("/tmp/test-repo-1");
@@ -619,6 +647,42 @@ fn test_server_referenced_from_both_global_and_project_is_global() {
                 e.spawned_uuids,
                 vec![installation_uuid],
                 "Global reference should make the server eligible for toggle-driven spawn"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_config_file_path_for_installation_reports_actual_source_path() {
+    let repo_path = PathBuf::from("/tmp/test-repo");
+    let config_path = repo_path.join(".custom-mcp/config.json");
+    let parsed = parse_mcp_json(
+        r#"{"test-server": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-example"]}}"#,
+    );
+    let installation_uuid = parsed[0]
+        .templatable_mcp_server_installation
+        .as_ref()
+        .expect("server should have an installation")
+        .uuid();
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.apply_parsed_servers_from_config(
+                repo_path,
+                MCPProvider::Claude,
+                config_path.clone(),
+                parsed,
+                ctx,
+            );
+
+            assert_eq!(
+                manager.config_file_paths_for_installation_and_provider(
+                    installation_uuid,
+                    MCPProvider::Claude,
+                ),
+                vec![config_path],
             );
         });
     });
