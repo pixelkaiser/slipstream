@@ -380,7 +380,7 @@ async fn dropped_run_command_sends_abort() {
     let mut server_read = server_read.compat();
 
     let executor = executor::Background::default();
-    let (client, _disconnect_rx, _failure_rx) =
+    let (client, _disconnect_rx, _failure_rx, _host_response_rx) =
         RemoteServerClient::new(client_read.compat(), client_write.compat_write(), &executor);
     let client = std::sync::Arc::new(client);
 
@@ -401,8 +401,8 @@ async fn dropped_run_command_sends_abort() {
     let request = protocol::read_client_message(&mut server_read).await.unwrap();
     let request_id = request.request_id.clone();
     assert!(matches!(
-        request.message,
-        Some(client_message::Message::RunCommand(_))
+        unwrap_session_scoped(&request),
+        session_scoped_request::Message::RunCommand(_)
     ));
 
     request_task.abort();
@@ -414,8 +414,8 @@ async fn dropped_run_command_sends_abort() {
     .await
     .unwrap()
     .unwrap();
-    match abort.message {
-        Some(client_message::Message::Abort(abort)) => {
+    match unwrap_notification(&abort) {
+        notification::Message::Abort(abort) => {
             assert_eq!(abort.request_id_to_abort, request_id);
         }
         other => panic!("Expected Abort, got {other:?}"),
