@@ -4647,7 +4647,7 @@ impl TerminalView {
                             .unwrap_or((None, None));
                         send_telemetry_from_ctx!(
                             TelemetryEvent::RemoteServerBinaryCheck {
-                                found: matches!(result, Ok(true)),
+                                found: matches!(result, Ok(status) if status.is_found()),
                                 error: result.as_ref().err().map(|e| e.to_string()),
                                 remote_os,
                                 remote_arch,
@@ -12884,6 +12884,13 @@ impl TerminalView {
             ModelEvent::RemoteServerBlockRequested { session_id } => {
                 self.show_ssh_remote_server_choice_block(*session_id, ctx);
             }
+            ModelEvent::RemoteServerUpdateBlockRequested { session_id } => {
+                self.show_ssh_remote_server_choice_block_with_mode(
+                    *session_id,
+                    SshRemoteServerChoiceViewMode::UpdateRequired,
+                    ctx,
+                );
+            }
         }
     }
 
@@ -12922,6 +12929,9 @@ impl TerminalView {
             SshRemoteServerChoiceViewMode::InitialInstall => {
                 SshRemoteServerChoiceView::new(session_id, ctx)
             }
+            SshRemoteServerChoiceViewMode::UpdateRequired => {
+                SshRemoteServerChoiceView::new_with_mode(session_id, mode, ctx)
+            }
             SshRemoteServerChoiceViewMode::RetryAfterControlMasterError
             | SshRemoteServerChoiceViewMode::RetryAfterSetupFailure => {
                 SshRemoteServerChoiceView::new_with_mode(session_id, mode, ctx)
@@ -12932,7 +12942,8 @@ impl TerminalView {
             SshRemoteServerChoiceViewEvent::Install => {
                 me.remove_ssh_remote_server_choice_block(session_id, ctx);
                 match mode {
-                    SshRemoteServerChoiceViewMode::InitialInstall => {
+                    SshRemoteServerChoiceViewMode::InitialInstall
+                    | SshRemoteServerChoiceViewMode::UpdateRequired => {
                         ctx.emit(Event::RemoteServerInstallRequested { session_id });
                     }
                     SshRemoteServerChoiceViewMode::RetryAfterControlMasterError
@@ -12956,7 +12967,11 @@ impl TerminalView {
             }
             SshRemoteServerChoiceViewEvent::Skip => {
                 me.remove_ssh_remote_server_choice_block(session_id, ctx);
-                if matches!(mode, SshRemoteServerChoiceViewMode::InitialInstall) {
+                if matches!(
+                    mode,
+                    SshRemoteServerChoiceViewMode::InitialInstall
+                        | SshRemoteServerChoiceViewMode::UpdateRequired
+                ) {
                     ctx.emit(Event::RemoteServerSkipRequested { session_id });
                 }
             }

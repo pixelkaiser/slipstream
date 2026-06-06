@@ -15,7 +15,7 @@ help:
 	@echo "  make local-agent-build    Build the local multi-agent service"
 	@echo "  make local-agent-start    Run the built local multi-agent service"
 	@echo "  make local-agent-test     Build and test the local multi-agent service"
-	@echo "  make release-macos TAG=v0.2.0 REF=<commit-ish>  Tag a commit and trigger the macOS release workflow"
+	@echo "  make release-macos TAG=v0.2.0 REF=<commit-ish>  Tag a commit and trigger the macOS + SSH extension release workflow"
 	@echo "  make warp-local-signing-identity  Create a stable local macOS signing identity"
 	@echo "  make warp-signing-status  Show available macOS code-signing identities"
 	@echo "  make warp-grant-keychain-access  Grant existing Slipstream keychain items to the signed app Team ID"
