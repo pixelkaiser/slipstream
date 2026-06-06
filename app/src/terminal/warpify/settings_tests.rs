@@ -316,14 +316,14 @@ fn ssh_remote_server_requires_user_setting_and_ssh_warpification() {
 
 #[cfg(not(windows))]
 #[test]
-fn ssh_extension_download_settings_default_to_production_values() {
+fn ssh_extension_download_settings_default_to_channel_values() {
     App::test((), |app| async move {
         let settings = app.add_singleton_model(WarpifySettings::new_with_defaults);
 
         settings.read(&app, |settings, _ctx| {
             assert_eq!(
                 settings.ssh_extension_download_base_url.value(),
-                remote_server::setup::default_download_base_url()
+                &remote_server::setup::default_download_base_url()
             );
             assert_eq!(
                 settings.ssh_extension_download_channel.value(),
@@ -342,7 +342,11 @@ fn ssh_extension_install_options_use_normalized_download_settings() {
         settings.update(&mut app, |settings, ctx| {
             settings
                 .ssh_extension_download_base_url
-                .load_value("https://downloads.example.com/warp/cli/".to_string(), true, ctx)
+                .load_value(
+                    "https://downloads.example.com/warp/cli/".to_string(),
+                    true,
+                    ctx,
+                )
                 .unwrap();
             settings
                 .ssh_extension_download_channel

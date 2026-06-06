@@ -6,7 +6,7 @@ use remote_server::auth::RemoteServerAuthContext;
 use remote_server::setup::{
     PreinstallCheckResult, PreinstallStatus, RemoteLibc, RemotePlatform, UnsupportedReason,
 };
-use remote_server::transport::Error;
+use remote_server::transport::{BinaryCheckStatus, Error};
 use settings::Setting;
 use warp_core::SessionId;
 use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakModelHandle};
@@ -42,6 +42,7 @@ enum SshInitState {
         session_info: SessionInfo,
         transport: SshTransport,
         setup_start: Instant,
+        for_update: bool,
     },
     /// Stash held, `install_binary` in flight.
     /// `for_update` is `true` when reinstalling over an existing install
@@ -273,7 +274,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
     fn on_binary_check_complete(
         &mut self,
         session_id: SessionId,
-        result: Result<bool, Arc<Error>>,
+        result: Result<BinaryCheckStatus, Arc<Error>>,
         preinstall_check: Option<PreinstallCheckResult>,
         has_old_binary: bool,
         ctx: &mut ModelContext<Self>,
@@ -312,7 +313,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         }
 
         match result {
-            Ok(true) => {
+            Ok(BinaryCheckStatus::Installed) => {
                 let socket_path = transport.socket_path().clone();
                 let warp_owns_control_master = transport.warp_owns_control_master();
                 let connection_label = connection_label_for_session_info(&session_info);
@@ -326,62 +327,85 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                     socket_path,
                     warp_owns_control_master,
                     connection_label,
+                    false,
                     ctx,
                 );
             }
-            Ok(false) if has_old_binary => {
-                // Auto-update: a prior install exists, so skip the modal
-                // and reinstall.
+            Ok(BinaryCheckStatus::UpdateRequired { reason, .. }) => {
+                log::info!(
+                    "Remote server binary requires update: session={session_id:?} reason={reason:?}"
+                );
+                self.handle_install_decision(
+                    session_id,
+                    session_info,
+                    transport,
+                    setup_start,
+                    true,
+                    ctx,
+                );
+            }
+            Ok(BinaryCheckStatus::Missing) => {
+                self.handle_install_decision(
+                    session_id,
+                    session_info,
+                    transport,
+                    setup_start,
+                    has_old_binary,
+                    ctx,
+                );
+            }
+            Err(err) => {
+                log::warn!("Remote server binary check failed: session={session_id:?} error={err}");
+                self.flush_stashed_bootstrap(session_info, ctx);
+            }
+        }
+    }
+
+    fn handle_install_decision(
+        &mut self,
+        session_id: SessionId,
+        session_info: SessionInfo,
+        transport: SshTransport,
+        setup_start: Instant,
+        for_update: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let install_mode = *WarpifySettings::as_ref(ctx)
+            .ssh_extension_install_mode
+            .value();
+        match install_mode {
+            SshExtensionInstallMode::AlwaysAsk => {
+                self.state = SshInitState::AwaitingUserChoice {
+                    session_info,
+                    transport,
+                    setup_start,
+                    for_update,
+                };
+                self.model_event_dispatcher.update(ctx, |d, ctx| {
+                    if for_update {
+                        d.request_remote_server_update_block(session_id, ctx);
+                    } else {
+                        d.request_remote_server_block(session_id, ctx);
+                    }
+                });
+            }
+            SshExtensionInstallMode::AlwaysInstall => {
                 self.did_install = true;
                 self.state = SshInitState::AwaitingInstall {
                     session_id,
                     session_info,
                     transport: transport.clone(),
                     setup_start,
-                    for_update: true,
+                    for_update,
                 };
                 RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-                    mgr.install_binary(session_id, transport, true, ctx);
+                    mgr.install_binary(session_id, transport, for_update, ctx);
                 });
             }
-            Ok(false) => {
-                let install_mode = *WarpifySettings::as_ref(ctx)
-                    .ssh_extension_install_mode
-                    .value();
-                match install_mode {
-                    SshExtensionInstallMode::AlwaysAsk => {
-                        self.state = SshInitState::AwaitingUserChoice {
-                            session_info,
-                            transport,
-                            setup_start,
-                        };
-                        self.model_event_dispatcher.update(ctx, |d, ctx| {
-                            d.request_remote_server_block(session_id, ctx);
-                        });
-                    }
-                    SshExtensionInstallMode::AlwaysInstall => {
-                        self.did_install = true;
-                        self.state = SshInitState::AwaitingInstall {
-                            session_id,
-                            session_info,
-                            transport: transport.clone(),
-                            setup_start,
-                            for_update: false,
-                        };
-                        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-                            mgr.install_binary(session_id, transport, false, ctx);
-                        });
-                    }
-                    SshExtensionInstallMode::NeverInstall => {
-                        RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-                            mgr.mark_setup_skipped(session_id, ctx);
-                        });
-                        self.flush_stashed_bootstrap(session_info, ctx);
-                    }
-                }
-            }
-            Err(err) => {
-                log::warn!("Remote server binary check failed: session={session_id:?} error={err}");
+            SshExtensionInstallMode::NeverInstall => {
+                RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
+                    mgr.mark_setup_skipped(session_id, ctx);
+                });
                 self.flush_stashed_bootstrap(session_info, ctx);
             }
         }
@@ -403,25 +427,24 @@ impl<T: EventLoopSender> RemoteServerController<T> {
             session_info,
             transport,
             setup_start,
+            for_update,
         } = std::mem::replace(&mut self.state, SshInitState::Idle)
         else {
             unreachable!("just matched AwaitingUserChoice above");
         };
 
-        // Reaching this path implies the user explicitly confirmed a
-        // fresh install from the modal. Auto-update flows (with an old
-        // binary detected) skip the modal entirely and go through
-        // `on_binary_check_complete` with `is_update: true`.
+        // Reaching this path implies the user explicitly confirmed the
+        // install/update from the modal.
         self.did_install = true;
         self.state = SshInitState::AwaitingInstall {
             session_id,
             session_info,
             transport: transport.clone(),
             setup_start,
-            for_update: false,
+            for_update,
         };
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.install_binary(session_id, transport, false, ctx);
+            mgr.install_binary(session_id, transport, for_update, ctx);
         });
     }
 
@@ -604,6 +627,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                         socket_path,
                         warp_owns_control_master,
                         connection_label,
+                        true,
                         ctx,
                     );
                 }
@@ -631,6 +655,7 @@ impl<T: EventLoopSender> RemoteServerController<T> {
                         socket_path,
                         warp_owns_control_master,
                         connection_label_from_user_and_host("", None),
+                        true,
                         ctx,
                     );
                 }
@@ -669,16 +694,20 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         socket_path: PathBuf,
         warp_owns_control_master: bool,
         connection_label: String,
+        allow_tagged_server_with_untagged_client: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         let auth_context = self.build_auth_context(ctx);
         let install_options = WarpifySettings::as_ref(ctx).ssh_extension_install_options();
-        let transport = SshTransport::new(
+        let mut transport = SshTransport::new(
             socket_path,
             auth_context.clone(),
             warp_owns_control_master,
             install_options,
         );
+        if allow_tagged_server_with_untagged_client {
+            transport = transport.with_tagged_server_untagged_client_trust();
+        }
         RemoteServerManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.connect_session(
                 session_id,

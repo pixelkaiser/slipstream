@@ -39,7 +39,7 @@ use crate::setup::UnsupportedReason;
 use crate::setup::{PreinstallCheckResult, RemotePlatform, RemoteServerSetupState};
 #[cfg(not(target_family = "wasm"))]
 use crate::transport::{Connection, ControlPath};
-use crate::transport::{Error, InstallSource, RemoteTransport};
+use crate::transport::{BinaryCheckStatus, Error, InstallSource, RemoteTransport};
 use crate::HostId;
 
 /// Maximum number of reconnection attempts after a spontaneous disconnect.
@@ -59,6 +59,12 @@ const HOST_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// code and signal status before we give up and report `None`.
 #[cfg(not(target_family = "wasm"))]
 const EXIT_STATUS_WAIT_TIMEOUT: Duration = Duration::from_millis(200);
+/// Remote-server initialize should either respond promptly or fail open to the
+/// plain SSH path. A stale daemon can keep the proxy connected while dropping
+/// malformed client messages, which would otherwise wait for the client's
+/// full request timeout.
+#[cfg(not(target_family = "wasm"))]
+const INITIALIZE_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Parameters that travel together through the reconnection flow.
 #[cfg(not(target_family = "wasm"))]
@@ -248,10 +254,8 @@ impl RemoteServerErrorKind {
 ///   string): treat as compatible. This preserves the `cargo run` +
 ///   `script/deploy_remote_server` dev loop, where neither side reports a
 ///   release tag.
-/// - OSS/Slipstream clients with no baked release tag accept a non-empty
-///   production remote-server tag because the extension is downloaded from
-///   the configured production endpoint/channel instead of built from the
-///   local checkout.
+/// - Untagged clients reject non-empty remote-server tags because there is no
+///   reliable client version to compare against.
 #[cfg(not(target_family = "wasm"))]
 fn version_is_compatible(client: Option<&str>, server: &str) -> bool {
     version_is_compatible_for_channel(ChannelState::channel(), client, server)
@@ -259,19 +263,31 @@ fn version_is_compatible(client: Option<&str>, server: &str) -> bool {
 
 #[cfg(not(target_family = "wasm"))]
 fn version_is_compatible_for_channel(
-    channel: Channel,
+    _channel: Channel,
     client: Option<&str>,
     server: &str,
 ) -> bool {
-    match (channel, client, server.is_empty()) {
-        // Slipstream/OSS intentionally downloads production remote-server artifacts but does
-        // not have a baked Warp release tag in local builds, so there is no exact release tag
-        // to compare against.
-        (Channel::Oss, None, false) => true,
-        (_, Some(c), false) => c == server,
-        (_, None, true) => true,
-        (_, Some(_), true) | (_, None, false) => false,
+    match (client, server.is_empty()) {
+        (Some(c), false) => c == server,
+        (None, true) => true,
+        (Some(_), true) | (None, false) => false,
     }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn version_is_compatible_for_transport(
+    client: Option<&str>,
+    server: &str,
+    transport: &dyn RemoteTransport,
+) -> bool {
+    // A pre-existing tagged server is not trusted when the client is untagged,
+    // but a user-approved install/update can explicitly mark the transport as
+    // freshly installed by this setup flow. In that case initialize remains
+    // the live compatibility check.
+    version_is_compatible(client, server)
+        || client.is_none()
+            && !server.is_empty()
+            && transport.allow_tagged_server_with_untagged_client()
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]
@@ -279,8 +295,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn oss_without_client_version_accepts_production_remote_server_version() {
-        assert!(version_is_compatible_for_channel(
+    fn oss_without_client_version_rejects_production_remote_server_version() {
+        assert!(!version_is_compatible_for_channel(
             Channel::Oss,
             None,
             "v0.2026.04.29.08.57.stable_01"
@@ -677,13 +693,16 @@ pub enum RemoteServerManagerEvent {
         state: RemoteServerSetupState,
     },
     /// Result of [`RemoteServerManager::check_binary`]. Returns a result where:
-    /// - `Ok(true)` means the binary is installed and executable,
-    /// - `Ok(false)` means it is not installed, or the preinstall gate
-    ///   classified the host as unsupported, and
+    /// - `Ok(BinaryCheckStatus::Installed)` means the binary is installed,
+    ///   executable, and compatible,
+    /// - `Ok(BinaryCheckStatus::Missing)` means it is not installed, or the
+    ///   preinstall gate classified the host as unsupported,
+    /// - `Ok(BinaryCheckStatus::UpdateRequired { .. })` means a binary exists
+    ///   but should be replaced before connecting, and
     /// - `Err(_)` means the check itself failed (e.g. SSH error or timeout).
     BinaryCheckComplete {
         session_id: SessionId,
-        result: Result<bool, Arc<Error>>,
+        result: Result<BinaryCheckStatus, Arc<Error>>,
         /// The detected remote platform (OS + arch) from `uname -sm`.
         /// `None` if detection failed or was not attempted.
         remote_platform: Option<RemotePlatform>,
@@ -696,10 +715,10 @@ pub enum RemoteServerManagerEvent {
         /// `true` if the remote already has an existing install of the
         /// remote-server binary, detected by probing whether the install
         /// directory exists (see `RemoteTransport::check_has_old_binary`).
-        /// Combined with `result == Ok(false)`, this tells the controller
-        /// it should auto-install as an update instead of prompting the
-        /// user. `false` when no prior install was detected, or when the
-        /// detection itself failed.
+        /// Combined with `result == Ok(BinaryCheckStatus::Missing)`, this
+        /// tells the controller that installing the current binary replaces a
+        /// prior install rather than creating a fresh one. `false` when no
+        /// prior install was detected, or when the detection itself failed.
         has_old_binary: bool,
     },
     /// Result of [`RemoteServerManager::install_binary`].
@@ -1859,9 +1878,10 @@ impl RemoteServerManager {
     /// Checks if the remote server binary is installed and executable.
     /// Emits `BinaryCheckComplete { result }`.
     ///
-    /// Returns Ok(true) if the binary is installed and executable,
-    /// Ok(false) if it is definitively not installed or unsupported setup
-    /// should skip install decisions, and
+    /// Returns Ok(Installed) if the binary is installed and executable,
+    /// Ok(Missing) if it is definitively not installed or unsupported setup
+    /// should skip install decisions, Ok(UpdateRequired) if an existing
+    /// binary should be replaced before connecting, and
     /// Err(_) if the check failed (e.g. SSH timeout/unreachable).
     #[cfg_attr(target_family = "wasm", allow(unused_variables))]
     pub fn check_binary<T>(
@@ -2049,7 +2069,7 @@ impl RemoteServerManager {
                 });
                 ctx.emit(RemoteServerManagerEvent::BinaryCheckComplete {
                     session_id,
-                    result: Ok(false),
+                    result: Ok(BinaryCheckStatus::Missing),
                     remote_platform: platform,
                     preinstall_check: Some(preinstall),
                     has_old_binary: false,
@@ -2371,7 +2391,13 @@ impl RemoteServerManager {
                     codebase_index_limits,
                 },
             )
+            .with_timeout(INITIALIZE_HANDSHAKE_TIMEOUT)
             .await
+            .map_err(|_| {
+                ConnectAndHandshakeError::Initialize(anyhow::anyhow!(
+                    "initialize handshake timed out after {INITIALIZE_HANDSHAKE_TIMEOUT:?}"
+                ))
+            })?
             .map_err(|e| ConnectAndHandshakeError::Initialize(anyhow::anyhow!("{e:#}")))?;
 
         // Version compatibility check. If the server reports a different
@@ -2385,7 +2411,7 @@ impl RemoteServerManager {
         // so this is a belt-and-suspenders check at zero extra cost (it
         // uses data already received in the InitializeResponse).
         let client_version = ChannelState::app_version();
-        if !version_is_compatible(client_version, &resp.server_version) {
+        if !version_is_compatible_for_transport(client_version, &resp.server_version, transport) {
             log::warn!(
                 "Remote server version mismatch, removing stale binary: session={session_id:?} \
                  client={client_version:?} server={:?}",
