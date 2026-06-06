@@ -8,6 +8,9 @@ use warp_core::channel::{Channel, ChannelState};
 pub const REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED: &str = "unversioned";
 
 pub const PRODUCTION_DOWNLOAD_BASE_URL: &str = "https://app.warp.dev/download/cli";
+pub const SLIPSTREAM_RELEASES_BASE_URL: &str = "https://github.com/pixelkaiser/slipstream/releases";
+pub const SLIPSTREAM_LATEST_REMOTE_SERVER_RELEASE_TAG: &str = "remote-server-latest";
+pub const SLIPSTREAM_REMOTE_SERVER_ASSET_PREFIX: &str = "slipstream-remote-server";
 pub const DOWNLOAD_CHANNEL_STABLE: &str = "stable";
 pub const DOWNLOAD_CHANNEL_PREVIEW: &str = "preview";
 pub const DOWNLOAD_CHANNEL_DEV: &str = "dev";
@@ -158,6 +161,7 @@ impl UnsupportedReason {
             }
             crate::transport::Error::TimedOut
             | crate::transport::Error::ScriptFailed { .. }
+            | crate::transport::Error::IncompatibleBinary { .. }
             | crate::transport::Error::Other(_) => None,
         }
     }
@@ -497,9 +501,9 @@ pub fn binary_name() -> &'static str {
 ///
 /// - [`Channel::Local`] and [`Channel::Oss`] always use the bare
 ///   `{binary_name}` path. For `Local` this is the slot
-///   `script/deploy_remote_server` writes to; `Oss` is treated the
-///   same way because it has no release-pinned CDN artifact and is
-///   expected to be deployed/managed locally.
+///   `script/deploy_remote_server` writes to. `Oss` downloads from
+///   Slipstream GitHub release assets, but still keeps one unversioned
+///   remote path so untagged clients can replace the moving latest binary.
 /// - Every other channel always uses `{binary_name}-{version}`, where
 ///   `version` is the baked-in `GIT_RELEASE_TAG` when present and falls
 ///   back to `CARGO_PKG_VERSION` otherwise. The fallback keeps the path
@@ -529,6 +533,12 @@ pub fn binary_check_command() -> String {
     format!("{} --version", remote_server_binary())
 }
 
+/// Returns the shell command to print the remote-server protocol
+/// compatibility key from the installed binary.
+pub fn protocol_check_command() -> String {
+    format!("{} remote-server-protocol-version", remote_server_binary())
+}
+
 /// Returns the version string used to pin remote-server installs on
 /// channels that take the versioned path (i.e. everything except
 /// [`Channel::Local`] and [`Channel::Oss`]). Prefers the baked-in
@@ -549,15 +559,24 @@ fn pinned_version() -> &'static str {
 /// from a previous client version.
 pub fn remote_server_artifact_version() -> &'static str {
     match ChannelState::channel() {
-        Channel::Local | Channel::Oss => REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED,
+        Channel::Local => REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED,
+        Channel::Oss => {
+            ChannelState::app_version().unwrap_or(SLIPSTREAM_LATEST_REMOTE_SERVER_RELEASE_TAG)
+        }
         Channel::Stable | Channel::Preview | Channel::Dev | Channel::Integration => {
             pinned_version()
         }
     }
 }
 
+/// Whether the download artifact is a moving target instead of an immutable,
+/// versioned asset.
+pub fn remote_server_artifact_is_moving_latest() -> bool {
+    matches!(ChannelState::channel(), Channel::Oss) && ChannelState::app_version().is_none()
+}
+
 /// The install script template, loaded from a standalone `.sh` file for
-/// readability. Placeholders like `{download_base_url}` are substituted by
+/// readability. Placeholders like `{download_url}` are substituted by
 /// [`install_script_with_options`].
 const INSTALL_SCRIPT_TEMPLATE: &str = include_str!("install_remote_server.sh");
 
@@ -567,15 +586,12 @@ const INSTALL_SCRIPT_TEMPLATE: &str = include_str!("install_remote_server.sh");
 /// The script detects the remote architecture via `uname -m`, downloads
 /// the correct Oz CLI tarball from the download URL, and installs it at
 /// the path returned by [`remote_server_binary`] so repeat invocations
-/// are idempotent. The `version_query` / `version_suffix` substitutions
-/// follow the same rule as [`remote_server_binary`]: empty on
-/// [`Channel::Local`] and [`Channel::Oss`] (so the install lands at
-/// the unversioned path used by `script/deploy_remote_server`); pinned to
-/// `&version={v}` / `-{v}` on every other channel, where `v` falls back
-/// to `CARGO_PKG_VERSION` when no release tag is baked in.
+/// are idempotent. The download URL follows the selected download source:
+/// Warp channels keep the `/download/cli?...` endpoint, while Slipstream/OSS
+/// defaults to GitHub release assets published by the release workflow.
 pub fn install_script(staging_tarball_path: Option<&str>) -> String {
     install_script_with_options(
-        &InstallScriptOptions::new(download_url(), download_channel().into()),
+        &InstallScriptOptions::new(default_download_base_url(), download_channel().into()),
         staging_tarball_path,
     )
 }
@@ -584,25 +600,19 @@ pub fn install_script_with_options(
     options: &InstallScriptOptions,
     staging_tarball_path: Option<&str>,
 ) -> String {
-    let (version_query, version_suffix) = match ChannelState::channel() {
-        Channel::Local | Channel::Oss => (String::new(), String::new()),
+    let version_suffix = match ChannelState::channel() {
+        Channel::Local | Channel::Oss => String::new(),
         Channel::Stable | Channel::Preview | Channel::Dev | Channel::Integration => {
             let v = pinned_version();
-            (format!("&version={v}"), format!("-{v}"))
+            format!("-{v}")
         }
     };
-    let download_base_url = options.download_base_url.trim().trim_end_matches('/');
-    let download_channel = if is_supported_download_channel(&options.download_channel) {
-        options.download_channel.trim()
-    } else {
-        default_download_channel()
-    };
+    let download_url =
+        download_tarball_url_template_with_options("$os_name", "$arch_name", options);
     INSTALL_SCRIPT_TEMPLATE
-        .replace("{download_base_url}", download_base_url)
-        .replace("{download_channel}", download_channel)
+        .replace("{download_url}", &download_url)
         .replace("{install_dir}", &remote_server_dir())
         .replace("{binary_name}", binary_name())
-        .replace("{version_query}", &version_query)
         .replace("{version_suffix}", &version_suffix)
         .replace(
             "{no_http_client_exit_code}",
@@ -621,8 +631,15 @@ fn download_url() -> String {
     format!("{base}/download/cli")
 }
 
-pub fn default_download_base_url() -> &'static str {
-    PRODUCTION_DOWNLOAD_BASE_URL
+pub fn default_download_base_url() -> String {
+    match ChannelState::channel() {
+        Channel::Oss => SLIPSTREAM_RELEASES_BASE_URL.to_string(),
+        Channel::Stable
+        | Channel::Preview
+        | Channel::Dev
+        | Channel::Local
+        | Channel::Integration => download_url(),
+    }
 }
 
 pub fn default_download_channel() -> &'static str {
@@ -645,11 +662,10 @@ fn download_channel() -> &'static str {
         Channel::Stable => "stable",
         Channel::Preview => "preview",
         Channel::Dev | Channel::Local | Channel::Integration => "dev",
-        Channel::Oss => {
-            // TODO(alokedesai): need to figure out how remote server works with Slipstream.
-            // For now, return what Dev returns.
-            "dev"
-        }
+        // Ignored by the default Slipstream GitHub-release download source,
+        // but preserved for users overriding the URL to a Warp-compatible
+        // `/download/cli` mirror.
+        Channel::Oss => "dev",
     }
 }
 
@@ -670,12 +686,24 @@ fn version_query() -> String {
 pub fn download_tarball_url(platform: &RemotePlatform) -> String {
     download_tarball_url_with_options(
         platform,
-        &InstallScriptOptions::new(download_url(), download_channel().into()),
+        &InstallScriptOptions::new(default_download_base_url(), download_channel().into()),
     )
 }
 
 pub fn download_tarball_url_with_options(
     platform: &RemotePlatform,
+    options: &InstallScriptOptions,
+) -> String {
+    download_tarball_url_template_with_options(
+        platform.os.as_str(),
+        platform.arch.as_str(),
+        options,
+    )
+}
+
+fn download_tarball_url_template_with_options(
+    os_name: &str,
+    arch_name: &str,
     options: &InstallScriptOptions,
 ) -> String {
     let download_base_url = options.download_base_url.trim().trim_end_matches('/');
@@ -684,14 +712,29 @@ pub fn download_tarball_url_with_options(
     } else {
         default_download_channel()
     };
+    if download_base_url == SLIPSTREAM_RELEASES_BASE_URL {
+        return slipstream_release_asset_url(download_base_url, os_name, arch_name);
+    }
+
     format!(
         "{}?package=tar&os={}&arch={}&channel={}{}",
         download_base_url,
-        platform.os.as_str(),
-        platform.arch.as_str(),
+        os_name,
+        arch_name,
         download_channel,
         version_query(),
     )
+}
+
+fn slipstream_release_asset_url(download_base_url: &str, os_name: &str, arch_name: &str) -> String {
+    let asset = slipstream_remote_server_asset_name(os_name, arch_name);
+    let release_tag =
+        ChannelState::app_version().unwrap_or(SLIPSTREAM_LATEST_REMOTE_SERVER_RELEASE_TAG);
+    format!("{download_base_url}/download/{release_tag}/{asset}")
+}
+
+pub fn slipstream_remote_server_asset_name(os_name: &str, arch_name: &str) -> String {
+    format!("{SLIPSTREAM_REMOTE_SERVER_ASSET_PREFIX}-{os_name}-{arch_name}.tar.gz")
 }
 
 /// Exit code the install script uses when neither curl nor wget is

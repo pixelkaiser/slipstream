@@ -2,11 +2,9 @@
 # Installs the Warp remote server binary on a remote host.
 #
 # Placeholders (substituted at runtime by setup.rs):
-#   {download_base_url}         — e.g. https://app.warp.dev/download/cli
-#   {download_channel}          — stable | preview | dev
+#   {download_url}              — fully resolved URL for the target OS/arch
 #   {install_dir}               — e.g. ~/.warp/remote-server
 #   {binary_name}               — e.g. oz | oz-dev | oz-preview
-#   {version_query}             — e.g. &version=v0.2026... (empty when no release tag)
 #   {version_suffix}            — e.g. -v0.2026...        (empty when no release tag)
 #   {no_http_client_exit_code}  — exit code when neither curl nor wget is available
 #   {staging_tarball_path}      — path to a pre-uploaded tarball (SCP fallback; empty normally)
@@ -65,7 +63,7 @@ if [ -n "$staging_tarball_path" ]; then
   mv "$staging_tarball_path" "$tmpdir/oz.tar.gz"
 else
   # Normal path: download via curl or wget.
-  url="{download_base_url}?package=tar&os=$os_name&arch=$arch_name&channel={download_channel}{version_query}"
+  url="{download_url}"
 
   if command -v curl >/dev/null 2>&1; then
     curl -fSL --connect-timeout 15 "$url" -o "$tmpdir/oz.tar.gz"
@@ -78,7 +76,7 @@ else
 fi
 tar -xzf "$tmpdir/oz.tar.gz" -C "$tmpdir"
 
-bin=$(find "$tmpdir" -type f -name 'oz*' ! -name '*.tar.gz' | head -n1)
+bin=$(find "$tmpdir" -type f \( -name '{binary_name}' -o -name 'oz*' \) ! -name '*.tar.gz' | head -n1)
 if [ -z "$bin" ]; then echo "no binary found in tarball" >&2; exit 1; fi
 chmod +x "$bin"
 mv "$bin" "$install_dir/{binary_name}{version_suffix}"

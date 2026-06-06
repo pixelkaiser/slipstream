@@ -61,6 +61,7 @@ pub enum SshRemoteServerChoiceViewEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SshRemoteServerChoiceViewMode {
     InitialInstall,
+    UpdateRequired,
     RetryAfterControlMasterError,
     RetryAfterSetupFailure,
 }
@@ -79,7 +80,11 @@ pub struct SshRemoteServerChoiceView {
 
 impl SshRemoteServerChoiceView {
     pub fn new(session_id: SessionId, ctx: &mut ViewContext<Self>) -> Self {
-        Self::new_with_mode(session_id, SshRemoteServerChoiceViewMode::InitialInstall, ctx)
+        Self::new_with_mode(
+            session_id,
+            SshRemoteServerChoiceViewMode::InitialInstall,
+            ctx,
+        )
     }
 
     pub fn new_with_mode(
@@ -94,6 +99,13 @@ impl SshRemoteServerChoiceView {
                  code review, and intelligent command completions in this session.",
                 "Continue without installing",
                 "You'll still get a Warpified experience just without the coding features.",
+            ),
+            SshRemoteServerChoiceViewMode::UpdateRequired => (
+                "Update Warp's SSH extension",
+                "Update Warp's extension to restore agent features like file browsing, \
+                 code review, and intelligent command completions.",
+                "Continue without SSH extension",
+                "Keep this SSH shell running with advanced remote features disabled.",
             ),
             SshRemoteServerChoiceViewMode::RetryAfterControlMasterError => (
                 "Retry installing SSH extension",
@@ -156,6 +168,9 @@ impl SshRemoteServerChoiceView {
         let title = match self.mode {
             SshRemoteServerChoiceViewMode::InitialInstall => {
                 "Choose your experience for this remote session:"
+            }
+            SshRemoteServerChoiceViewMode::UpdateRequired => {
+                "Warp's SSH extension is out of date on this host. Update it?"
             }
             SshRemoteServerChoiceViewMode::RetryAfterControlMasterError => {
                 "Warp's SSH extension hit an SSH channel error. Repair this session?"
