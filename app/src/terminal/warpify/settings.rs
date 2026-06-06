@@ -1,7 +1,7 @@
 use anyhow::Result;
 use lazy_static::lazy_static;
-use remote_server::setup::InstallScriptOptions;
 use regex::Regex;
+use remote_server::setup::InstallScriptOptions;
 use settings::macros::{maybe_define_setting, register_settings_events};
 use settings::{
     ChangeEventReason, RespectUserSyncSetting, Setting, SupportedPlatforms, SyncToCloud,
@@ -557,7 +557,9 @@ impl WarpifySettings {
     pub fn is_ssh_remote_server_enabled(app: &AppContext) -> bool {
         let settings = Self::as_ref(app);
         FeatureFlag::SshRemoteServer.is_enabled()
-            && settings.enable_ssh_remote_server.is_supported_on_current_platform()
+            && settings
+                .enable_ssh_remote_server
+                .is_supported_on_current_platform()
             && *settings.enable_ssh_warpification.value()
             && *settings.enable_ssh_remote_server.value()
     }
@@ -590,16 +592,20 @@ impl WarpifySettings {
     }
 
     fn normalized_ssh_extension_download_base_url(&self) -> String {
-        Self::normalize_ssh_extension_download_base_url(
+        let normalized = Self::normalize_ssh_extension_download_base_url(
             self.ssh_extension_download_base_url.value(),
-        )
-        .unwrap_or_else(|_| remote_server::setup::default_download_base_url().to_string())
+        );
+        match normalized {
+            Ok(url) if remote_server::setup::is_stale_default_download_base_url(&url) => {
+                remote_server::setup::default_download_base_url()
+            }
+            Ok(url) => url,
+            Err(_) => remote_server::setup::default_download_base_url(),
+        }
     }
 
     fn normalized_ssh_extension_download_channel(&self) -> String {
-        Self::normalize_ssh_extension_download_channel(
-            self.ssh_extension_download_channel.value(),
-        )
+        Self::normalize_ssh_extension_download_channel(self.ssh_extension_download_channel.value())
     }
 
     fn is_built_in_subshell_match(command: &str) -> bool {
