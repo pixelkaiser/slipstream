@@ -8,6 +8,8 @@ pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
 pub(crate) mod free_ai_removal_modal;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) mod docker_containers;
 pub(crate) mod free_tier_limit_hit_modal;
 pub mod global_search;
 pub(crate) mod launch_modal;
@@ -4218,6 +4220,8 @@ impl Workspace {
                 LeftPanelDisplayedTab::OpenCodeConversations => {
                     ToolPanelView::OpenCodeConversations
                 }
+                #[cfg(not(target_family = "wasm"))]
+                LeftPanelDisplayedTab::DockerContainers => ToolPanelView::DockerContainers,
             };
             lp.restore_active_view_from_snapshot(active_view, ctx);
             lp.set_active_pane_group(pane_group.clone(), &self.working_directories_model, ctx);
@@ -6427,6 +6431,14 @@ impl Workspace {
                     },
                     ctx,
                 );
+            }
+            #[cfg(not(target_family = "wasm"))]
+            LeftPanelEvent::OpenDockerContainerLogs {
+                container_id,
+                container_name,
+                command,
+            } => {
+                self.open_docker_container_logs(container_id, container_name, command, ctx);
             }
         }
     }
@@ -17712,6 +17724,43 @@ impl Workspace {
         );
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn open_docker_container_logs(
+        &mut self,
+        _container_id: &str,
+        _container_name: &str,
+        command: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !ContextFlag::CreateNewSession.is_enabled() {
+            self.toast_stack.update(ctx, |toast_stack, ctx| {
+                let toast =
+                    DismissibleToast::error("Cannot open a new terminal session".to_string());
+                toast_stack.add_ephemeral_toast(toast, ctx);
+            });
+            return;
+        }
+
+        let active_pane_group = self.active_tab_pane_group();
+        active_pane_group.update(ctx, |pane_group, ctx| {
+            pane_group.add_terminal_pane(PaneGroupDirection::Right, None, ctx);
+        });
+
+        let Some(terminal_view_handle) = active_pane_group.as_ref(ctx).active_session_view(ctx)
+        else {
+            self.toast_stack.update(ctx, |toast_stack, ctx| {
+                let toast =
+                    DismissibleToast::error("Could not open Docker container logs.".to_string());
+                toast_stack.add_ephemeral_toast(toast, ctx);
+            });
+            return;
+        };
+
+        terminal_view_handle.update(ctx, |terminal, ctx| {
+            terminal.execute_command_or_set_pending(command, ctx);
+        });
+    }
+
     fn run_tab_config_skill(&mut self, path: &Path, ctx: &mut ViewContext<Self>) {
         if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
             return;
@@ -20335,6 +20384,8 @@ impl Workspace {
                         ToolPanelView::CodexConversations => "Codex conversations",
                         #[cfg(not(target_family = "wasm"))]
                         ToolPanelView::OpenCodeConversations => "OpenCode conversations",
+                        #[cfg(not(target_family = "wasm"))]
+                        ToolPanelView::DockerContainers => "Docker containers",
                     }
                 } else {
                     "Tools panel"
@@ -20393,6 +20444,8 @@ impl Workspace {
                 ToolPanelView::CodexConversations => "Codex conversations",
                 #[cfg(not(target_family = "wasm"))]
                 ToolPanelView::OpenCodeConversations => "OpenCode conversations",
+                #[cfg(not(target_family = "wasm"))]
+                ToolPanelView::DockerContainers => "Docker containers",
             }
         } else {
             "Tools panel"
@@ -23624,6 +23677,8 @@ impl Workspace {
         if cfg!(feature = "local_fs") && *CodeSettings::as_ref(ctx).show_project_explorer.value() {
             views.push(ToolPanelView::ProjectExplorer);
         }
+        #[cfg(not(target_family = "wasm"))]
+        views.push(ToolPanelView::DockerContainers);
         if FeatureFlag::AgentViewConversationListView.is_enabled()
             && AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
             && *AISettings::as_ref(ctx).show_conversation_history

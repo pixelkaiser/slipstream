@@ -1410,7 +1410,7 @@ fn create_shared_session_viewer_with_cloud_mode_populates_ambient_agent_view_mod
                 model_event_sender: panes.model_event_sender.clone(),
             };
             let (terminal_view, _terminal_manager) = PaneGroup::create_shared_session_viewer(
-                SessionId::new(),
+                SessionId::new().into(),
                 resources,
                 Vector2F::new(800., 600.),
                 false, // enable_orchestration_polling
@@ -1442,7 +1442,7 @@ fn create_shared_session_viewer_without_cloud_mode_does_not_populate_ambient_age
                 model_event_sender: panes.model_event_sender.clone(),
             };
             let (terminal_view, _terminal_manager) = PaneGroup::create_shared_session_viewer(
-                SessionId::new(),
+                SessionId::new().into(),
                 resources,
                 Vector2F::new(800., 600.),
                 false, // enable_orchestration_polling
