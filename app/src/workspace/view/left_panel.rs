@@ -31,6 +31,10 @@ use crate::drive::panel::{
     DrivePanel, DrivePanelEvent, MAX_SIDEBAR_WIDTH_RATIO, MIN_SIDEBAR_WIDTH,
 };
 #[cfg(not(target_family = "wasm"))]
+use crate::workspace::view::docker_containers::{
+    DockerContainersEvent, DockerContainersView,
+};
+#[cfg(not(target_family = "wasm"))]
 use crate::opencode_server::OpenCodeServerModel;
 use crate::pane_group::pane::view::header::components::HEADER_EDGE_PADDING;
 use crate::pane_group::pane::view::header::PANE_HEADER_HEIGHT;
@@ -80,6 +84,8 @@ struct MouseStateHandles {
     codex_conversations_button: MouseStateHandle,
     #[cfg(not(target_family = "wasm"))]
     opencode_conversations_button: MouseStateHandle,
+    #[cfg(not(target_family = "wasm"))]
+    docker_containers_button: MouseStateHandle,
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +100,8 @@ pub enum LeftPanelAction {
     CodexConversations,
     #[cfg(not(target_family = "wasm"))]
     OpenCodeConversations,
+    #[cfg(not(target_family = "wasm"))]
+    DockerContainers,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -113,6 +121,12 @@ pub enum LeftPanelEvent {
         conversation_title: String,
         terminal_view_id: Option<warpui::EntityId>,
     },
+    #[cfg(not(target_family = "wasm"))]
+    OpenDockerContainerLogs {
+        container_id: String,
+        container_name: String,
+        command: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,6 +141,8 @@ pub enum ToolPanelView {
     CodexConversations,
     #[cfg(not(target_family = "wasm"))]
     OpenCodeConversations,
+    #[cfg(not(target_family = "wasm"))]
+    DockerContainers,
 }
 
 /// Encapsulates the active view state to enforce that all mutations go through
@@ -198,6 +214,8 @@ pub struct LeftPanelView {
     codex_conversations_view: ViewHandle<CodexConversationsView>,
     #[cfg(not(target_family = "wasm"))]
     opencode_conversations_view: ViewHandle<OpenCodeConversationsView>,
+    #[cfg(not(target_family = "wasm"))]
+    docker_containers_view: ViewHandle<DockerContainersView>,
     active_view: active_view_state::ActiveViewState,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
     active_pane_group: Option<WeakViewHandle<PaneGroup>>,
@@ -246,6 +264,8 @@ impl LeftPanelView {
         let codex_conversations_view = ctx.add_typed_action_view(CodexConversationsView::new);
         #[cfg(not(target_family = "wasm"))]
         let opencode_conversations_view = ctx.add_typed_action_view(OpenCodeConversationsView::new);
+        #[cfg(not(target_family = "wasm"))]
+        let docker_containers_view = ctx.add_typed_action_view(DockerContainersView::new);
 
         ctx.subscribe_to_view(&warp_drive_view, |_me, _, event, ctx| {
             ctx.emit(LeftPanelEvent::WarpDrive(event.clone()));
@@ -264,6 +284,20 @@ impl LeftPanelView {
                     conversation_id: *conversation_id,
                     conversation_title: conversation_title.clone(),
                     terminal_view_id: *terminal_view_id,
+                });
+            }
+        });
+        #[cfg(not(target_family = "wasm"))]
+        ctx.subscribe_to_view(&docker_containers_view, |_me, _, event, ctx| match event {
+            DockerContainersEvent::OpenLogs {
+                container_id,
+                container_name,
+                command,
+            } => {
+                ctx.emit(LeftPanelEvent::OpenDockerContainerLogs {
+                    container_id: container_id.clone(),
+                    container_name: container_name.clone(),
+                    command: command.clone(),
                 });
             }
         });
@@ -371,6 +405,8 @@ impl LeftPanelView {
             codex_conversations_view,
             #[cfg(not(target_family = "wasm"))]
             opencode_conversations_view,
+            #[cfg(not(target_family = "wasm"))]
+            docker_containers_view,
             active_view: active_view_state::new(active_view),
             toolbelt_buttons,
             active_pane_group: None,
@@ -531,6 +567,20 @@ impl LeftPanelView {
                     tooltip_keybinding_names,
                 }
             }
+            #[cfg(not(target_family = "wasm"))]
+            ToolPanelView::DockerContainers => {
+                let tooltip_keybinding_names = vec![];
+
+                ToolbeltButtonConfig {
+                    icon: Icon::Docker,
+                    active_icon: Some(Icon::Docker),
+                    tooltip_text: "Docker containers".to_string(),
+                    action: LeftPanelAction::DockerContainers,
+                    render_with_active_state: false,
+                    tooltip_keybinding: None,
+                    tooltip_keybinding_names,
+                }
+            }
         }
     }
 
@@ -663,6 +713,10 @@ impl LeftPanelView {
             .map(|pane_group| pane_group.id());
 
         self.active_pane_group = Some(pane_group.downgrade());
+        #[cfg(not(target_family = "wasm"))]
+        self.docker_containers_view.update(ctx, |view, ctx| {
+            view.set_active_pane_group(pane_group.downgrade(), ctx);
+        });
 
         if let Some(previous_pane_group_id) = previous_pane_group_id {
             if previous_pane_group_id != pane_group_id {
@@ -807,6 +861,12 @@ impl LeftPanelView {
             #[cfg(not(target_family = "wasm"))]
             ToolPanelView::OpenCodeConversations => {
                 self.opencode_conversations_view.update(ctx, |view, ctx| {
+                    view.on_left_panel_focused(ctx);
+                });
+            }
+            #[cfg(not(target_family = "wasm"))]
+            ToolPanelView::DockerContainers => {
+                self.docker_containers_view.update(ctx, |view, ctx| {
                     view.on_left_panel_focused(ctx);
                 });
             }
@@ -970,6 +1030,10 @@ impl LeftPanelView {
                 LeftPanelAction::OpenCodeConversations => {
                     self.active_view.get() == ToolPanelView::OpenCodeConversations
                 }
+                #[cfg(not(target_family = "wasm"))]
+                LeftPanelAction::DockerContainers => {
+                    self.active_view.get() == ToolPanelView::DockerContainers
+                }
             };
         }
     }
@@ -1062,6 +1126,10 @@ impl LeftPanelView {
                 .mouse_state_handles
                 .opencode_conversations_button
                 .clone(),
+            #[cfg(not(target_family = "wasm"))]
+            LeftPanelAction::DockerContainers => {
+                self.mouse_state_handles.docker_containers_button.clone()
+            }
         }
     }
 }
@@ -1143,6 +1211,13 @@ impl LeftPanelView {
             #[cfg(not(target_family = "wasm"))]
             LeftPanelAction::OpenCodeConversations => {
                 active_view_state::set(self, ToolPanelView::OpenCodeConversations, ctx);
+            }
+            #[cfg(not(target_family = "wasm"))]
+            LeftPanelAction::DockerContainers => {
+                active_view_state::set(self, ToolPanelView::DockerContainers, ctx);
+                self.docker_containers_view.update(ctx, |view, ctx| {
+                    view.refresh_if_needed(ctx);
+                });
             }
         }
     }
@@ -1249,6 +1324,8 @@ impl View for LeftPanelView {
                 ToolPanelView::OpenCodeConversations => {
                     ctx.focus(&self.opencode_conversations_view)
                 }
+                #[cfg(not(target_family = "wasm"))]
+                ToolPanelView::DockerContainers => ctx.focus(&self.docker_containers_view),
             }
         }
     }
@@ -1323,6 +1400,12 @@ impl View for LeftPanelView {
             ToolPanelView::OpenCodeConversations => Shrinkable::new(
                 1.0,
                 ChildView::new(&self.opencode_conversations_view).finish(),
+            )
+            .finish(),
+            #[cfg(not(target_family = "wasm"))]
+            ToolPanelView::DockerContainers => Shrinkable::new(
+                1.0,
+                ChildView::new(&self.docker_containers_view).finish(),
             )
             .finish(),
         };
