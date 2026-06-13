@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use chrono::{DateTime, Local};
 use vec1::vec1;
@@ -10,11 +10,12 @@ use warpui::text::{str_to_byte_vec, SelectionType};
 use super::*;
 use crate::terminal::color;
 use crate::terminal::event_listener::ChannelEventListener;
-use crate::terminal::model::ansi::{Handler, Processor};
+use crate::terminal::model::ansi::{Handler, InitShellValue, Processor, SSHValue};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::index::Side;
+use crate::terminal::model::session::IsLegacySSHSession;
 use crate::terminal::model::selection::ExpandedSelectionRange;
 use crate::terminal::model::test_utils::block_size;
 use crate::terminal::model::ObfuscateSecrets;
@@ -114,6 +115,63 @@ fn generic_shared_session_viewer_model_starts_view_pending() {
         SharedSessionStatus::ViewPending
     ));
     assert!(model.shared_session_status().is_viewer());
+}
+
+#[test]
+fn recover_failed_ssh_bootstrap_registers_degraded_remote_session() {
+    let mut model = TerminalModel::new_for_test(
+        block_size(),
+        color::List::from(&color::Colors::default()),
+        ChannelEventListener::new_for_test(),
+        Arc::new(Background::default()),
+        false,
+        None,
+        false,
+        false,
+        None,
+    );
+    let session_id: SessionId = 42.into();
+
+    model.ssh(SSHValue {
+        socket_path: PathBuf::from("/tmp/warp-test-control-socket"),
+        remote_shell: "bash".to_string(),
+    });
+    model.init_shell(InitShellValue {
+        session_id,
+        shell: "bash".to_string(),
+        is_subshell: true,
+        user: "root".to_string(),
+        hostname: "adm19.nt.vc".to_string(),
+        ..Default::default()
+    });
+
+    assert!(matches!(
+        model.terminal_input_state(),
+        TerminalInputState::NotBootstrapped
+    ));
+    assert!(model.has_pending_ssh_session());
+    assert_eq!(model.pending_session_id(), Some(session_id));
+
+    let event = model
+        .recover_failed_ssh_bootstrap()
+        .expect("pending SSH session should be recoverable");
+
+    assert!(model.get_pending_session_info().is_none());
+    assert!(model.block_list().is_bootstrapped());
+    assert_eq!(model.block_list().active_block().session_id(), Some(session_id));
+    assert!(matches!(
+        model.terminal_input_state(),
+        TerminalInputState::InputEditor
+    ));
+    assert_eq!(event.session_info.session_id, session_id);
+    assert_eq!(
+        event.session_info.session_type,
+        BootstrapSessionType::WarpifiedRemote
+    );
+    assert!(matches!(
+        event.session_info.is_legacy_ssh_session,
+        IsLegacySSHSession::Yes { .. }
+    ));
 }
 
 // Ensures that an ssh session successfully bootstraps even if the block list is empty.
