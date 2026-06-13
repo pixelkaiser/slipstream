@@ -56,6 +56,7 @@ pub struct ProviderResponse {
     pub tool_calls: Vec<ProviderToolCall>,
     pub context_window_usage: Option<f32>,
     pub context_window_tokens: Option<u32>,
+    pub suppressed_internal_content: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +168,7 @@ impl ProviderRuntime {
             "model": model,
             "messages": messages,
             "temperature": 0.2,
+            "max_tokens": config.local_max_completion_tokens,
             "stream": true,
         });
         let request_body = if let Some(tools) = tools.as_ref() {
@@ -205,6 +207,8 @@ impl ProviderRuntime {
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
         let mut content = String::new();
+        let mut reasoning_fallback = String::new();
+        let mut content_filter = HarmonyChannelContentFilter::default();
         let mut tool_calls: HashMap<usize, ProviderToolCall> = HashMap::new();
 
         while let Some(chunk) = stream.next().await {
@@ -233,12 +237,28 @@ impl ProviderRuntime {
                 }
                 let data = trimmed.trim_start_matches("data:").trim();
                 if data == "[DONE]" {
+                    let final_chunk = content_filter.finish();
+                    append_harmony_tool_calls(&mut tool_calls, &mut content_filter);
+                    if !final_chunk.is_empty() {
+                        reasoning_fallback.clear();
+                        content.push_str(&final_chunk);
+                        on_content_chunk(final_chunk);
+                    }
+                    if content.is_empty()
+                        && !content_filter.suppressed_internal_content()
+                        && !reasoning_fallback.is_empty()
+                    {
+                        let fallback = std::mem::take(&mut reasoning_fallback);
+                        on_content_chunk(fallback.clone());
+                        content = fallback;
+                    }
                     return Ok(provider_response(
                         content,
                         tool_calls,
                         &messages,
                         tools.as_ref(),
                         context_window_tokens,
+                        content_filter.suppressed_internal_content(),
                     ));
                 }
                 let parsed: Value = serde_json::from_str(data).map_err(|error| {
@@ -250,13 +270,37 @@ impl ProviderRuntime {
                         Some(model.clone()),
                     )
                 })?;
-                let chunk = extract_streaming_content(&parsed);
-                if !chunk.is_empty() {
-                    content.push_str(&chunk);
-                    on_content_chunk(chunk);
+                let raw_chunk = extract_streaming_content(&parsed);
+                if !raw_chunk.is_empty() {
+                    let chunk = content_filter.push(&raw_chunk);
+                    append_harmony_tool_calls(&mut tool_calls, &mut content_filter);
+                    if !chunk.is_empty() {
+                        reasoning_fallback.clear();
+                        content.push_str(&chunk);
+                        on_content_chunk(chunk);
+                    }
+                } else if content.is_empty() && !content_filter.suppressed_internal_content() {
+                    reasoning_fallback.push_str(&extract_streaming_reasoning(&parsed));
                 }
                 extract_streaming_tool_calls(&parsed, &mut tool_calls);
             }
+        }
+
+        let final_chunk = content_filter.finish();
+        append_harmony_tool_calls(&mut tool_calls, &mut content_filter);
+        if !final_chunk.is_empty() {
+            reasoning_fallback.clear();
+            content.push_str(&final_chunk);
+            on_content_chunk(final_chunk);
+        }
+
+        if content.is_empty()
+            && !content_filter.suppressed_internal_content()
+            && !reasoning_fallback.is_empty()
+        {
+            let fallback = std::mem::take(&mut reasoning_fallback);
+            on_content_chunk(fallback.clone());
+            content = fallback;
         }
 
         Ok(provider_response(
@@ -265,6 +309,7 @@ impl ProviderRuntime {
             &messages,
             tools.as_ref(),
             context_window_tokens,
+            content_filter.suppressed_internal_content(),
         ))
     }
 
@@ -503,7 +548,26 @@ pub fn messages_from_stored_conversation(
 ) -> Vec<ProviderChatMessage> {
     messages
         .iter()
-        .filter_map(|value| serde_json::from_value::<ProviderChatMessage>(value.clone()).ok())
+        .filter_map(|value| {
+            let mut message = serde_json::from_value::<ProviderChatMessage>(value.clone()).ok()?;
+            if message.role == "assistant"
+                && let Some(Value::String(content)) = message.content.take()
+            {
+                message.content = Some(Value::String(filter_harmony_channel_content(&content)));
+            }
+            let has_content = message
+                .content
+                .as_ref()
+                .is_some_and(|content| provider_message_content_length(Some(content)) > 0);
+            let has_tool_calls = message
+                .tool_calls
+                .as_ref()
+                .is_some_and(|tool_calls| !tool_calls.is_empty());
+            if message.role == "assistant" && !has_content && !has_tool_calls {
+                return None;
+            }
+            Some(message)
+        })
         .filter(|message| {
             matches!(
                 message.role.as_str(),
@@ -803,6 +867,7 @@ fn provider_response(
     messages: &[ProviderChatMessage],
     tools: Option<&Vec<Value>>,
     context_window_tokens: Option<u32>,
+    suppressed_internal_content: bool,
 ) -> ProviderResponse {
     let mut tool_calls = tool_calls
         .into_values()
@@ -821,6 +886,433 @@ fn provider_response(
         tool_calls,
         context_window_usage,
         context_window_tokens,
+        suppressed_internal_content,
+    }
+}
+
+#[derive(Debug, Default)]
+struct HarmonyChannelContentFilter {
+    mode: HarmonyChannelMode,
+    pending: String,
+    tool_calls: Vec<ProviderToolCall>,
+    suppressed_internal_content: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum HarmonyChannelMode {
+    #[default]
+    Public,
+    Internal,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HarmonyChannelMarker {
+    token: &'static str,
+    mode: HarmonyChannelMode,
+}
+
+const HARMONY_CHANNEL_MARKERS: &[HarmonyChannelMarker] = &[
+    HarmonyChannelMarker {
+        token: "<|channel>thought",
+        mode: HarmonyChannelMode::Internal,
+    },
+    HarmonyChannelMarker {
+        token: "<channel>thought",
+        mode: HarmonyChannelMode::Internal,
+    },
+    HarmonyChannelMarker {
+        token: "<|channel>analysis",
+        mode: HarmonyChannelMode::Internal,
+    },
+    HarmonyChannelMarker {
+        token: "<channel>analysis",
+        mode: HarmonyChannelMode::Internal,
+    },
+    HarmonyChannelMarker {
+        token: "<|channel>final",
+        mode: HarmonyChannelMode::Public,
+    },
+    HarmonyChannelMarker {
+        token: "<channel>final",
+        mode: HarmonyChannelMode::Public,
+    },
+];
+
+const HARMONY_TOOL_CALL_OPENERS: &[&str] = &["<|tool_call>", "<tool_call>"];
+const HARMONY_TOOL_CALL_CLOSERS: &[&str] = &["<tool_call|>", "</tool_call>"];
+
+impl HarmonyChannelContentFilter {
+    fn push(&mut self, chunk: &str) -> String {
+        self.pending.push_str(chunk);
+        self.drain(false)
+    }
+
+    fn finish(&mut self) -> String {
+        self.drain(true)
+    }
+
+    fn suppressed_internal_content(&self) -> bool {
+        self.suppressed_internal_content
+    }
+
+    fn take_tool_calls(&mut self) -> Vec<ProviderToolCall> {
+        std::mem::take(&mut self.tool_calls)
+    }
+
+    fn drain(&mut self, final_flush: bool) -> String {
+        let mut output = String::new();
+        loop {
+            match find_next_harmony_content_item(&self.pending) {
+                Some(HarmonyContentItem::Channel { index, marker }) => {
+                    self.emit_pending_prefix(index, &mut output);
+                    self.pending.drain(..marker.token.len());
+                    self.mode = marker.mode;
+                    if self.mode == HarmonyChannelMode::Public {
+                        trim_pending_channel_separator(&mut self.pending);
+                    }
+                    continue;
+                }
+                Some(HarmonyContentItem::ToolCall { index, opener }) => {
+                    self.emit_pending_prefix(index, &mut output);
+                    if let Some(close) = find_harmony_tool_call_close(&self.pending, opener.len()) {
+                        let payload_start = opener.len();
+                        let payload_end = close.index;
+                        let payload = self.pending[payload_start..payload_end].to_owned();
+                        self.pending.drain(..payload_end + close.token.len());
+                        self.suppressed_internal_content = true;
+                        if let Some(tool_call) = parse_harmony_tool_call_payload(&payload) {
+                            self.tool_calls.push(tool_call);
+                        }
+                        continue;
+                    }
+
+                    if final_flush {
+                        let len = self.pending.len();
+                        self.pending.drain(..len);
+                        self.suppressed_internal_content = true;
+                    }
+                    break;
+                }
+                None => {}
+            }
+
+            let safe_len = if final_flush {
+                self.pending.len()
+            } else {
+                self.pending.len() - harmony_special_prefix_suffix_len(&self.pending)
+            };
+            self.emit_pending_prefix(safe_len, &mut output);
+            break;
+        }
+        output
+    }
+
+    fn emit_pending_prefix(&mut self, len: usize, output: &mut String) {
+        if len == 0 {
+            return;
+        }
+        let prefix = self.pending[..len].to_owned();
+        self.pending.drain(..len);
+        match self.mode {
+            HarmonyChannelMode::Public => output.push_str(&prefix),
+            HarmonyChannelMode::Internal => self.suppressed_internal_content = true,
+        }
+    }
+}
+
+enum HarmonyContentItem {
+    Channel {
+        index: usize,
+        marker: HarmonyChannelMarker,
+    },
+    ToolCall {
+        index: usize,
+        opener: &'static str,
+    },
+}
+
+impl HarmonyContentItem {
+    fn index(&self) -> usize {
+        match self {
+            HarmonyContentItem::Channel { index, .. }
+            | HarmonyContentItem::ToolCall { index, .. } => *index,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HarmonyToolCallClose {
+    index: usize,
+    token: &'static str,
+}
+
+fn find_next_harmony_content_item(input: &str) -> Option<HarmonyContentItem> {
+    HARMONY_CHANNEL_MARKERS
+        .iter()
+        .filter_map(|marker| {
+            input
+                .find(marker.token)
+                .map(|index| HarmonyContentItem::Channel {
+                    index,
+                    marker: *marker,
+                })
+        })
+        .chain(HARMONY_TOOL_CALL_OPENERS.iter().filter_map(|opener| {
+            input
+                .find(opener)
+                .map(|index| HarmonyContentItem::ToolCall {
+                    index,
+                    opener: *opener,
+                })
+        }))
+        .min_by_key(HarmonyContentItem::index)
+}
+
+fn find_harmony_tool_call_close(input: &str, search_start: usize) -> Option<HarmonyToolCallClose> {
+    HARMONY_TOOL_CALL_CLOSERS
+        .iter()
+        .filter_map(|token| {
+            input[search_start..]
+                .find(token)
+                .map(|index| HarmonyToolCallClose {
+                    index: search_start + index,
+                    token: *token,
+                })
+        })
+        .min_by_key(|close| close.index)
+}
+
+fn harmony_special_prefix_suffix_len(input: &str) -> usize {
+    HARMONY_CHANNEL_MARKERS
+        .iter()
+        .map(|marker| marker.token)
+        .chain(HARMONY_TOOL_CALL_OPENERS.iter().copied())
+        .flat_map(|token| (1..token.len()).map(move |len| &token[..len]))
+        .filter(|prefix| input.ends_with(prefix))
+        .map(str::len)
+        .max()
+        .unwrap_or_default()
+}
+
+fn trim_pending_channel_separator(input: &mut String) {
+    let trimmed = input.trim_start_matches(['\n', '\r']);
+    let trim_len = input.len() - trimmed.len();
+    if trim_len > 0 {
+        input.drain(..trim_len);
+    }
+}
+
+fn filter_harmony_channel_content(content: &str) -> String {
+    let mut filter = HarmonyChannelContentFilter::default();
+    let mut filtered = filter.push(content);
+    filtered.push_str(&filter.finish());
+    filtered
+}
+
+fn append_harmony_tool_calls(
+    accumulated: &mut HashMap<usize, ProviderToolCall>,
+    filter: &mut HarmonyChannelContentFilter,
+) {
+    for tool_call in filter.take_tool_calls() {
+        let index = accumulated
+            .keys()
+            .copied()
+            .max()
+            .map(|index| index + 1)
+            .unwrap_or_default();
+        accumulated.insert(index, tool_call);
+    }
+}
+
+fn parse_harmony_tool_call_payload(payload: &str) -> Option<ProviderToolCall> {
+    let payload = payload.trim().strip_prefix("call:")?.trim();
+    let name_end = payload.find('{')?;
+    let name = non_empty_str(payload[..name_end].trim())?.to_owned();
+    let arguments = payload[name_end..].trim();
+    let arguments = parse_harmony_tool_call_value(arguments)
+        .or_else(|| serde_json::from_str(arguments).ok())
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    Some(ProviderToolCall {
+        id: format!("harmony-tool-{}", uuid::Uuid::new_v4()),
+        name,
+        arguments_text: serde_json::to_string(&arguments).ok()?,
+    })
+}
+
+fn parse_harmony_tool_call_value(input: &str) -> Option<Value> {
+    let mut parser = HarmonyToolCallValueParser { input, index: 0 };
+    let value = parser.parse_value()?;
+    parser.skip_whitespace();
+    (parser.index == input.len()).then_some(value)
+}
+
+struct HarmonyToolCallValueParser<'a> {
+    input: &'a str,
+    index: usize,
+}
+
+impl HarmonyToolCallValueParser<'_> {
+    fn parse_value(&mut self) -> Option<Value> {
+        self.skip_whitespace();
+        if self.rest().starts_with('{') {
+            return self.parse_object();
+        }
+        if self.rest().starts_with('[') {
+            return self.parse_array();
+        }
+        if self.rest().starts_with("<|\"|>") {
+            return self.parse_harmony_string().map(Value::String);
+        }
+        if self.rest().starts_with('"') {
+            return self.parse_json_string().map(Value::String);
+        }
+        self.parse_bare_value()
+    }
+
+    fn parse_object(&mut self) -> Option<Value> {
+        self.consume_char('{')?;
+        let mut object = serde_json::Map::new();
+        loop {
+            self.skip_whitespace();
+            if self.consume_char('}').is_some() {
+                break;
+            }
+            let key = self.parse_key()?;
+            self.skip_whitespace();
+            self.consume_char(':')?;
+            let value = self.parse_value()?;
+            object.insert(key, value);
+            self.skip_whitespace();
+            if self.consume_char(',').is_some() {
+                continue;
+            }
+            self.consume_char('}')?;
+            break;
+        }
+        Some(Value::Object(object))
+    }
+
+    fn parse_array(&mut self) -> Option<Value> {
+        self.consume_char('[')?;
+        let mut values = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.consume_char(']').is_some() {
+                break;
+            }
+            values.push(self.parse_value()?);
+            self.skip_whitespace();
+            if self.consume_char(',').is_some() {
+                continue;
+            }
+            self.consume_char(']')?;
+            break;
+        }
+        Some(Value::Array(values))
+    }
+
+    fn parse_key(&mut self) -> Option<String> {
+        self.skip_whitespace();
+        if self.rest().starts_with("<|\"|>") {
+            return self.parse_harmony_string();
+        }
+        if self.rest().starts_with('"') {
+            return self.parse_json_string();
+        }
+        let start = self.index;
+        while let Some((offset, ch)) = self.rest().char_indices().next() {
+            debug_assert_eq!(offset, 0);
+            if ch == ':' {
+                break;
+            }
+            self.index += ch.len_utf8();
+        }
+        non_empty_str(self.input[start..self.index].trim()).map(str::to_owned)
+    }
+
+    fn parse_harmony_string(&mut self) -> Option<String> {
+        let marker = "<|\"|>";
+        self.consume_str(marker)?;
+        let start = self.index;
+        let end = self.rest().find(marker)?;
+        let value = self.input[start..start + end].to_owned();
+        self.index = start + end + marker.len();
+        Some(value)
+    }
+
+    fn parse_json_string(&mut self) -> Option<String> {
+        let start = self.index;
+        self.consume_char('"')?;
+        let mut escaped = false;
+        while let Some(ch) = self.next_char() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '"' => {
+                    return serde_json::from_str(&self.input[start..self.index]).ok();
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn parse_bare_value(&mut self) -> Option<Value> {
+        let start = self.index;
+        while let Some((offset, ch)) = self.rest().char_indices().next() {
+            debug_assert_eq!(offset, 0);
+            if matches!(ch, ',' | '}' | ']') {
+                break;
+            }
+            self.index += ch.len_utf8();
+        }
+        let value = self.input[start..self.index].trim();
+        if value.is_empty() {
+            return None;
+        }
+        match value {
+            "true" => Some(Value::Bool(true)),
+            "false" => Some(Value::Bool(false)),
+            "null" => Some(Value::Null),
+            _ => serde_json::from_str(value)
+                .ok()
+                .or_else(|| Some(Value::String(value.to_owned()))),
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(ch) = self.rest().chars().next() {
+            if !ch.is_whitespace() {
+                break;
+            }
+            self.index += ch.len_utf8();
+        }
+    }
+
+    fn consume_str(&mut self, expected: &str) -> Option<()> {
+        self.rest().starts_with(expected).then(|| {
+            self.index += expected.len();
+        })
+    }
+
+    fn consume_char(&mut self, expected: char) -> Option<()> {
+        let ch = self.rest().chars().next()?;
+        (ch == expected).then(|| {
+            self.index += ch.len_utf8();
+        })
+    }
+
+    fn next_char(&mut self) -> Option<char> {
+        let ch = self.rest().chars().next()?;
+        self.index += ch.len_utf8();
+        Some(ch)
+    }
+
+    fn rest(&self) -> &str {
+        &self.input[self.index..]
     }
 }
 
@@ -831,6 +1323,23 @@ fn extract_streaming_content(payload: &Value) -> String {
         .into_iter()
         .flatten()
         .filter_map(|choice| choice.get("delta")?.get("content")?.as_str())
+        .collect()
+}
+
+fn extract_streaming_reasoning(payload: &Value) -> String {
+    payload
+        .get("choices")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|choice| {
+            let delta = choice.get("delta")?;
+            delta
+                .get("reasoning")
+                .or_else(|| delta.get("reasoning_content"))
+                .or_else(|| delta.get("reasoningContent"))
+                .and_then(Value::as_str)
+        })
         .collect()
 }
 
@@ -1210,3 +1719,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "provider_tests.rs"]
+mod provider_tests;
