@@ -35,6 +35,7 @@ const CONFIG_SCHEMA_JSON: &str =
 const RESTART_DEBOUNCE: Duration = Duration::from_millis(500);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_LOCAL_MAX_COMPLETION_TOKENS: u32 = 2048;
 
 pub const LOCAL_MODEL_ALIAS_IDS: [&str; 4] =
     ["auto", "auto-efficient", "auto-coding", "auto-reasoning"];
@@ -65,6 +66,8 @@ struct LocalMultiAgentConfigSchemaDefaults {
     local_enable_tools: bool,
     #[serde(rename = "LOCAL_MAX_HISTORY_MESSAGES")]
     local_max_history_messages: u16,
+    #[serde(rename = "LOCAL_MAX_COMPLETION_TOKENS")]
+    local_max_completion_tokens: u32,
     #[serde(rename = "LOCAL_MODEL_CONTEXT_TOKENS")]
     local_model_context_tokens: String,
     #[serde(rename = "LOCAL_GRAPHQL_DB_PATH")]
@@ -93,6 +96,8 @@ pub struct LocalMultiAgentConfig {
     pub local_model_list: String,
     pub local_enable_tools: bool,
     pub local_max_history_messages: u16,
+    #[serde(default = "default_local_max_completion_tokens")]
+    pub local_max_completion_tokens: u32,
     pub local_model_context_tokens: Option<String>,
     pub local_graphql_db_path: Option<String>,
     pub log_level: String,
@@ -112,6 +117,7 @@ impl Default for LocalMultiAgentConfig {
             local_model_list: defaults.local_model_list,
             local_enable_tools: defaults.local_enable_tools,
             local_max_history_messages: defaults.local_max_history_messages,
+            local_max_completion_tokens: defaults.local_max_completion_tokens,
             local_model_context_tokens: non_empty(defaults.local_model_context_tokens),
             local_graphql_db_path: non_empty(defaults.local_graphql_db_path),
             log_level: defaults.log_level,
@@ -136,6 +142,9 @@ impl LocalMultiAgentConfig {
         }
         if self.local_max_history_messages < 4 {
             return Err(LocalMultiAgentConfigError::InvalidMaxHistoryMessages);
+        }
+        if self.local_max_completion_tokens == 0 {
+            return Err(LocalMultiAgentConfigError::InvalidMaxCompletionTokens);
         }
         if !matches!(
             self.log_level.trim().to_ascii_lowercase().as_str(),
@@ -269,6 +278,10 @@ impl LocalMultiAgentConfig {
             "LOCAL_MAX_HISTORY_MESSAGES".to_string(),
             self.local_max_history_messages.to_string(),
         );
+        env.insert(
+            "LOCAL_MAX_COMPLETION_TOKENS".to_string(),
+            self.local_max_completion_tokens.to_string(),
+        );
         env.insert("LOG_LEVEL".to_string(), self.log_level.trim().to_string());
         env.insert(
             "LOCAL_MODEL_ALIASES".to_string(),
@@ -324,6 +337,8 @@ pub enum LocalMultiAgentConfigError {
     InvalidPort,
     #[error("Maximum history messages must be at least 4.")]
     InvalidMaxHistoryMessages,
+    #[error("Maximum completion tokens must be a positive number.")]
+    InvalidMaxCompletionTokens,
     #[error("Log level must be one of error, warn, info, or debug.")]
     InvalidLogLevel,
     #[error("OpenAI Base URL must be an absolute http(s) URL.")]
@@ -1055,6 +1070,10 @@ fn set_global_root_url(root_url: Option<Url>) {
     *LOCAL_ROOT_URL.write() = root_url;
 }
 
+fn default_local_max_completion_tokens() -> u32 {
+    DEFAULT_LOCAL_MAX_COMPLETION_TOKENS
+}
+
 fn non_empty(value: String) -> Option<String> {
     non_empty_str(&value).map(str::to_string)
 }
@@ -1164,6 +1183,10 @@ mod tests {
             config.local_max_history_messages,
             schema.local_max_history_messages
         );
+        assert_eq!(
+            config.local_max_completion_tokens,
+            schema.local_max_completion_tokens
+        );
         assert_eq!(config.log_level, schema.log_level);
     }
 
@@ -1187,6 +1210,10 @@ mod tests {
         assert_eq!(
             env.get("OPENAI_BASE_URL").map(String::as_str),
             Some("http://127.0.0.1:11434/v1")
+        );
+        assert_eq!(
+            env.get("LOCAL_MAX_COMPLETION_TOKENS").map(String::as_str),
+            Some("2048")
         );
         assert!(env
             .get("LOCAL_GRAPHQL_DB_PATH")
@@ -1215,6 +1242,42 @@ mod tests {
             config.validate(),
             Err(LocalMultiAgentConfigError::InvalidContextTokensJson { .. })
         ));
+
+        let config = LocalMultiAgentConfig {
+            local_max_completion_tokens: 0,
+            ..Default::default()
+        };
+        assert!(matches!(
+            config.validate(),
+            Err(LocalMultiAgentConfigError::InvalidMaxCompletionTokens)
+        ));
+    }
+
+    #[test]
+    fn persisted_config_without_max_completion_tokens_uses_default() {
+        let config: LocalMultiAgentConfig = serde_json::from_str(
+            r#"{
+                "host": "127.0.0.1",
+                "port": 8787,
+                "openai_base_url": null,
+                "openai_model": null,
+                "local_model_aliases": "{}",
+                "local_model_list": "model",
+                "local_enable_tools": true,
+                "local_max_history_messages": 80,
+                "local_model_context_tokens": null,
+                "local_graphql_db_path": null,
+                "log_level": "info",
+                "local_service_log_path": null,
+                "local_multi_agent_system_prompt": ""
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.local_max_completion_tokens,
+            DEFAULT_LOCAL_MAX_COMPLETION_TOKENS
+        );
     }
 
     #[test]

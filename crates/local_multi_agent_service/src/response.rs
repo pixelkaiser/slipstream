@@ -656,22 +656,28 @@ fn parse_read_mcp_resource(
 }
 
 fn parse_call_mcp_tool(tool_call: &ProviderToolCall, args: &Value) -> Option<ParsedWarpToolCall> {
+    let tool_args = value_at(args, &["args"]).or_else(|| value_at(args, &["arguments"]));
+    let name = value_string(
+        value_at(args, &["name"])
+            .or_else(|| value_at(args, &["tool_name"]))
+            .or_else(|| value_at(args, &["tool"]))
+            .or_else(|| tool_args.and_then(|args| value_at(args, &["name"])))
+            .or_else(|| tool_args.and_then(|args| value_at(args, &["tool_name"])))
+            .or_else(|| tool_args.and_then(|args| value_at(args, &["tool"]))),
+    )?;
+    let server_id = value_string(
+        value_at(args, &["server_id"])
+            .or_else(|| value_at(args, &["serverId"]))
+            .or_else(|| tool_args.and_then(|args| value_at(args, &["server_id"])))
+            .or_else(|| tool_args.and_then(|args| value_at(args, &["serverId"]))),
+    );
+
     Some(ParsedWarpToolCall {
         tool_call_id: tool_call.id.clone(),
         tool: WarpToolCall::CallMcpTool {
-            name: value_string(
-                value_at(args, &["name"])
-                    .or_else(|| value_at(args, &["tool_name"]))
-                    .or_else(|| value_at(args, &["tool"])),
-            )?
-            .to_owned(),
-            server_id: value_string(
-                value_at(args, &["server_id"]).or_else(|| value_at(args, &["serverId"])),
-            )
-            .map(str::to_owned),
-            args: value_at(args, &["args"])
-                .or_else(|| value_at(args, &["arguments"]))
-                .and_then(optional_object_value),
+            name: name.to_owned(),
+            server_id: server_id.map(str::to_owned),
+            args: tool_args.and_then(call_mcp_tool_args_value),
         },
     })
 }
@@ -877,6 +883,17 @@ fn optional_object_value(value: &Value) -> Option<Value> {
     }
 }
 
+fn call_mcp_tool_args_value(value: &Value) -> Option<Value> {
+    let mut value = optional_object_value(value)?;
+    let Value::Object(object) = &mut value else {
+        return None;
+    };
+    for key in ["name", "tool_name", "tool", "server_id", "serverId"] {
+        object.remove(key);
+    }
+    (!object.is_empty()).then_some(value)
+}
+
 fn json_object_to_struct(value: Value) -> prost_types::Struct {
     match value {
         Value::Object(fields) => prost_types::Struct {
@@ -960,5 +977,28 @@ mod tests {
         ];
 
         assert!(parse_tool_call(&call, &tools).unwrap().is_none());
+    }
+
+    #[test]
+    fn parses_call_mcp_tool_name_from_nested_args() {
+        let call = ProviderToolCall {
+            id: "call".to_owned(),
+            name: "call_mcp_tool".to_owned(),
+            arguments_text: r#"{"args":{"query":"2026 FIFA World Cup opening match results schedule June 13 2026","name":"tavily-tavily_search"}}"#.to_owned(),
+        };
+
+        let parsed = parse_tool_call(&call, &[]).unwrap().unwrap();
+
+        assert_eq!(parsed.tool_call_id, "call");
+        assert_eq!(
+            parsed.tool,
+            WarpToolCall::CallMcpTool {
+                name: "tavily-tavily_search".to_owned(),
+                server_id: None,
+                args: Some(serde_json::json!({
+                    "query": "2026 FIFA World Cup opening match results schedule June 13 2026",
+                })),
+            }
+        );
     }
 }
