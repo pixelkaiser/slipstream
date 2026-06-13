@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 pub const DEFAULT_MODEL: &str = "Qwen/Qwen3.6-27B-FP8";
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 pub const DEFAULT_CONTEXT_WINDOW_TOKENS: u32 = 128 * 1024;
+pub const DEFAULT_MAX_COMPLETION_TOKENS: u32 = 2048;
 pub const SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone)]
@@ -18,6 +19,7 @@ pub struct Config {
     pub local_model_list: String,
     pub local_enable_tools: bool,
     pub local_max_history_messages: usize,
+    pub local_max_completion_tokens: u32,
     pub local_model_context_tokens: Option<String>,
     pub local_graphql_db_path: String,
     pub local_service_log_path: Option<String>,
@@ -66,6 +68,11 @@ impl Config {
             .and_then(|value| value.trim().parse::<usize>().ok())
             .unwrap_or(80)
             .max(4);
+        let local_max_completion_tokens = std::env::var("LOCAL_MAX_COMPLETION_TOKENS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(DEFAULT_MAX_COMPLETION_TOKENS);
 
         let local_graphql_db_path = non_empty(std::env::var("LOCAL_GRAPHQL_DB_PATH").ok())
             .unwrap_or_else(|| {
@@ -116,6 +123,7 @@ impl Config {
                 .map(|value| value.trim().to_ascii_lowercase() != "false")
                 .unwrap_or(true),
             local_max_history_messages,
+            local_max_completion_tokens,
             local_model_context_tokens: non_empty(std::env::var("LOCAL_MODEL_CONTEXT_TOKENS").ok())
                 .or_else(|| non_empty(std::env::var("LOCAL_CONTEXT_WINDOW_TOKENS").ok())),
             local_graphql_db_path,

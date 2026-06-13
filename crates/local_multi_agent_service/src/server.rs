@@ -364,9 +364,12 @@ async fn process_multi_agent(
             .await?;
 
         if provider_response.content.is_empty() && provider_response.tool_calls.is_empty() {
-            return Err(LocalAgentError::internal(
-                "OpenAI-compatible endpoint returned no assistant content or tool calls.",
-            ));
+            let message = if provider_response.suppressed_internal_content {
+                "OpenAI-compatible endpoint returned only non-public assistant content."
+            } else {
+                "OpenAI-compatible endpoint returned no assistant content or tool calls."
+            };
+            return Err(LocalAgentError::internal(message));
         }
 
         provider_response_for_usage = Some(provider_response.clone());

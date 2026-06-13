@@ -72,13 +72,14 @@ use crate::auth::auth_view_modal::AuthViewVariant;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::{GenericStringObjectFormat::Json, JsonObjectType, ObjectType};
+use crate::editor::{EditorOptions, InteractionState, SingleLineEditorOptions, TextColors};
 #[cfg(not(target_family = "wasm"))]
 use crate::local_multi_agent::{
     LocalMultiAgentManager, LocalMultiAgentManagerEvent, LocalMultiAgentStatus,
     LocalMultiAgentTestStatus, LOCAL_MODEL_ALIAS_IDS,
 };
-use crate::editor::{EditorOptions, InteractionState, SingleLineEditorOptions, TextColors};
 use crate::modal::{Modal, ModalEvent, ModalViewState};
+use crate::server::server_api::no_cloud_mode_enabled;
 use crate::settings::{
     AIAutoDetectionEnabled, AICommandDenylist, AISettingsChangedEvent,
     AgentModeCodingPermissionsType, AgentModeCommandExecutionDenylist,
@@ -92,7 +93,6 @@ use crate::settings::{
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
     WarpDriveContextEnabled,
 };
-use crate::server::server_api::no_cloud_mode_enabled;
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
@@ -7304,6 +7304,8 @@ struct ApiKeysWidget {
     #[cfg(not(target_family = "wasm"))]
     local_agent_max_history_editor: ViewHandle<EditorView>,
     #[cfg(not(target_family = "wasm"))]
+    local_agent_max_completion_tokens_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
     local_agent_context_tokens_editor: ViewHandle<EditorView>,
     #[cfg(not(target_family = "wasm"))]
     local_agent_graphql_db_path_editor: ViewHandle<EditorView>,
@@ -7414,7 +7416,8 @@ impl ApiKeysWidget {
                 ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, event, ctx| {
                     if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = event {
                         let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-                        let is_byo_enabled = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
+                        let is_byo_enabled =
+                            UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled(ctx);
                         AISettingsPageView::update_editor_interaction_state(
                             editor_clone.clone(),
                             is_any_ai_enabled && is_byo_enabled,
@@ -7595,6 +7598,19 @@ impl ApiKeysWidget {
                 config.local_max_history_messages =
                     buffer_text.trim().parse::<u16>().map_err(|_| {
                         "Maximum history messages must be a positive number.".to_string()
+                    })?;
+                Ok(())
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_local_agent_editor!(
+            local_agent_max_completion_tokens_editor,
+            local_config.local_max_completion_tokens.to_string(),
+            "2048",
+            |config, buffer_text| {
+                config.local_max_completion_tokens =
+                    buffer_text.trim().parse::<u32>().map_err(|_| {
+                        "Maximum completion tokens must be a positive number.".to_string()
                     })?;
                 Ok(())
             }
@@ -7805,6 +7821,8 @@ impl ApiKeysWidget {
             local_agent_model_list_editor,
             #[cfg(not(target_family = "wasm"))]
             local_agent_max_history_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_max_completion_tokens_editor,
             #[cfg(not(target_family = "wasm"))]
             local_agent_context_tokens_editor,
             #[cfg(not(target_family = "wasm"))]
@@ -8466,6 +8484,13 @@ impl ApiKeysWidget {
             is_enabled,
             app,
         ));
+        column.add_child(render_input(
+            appearance,
+            "LOCAL_MAX_COMPLETION_TOKENS",
+            self.local_agent_max_completion_tokens_editor.clone(),
+            is_enabled,
+            app,
+        ));
         column.add_child(render_group_label(appearance, "Tools", is_enabled, app));
 
         let tools_toggle = if is_enabled {
@@ -8585,7 +8610,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai base url compatible local agent backend multi agent server host port model tools graphql logs prompt anthropic google claude gemini gpt custom inference endpoint"
+        "api keys bring your own byo openai base url compatible local agent backend multi agent server host port model tools tokens max completion graphql logs prompt anthropic google claude gemini gpt custom inference endpoint"
     }
 
     fn render(
