@@ -10,6 +10,11 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::{
+    autocomplete::{
+        AUTOCOMPLETE_MAX_TOKENS, AUTOCOMPLETE_MODEL_ALIAS, LocalCommandAutocompleteRequest,
+        LocalCommandAutocompleteResponse, autocomplete_provider_messages,
+        deterministic_autocomplete_command,
+    },
     config::{
         Config, DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MODEL, non_empty_str, trim_trailing_slash,
     },
@@ -65,6 +70,8 @@ pub struct ChatCompletionParams {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: Option<String>,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
     pub mcp_tools: Vec<McpToolSummary>,
     pub enable_tools: bool,
 }
@@ -167,8 +174,8 @@ impl ProviderRuntime {
         let request_body = json!({
             "model": model,
             "messages": messages,
-            "temperature": 0.2,
-            "max_tokens": config.local_max_completion_tokens,
+            "temperature": params.temperature.unwrap_or(0.2),
+            "max_tokens": params.max_tokens.unwrap_or(config.local_max_completion_tokens),
             "stream": true,
         });
         let request_body = if let Some(tools) = tools.as_ref() {
@@ -310,6 +317,38 @@ impl ProviderRuntime {
             tools.as_ref(),
             context_window_tokens,
             content_filter.suppressed_internal_content(),
+        ))
+    }
+
+    pub async fn command_autocomplete(
+        &self,
+        config: &Config,
+        request: &LocalCommandAutocompleteRequest,
+    ) -> Result<LocalCommandAutocompleteResponse, LocalAgentError> {
+        if let Some(command) = deterministic_autocomplete_command(request) {
+            return Ok(LocalCommandAutocompleteResponse::from_command(command));
+        }
+
+        let response = self
+            .stream_chat_completion(
+                config,
+                ChatCompletionParams {
+                    messages: autocomplete_provider_messages(request),
+                    api_key: None,
+                    base_url: None,
+                    model: Some(AUTOCOMPLETE_MODEL_ALIAS.to_string()),
+                    max_tokens: Some(AUTOCOMPLETE_MAX_TOKENS),
+                    temperature: Some(0.0),
+                    mcp_tools: Vec::new(),
+                    enable_tools: false,
+                },
+                |_| {},
+            )
+            .await?;
+
+        Ok(LocalCommandAutocompleteResponse::from_raw_output(
+            response.content,
+            request,
         ))
     }
 

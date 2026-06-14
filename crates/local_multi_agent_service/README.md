@@ -34,6 +34,26 @@ Point Warp's local multi-agent server URL at:
 http://127.0.0.1:8787
 ```
 
+## Autocomplete prompt evals
+
+With the local service running, iterate on autocomplete prompt/context behavior with:
+
+```sh
+cargo run -p local_multi_agent_service --bin warp-local-autocomplete-eval -- --service-url http://127.0.0.1:8787
+```
+
+The eval harness calls `/ai/local-command-autocomplete` and requests model
+`auto-autocomplete`, so it uses the model alias configured in Warp settings.
+Useful options:
+
+```sh
+cargo run -p local_multi_agent_service --bin warp-local-autocomplete-eval -- \
+  --prompt-file /tmp/autocomplete-prompt.txt \
+  --case filename \
+  --repeat 3 \
+  --json
+```
+
 For no-cloud GraphQL calls, run Warp or the CLI with:
 
 ```sh

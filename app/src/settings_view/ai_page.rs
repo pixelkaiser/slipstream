@@ -2850,6 +2850,8 @@ pub enum AISettingsPageAction {
     #[cfg(not(target_family = "wasm"))]
     ToggleLocalMultiAgentTools,
     #[cfg(not(target_family = "wasm"))]
+    ToggleLocalAIAutocomplete,
+    #[cfg(not(target_family = "wasm"))]
     SetLocalMultiAgentDefaultModel(String),
     #[cfg(not(target_family = "wasm"))]
     SetLocalMultiAgentAlias {
@@ -3293,6 +3295,15 @@ impl TypedActionView for AISettingsPageView {
                     if let Err(error) = manager.set_config(config, ctx) {
                         manager.record_config_error(error.to_string(), ctx);
                     }
+                });
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AISettingsPageAction::ToggleLocalAIAutocomplete => {
+                InputSettings::handle(ctx).update(ctx, |input_settings, ctx| {
+                    report_if_error!(input_settings
+                        .local_ai_autocomplete
+                        .toggle_and_save_value(ctx));
                 });
                 ctx.notify();
             }
@@ -7318,6 +7329,8 @@ struct ApiKeysWidget {
     #[cfg(not(target_family = "wasm"))]
     local_agent_tools_toggle: SwitchStateHandle,
     #[cfg(not(target_family = "wasm"))]
+    local_agent_autocomplete_toggle: SwitchStateHandle,
+    #[cfg(not(target_family = "wasm"))]
     local_agent_restart_button: ViewHandle<ActionButton>,
     #[cfg(not(target_family = "wasm"))]
     local_agent_health_button: ViewHandle<ActionButton>,
@@ -7800,6 +7813,19 @@ impl ApiKeysWidget {
                 },
             );
         }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let default_model_dropdown = local_agent_default_model_dropdown.clone();
+            let alias_dropdowns = local_agent_alias_dropdowns.clone();
+            ctx.subscribe_to_model(&InputSettings::handle(ctx), move |_, _, _, ctx| {
+                Self::refresh_local_agent_model_dropdowns(
+                    &default_model_dropdown,
+                    &alias_dropdowns,
+                    ctx,
+                );
+                ctx.notify();
+            });
+        }
 
         Self {
             openai_api_key_editor,
@@ -7835,6 +7861,8 @@ impl ApiKeysWidget {
             local_agent_system_prompt_editor,
             #[cfg(not(target_family = "wasm"))]
             local_agent_tools_toggle: Default::default(),
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_autocomplete_toggle: Default::default(),
             #[cfg(not(target_family = "wasm"))]
             local_agent_restart_button,
             #[cfg(not(target_family = "wasm"))]
@@ -7904,6 +7932,7 @@ impl ApiKeysWidget {
         let config = manager.config().clone();
         let discovered_models = manager.discovered_models().to_vec();
         let choices = config.model_choices(&discovered_models);
+        let autocomplete_enabled = *InputSettings::as_ref(ctx).local_ai_autocomplete.value();
 
         default_model_dropdown.update(ctx, |dropdown, ctx| {
             if is_enabled && !choices.is_empty() {
@@ -7945,7 +7974,10 @@ impl ApiKeysWidget {
                 .or_else(|| choices.first())
                 .cloned();
             dropdown_handle.update(ctx, |dropdown, ctx| {
-                if is_enabled && !choices.is_empty() {
+                let alias_enabled = is_enabled
+                    && !choices.is_empty()
+                    && (alias != "auto-autocomplete" || autocomplete_enabled);
+                if alias_enabled {
                     dropdown.set_enabled(ctx);
                 } else {
                     dropdown.set_disabled(ctx);
@@ -8436,6 +8468,40 @@ impl ApiKeysWidget {
                 is_enabled,
                 app,
             ));
+
+        let autocomplete_enabled = *InputSettings::as_ref(app).local_ai_autocomplete.value();
+        let autocomplete_toggle = if is_enabled {
+            appearance
+                .ui_builder()
+                .switch(self.local_agent_autocomplete_toggle.clone())
+                .check(autocomplete_enabled)
+                .build()
+                .on_click(|ctx, _, _| {
+                    ctx.dispatch_typed_action(AISettingsPageAction::ToggleLocalAIAutocomplete);
+                })
+                .finish()
+        } else {
+            appearance
+                .ui_builder()
+                .switch(self.local_agent_autocomplete_toggle.clone())
+                .check(autocomplete_enabled)
+                .with_disabled(true)
+                .build()
+                .finish()
+        };
+        column.add_child(build_toggle_element(
+            render_body_item_label::<AISettingsPageAction>(
+                "Autocomplete".to_string(),
+                Some(styles::header_font_color(is_enabled, app)),
+                None,
+                LocalOnlyIconState::Hidden,
+                ToggleState::Enabled,
+                appearance,
+            ),
+            autocomplete_toggle,
+            appearance,
+            None,
+        ));
 
         for alias in LOCAL_MODEL_ALIAS_IDS {
             if let Some(dropdown) = self.local_agent_alias_dropdowns.get(alias) {
