@@ -196,6 +196,80 @@ fn parses_harmony_tool_call_string_with_unescaped_quotes() {
     );
 }
 
+#[tokio::test]
+async fn command_autocomplete_uses_alias_without_tools() {
+    let (base_url, request_bodies) = spawn_openai_compatible_server(vec![json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "git checkout feature/local-autocomplete" }
+        }]
+    })])
+    .await;
+
+    let request = crate::autocomplete::LocalCommandAutocompleteRequest {
+        prefix: "git checkout ".to_string(),
+        cwd: Some("/repo".to_string()),
+        shell: Some("zsh".to_string()),
+        file_candidates: vec!["Cargo.toml".to_string()],
+        ..Default::default()
+    };
+
+    let mut config = test_config(base_url);
+    config.local_model_aliases = Some(format!(r#"{{"auto-autocomplete":"{MODEL}"}}"#));
+
+    let response = ProviderRuntime::new()
+        .command_autocomplete(&config, &request)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.most_likely_action,
+        "git checkout feature/local-autocomplete"
+    );
+
+    let request_bodies = request_bodies.lock().unwrap();
+    assert_eq!(request_bodies.len(), 1);
+    let request_body = &request_bodies[0];
+    assert_eq!(request_body["model"], MODEL);
+    assert_eq!(request_body["stream"], true);
+    assert_eq!(request_body["max_tokens"], 256);
+    assert_eq!(request_body["temperature"], 0.0);
+    assert!(request_body.get("tools").is_none());
+    assert!(
+        request_body["messages"]
+            .to_string()
+            .contains("git checkout ")
+    );
+}
+
+#[tokio::test]
+async fn command_autocomplete_short_circuits_docker_ps_context() {
+    let (base_url, request_bodies) = spawn_openai_compatible_server(Vec::new()).await;
+    let request = crate::autocomplete::LocalCommandAutocompleteRequest {
+        prefix: "docker logs -f e".to_string(),
+        recent_blocks: vec![crate::autocomplete::AutocompleteBlockContext {
+            command: "docker ps".to_string(),
+            output: Some(
+                "CONTAINER ID   IMAGE                            COMMAND                  CREATED       STATUS        PORTS     NAMES\n\
+5a8038634ee7   rhasspy/wyoming-whisper          \"bash docker_run.sh\"    6 weeks ago   Up 13 min              wyoming-whisper\n\
+eb48dced80cd   supabase/edge-runtime:v1.69.28   \"edge-runtime start\"    5 months ago  Up 13 min              supabase-edge-functions"
+                    .to_string(),
+            ),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let response = ProviderRuntime::new()
+        .command_autocomplete(&test_config(base_url), &request)
+        .await
+        .unwrap();
+
+    assert_eq!(response.most_likely_action, "docker logs -f eb48dced80cd");
+    assert!(response.raw_output.is_empty());
+    assert!(request_bodies.lock().unwrap().is_empty());
+}
+
 async fn spawn_openai_compatible_server(chunks: Vec<Value>) -> (String, Arc<Mutex<Vec<Value>>>) {
     let request_bodies = Arc::new(Mutex::new(Vec::new()));
     let app = Router::new()
@@ -269,6 +343,8 @@ fn test_params(enable_tools: bool) -> ChatCompletionParams {
         api_key: None,
         base_url: None,
         model: Some(MODEL.to_owned()),
+        max_tokens: None,
+        temperature: None,
         mcp_tools: Vec::new(),
         enable_tools,
     }
