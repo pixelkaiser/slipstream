@@ -1,4 +1,4 @@
-use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, net::SocketAddr, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, mpsc};
 use warp_multi_agent_api as api;
 
 use crate::{
+    autocomplete::LocalCommandAutocompleteRequest,
     config::{Config, LogLevel, SERVICE_VERSION, non_empty_str},
     graphql::{graphql_error_messages, handle_local_graphql_request},
     logger::Logger,
@@ -64,6 +65,10 @@ pub async fn run(config: Config) -> Result<()> {
         .route("/session/{session_id}", get(shared_session_redirect))
         .route("/ai/multi-agent", post(multi_agent))
         .route("/ai/passive-suggestions", post(passive_suggestions))
+        .route(
+            "/ai/local-command-autocomplete",
+            post(local_command_autocomplete),
+        )
         .route("/graphql/v2", post(graphql))
         .with_state(state.clone());
 
@@ -154,6 +159,87 @@ async fn passive_suggestions(
     body: Body,
 ) -> Response {
     handle_multi_agent(state, headers, body, true).await
+}
+
+async fn local_command_autocomplete(State(state): State<AppState>, body: Body) -> Response {
+    let body = match to_bytes(body, MAX_REQUEST_BYTES).await {
+        Ok(body) => body,
+        Err(error) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": error.to_string() }),
+            );
+        }
+    };
+    let request = match serde_json::from_slice::<LocalCommandAutocompleteRequest>(&body) {
+        Ok(request) => request,
+        Err(error) => {
+            return json_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": error.to_string() }),
+            );
+        }
+    };
+
+    state
+        .logger
+        .log(
+            LogLevel::Info,
+            "local_command_autocomplete_request",
+            json!({
+                "prefixChars": request.prefix.chars().count(),
+                "historyCount": request.history.len(),
+                "fileCandidateCount": request.file_candidates.len(),
+                "hasPromptOverride": request.system_prompt_override.is_some(),
+            }),
+        )
+        .await;
+
+    let started = Instant::now();
+    match state
+        .provider
+        .command_autocomplete(&state.config, &request)
+        .await
+    {
+        Ok(response) => {
+            state
+                .logger
+                .log(
+                    LogLevel::Info,
+                    "local_command_autocomplete_result",
+                    json!({
+                        "durationMs": started.elapsed().as_millis(),
+                        "source": response.source.as_str(),
+                        "parseStatus": response.parse_status.as_str(),
+                        "hasCommand": !response.most_likely_action.is_empty(),
+                        "commandChars": response.most_likely_action.chars().count(),
+                        "rawOutputChars": response.raw_output.chars().count(),
+                    }),
+                )
+                .await;
+            json_response(StatusCode::OK, json!(response))
+        }
+        Err(error) => {
+            let status = status_for_local_agent_error(&error);
+            state
+                .logger
+                .log(
+                    LogLevel::Warn,
+                    "local_command_autocomplete_error",
+                    json!({
+                        "durationMs": started.elapsed().as_millis(),
+                        "status": status.as_u16(),
+                        "finishReason": format!("{:?}", error.finish_reason),
+                        "model": error.model_name.as_ref(),
+                    }),
+                )
+                .await;
+            json_response(
+                status,
+                json!({ "error": error.message, "model": error.model_name }),
+            )
+        }
+    }
 }
 
 async fn graphql(State(state): State<AppState>, uri: Uri, body: Body) -> Response {
@@ -334,6 +420,8 @@ async fn process_multi_agent(
                     api_key: warp_request.openai_api_key.clone(),
                     base_url: request_openai_base_url,
                     model: warp_request.model.clone(),
+                    max_tokens: None,
+                    temperature: None,
                     mcp_tools: warp_request.mcp_tools.clone(),
                     enable_tools: !warp_request.is_summarization_request,
                 },
@@ -709,6 +797,15 @@ fn stream_finished_for_error(error: &LocalAgentError) -> api::ResponseEvent {
 
 fn send_event(tx: &mpsc::UnboundedSender<String>, event: api::ResponseEvent) {
     let _ = tx.send(response::format_sse_data_event(&event));
+}
+
+fn status_for_local_agent_error(error: &LocalAgentError) -> StatusCode {
+    match error.finish_reason {
+        FinishReason::InvalidApiKey => StatusCode::UNAUTHORIZED,
+        FinishReason::QuotaLimit => StatusCode::TOO_MANY_REQUESTS,
+        FinishReason::ContextWindowExceeded => StatusCode::PAYLOAD_TOO_LARGE,
+        FinishReason::LlmUnavailable | FinishReason::InternalError => StatusCode::BAD_GATEWAY,
+    }
 }
 
 fn json_response(status: StatusCode, payload: Value) -> Response {

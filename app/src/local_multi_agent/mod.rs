@@ -37,8 +37,13 @@ const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_LOCAL_MAX_COMPLETION_TOKENS: u32 = 2048;
 
-pub const LOCAL_MODEL_ALIAS_IDS: [&str; 4] =
-    ["auto", "auto-efficient", "auto-coding", "auto-reasoning"];
+pub const LOCAL_MODEL_ALIAS_IDS: [&str; 5] = [
+    "auto",
+    "auto-efficient",
+    "auto-coding",
+    "auto-reasoning",
+    "auto-autocomplete",
+];
 
 static LOCAL_ROOT_URL: LazyLock<parking_lot::RwLock<Option<Url>>> =
     LazyLock::new(|| parking_lot::RwLock::new(None));

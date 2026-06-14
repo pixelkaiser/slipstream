@@ -10,6 +10,7 @@ pub fn default_model_aliases() -> BTreeMap<String, String> {
         ("auto-efficient", DEFAULT_MODEL),
         ("auto-coding", DEFAULT_MODEL),
         ("auto-reasoning", DEFAULT_MODEL),
+        ("auto-autocomplete", DEFAULT_MODEL),
     ]
     .into_iter()
     .map(|(key, value)| (key.to_owned(), value.to_owned()))
@@ -75,6 +76,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(model, "local/model");
+    }
+
+    #[test]
+    fn autocomplete_alias_resolves_to_configured_model() {
+        let model = resolve_provider_model(
+            None,
+            Some("auto-autocomplete"),
+            Some(r#"{"auto-autocomplete":"diffusiongemma-26B-A4B-it"}"#),
+        )
+        .unwrap();
+        assert_eq!(model, "diffusiongemma-26B-A4B-it");
     }
 
     #[test]

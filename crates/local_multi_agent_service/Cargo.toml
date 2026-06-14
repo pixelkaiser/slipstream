@@ -9,6 +9,10 @@ license.workspace = true
 name = "warp-local-multi-agent"
 path = "src/main.rs"
 
+[[bin]]
+name = "warp-local-autocomplete-eval"
+path = "src/autocomplete_eval.rs"
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true

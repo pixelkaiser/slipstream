@@ -1,5 +1,6 @@
 use std::sync::Once;
 
+pub mod autocomplete;
 mod config;
 mod graphql;
 mod logger;
