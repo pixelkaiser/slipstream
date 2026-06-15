@@ -24,15 +24,15 @@ use warpui::{
 const SIDECAR_HORIZONTAL_GAP: f32 = 8.;
 const SIDECAR_POSITION_ID: &str = "model_sidecar_panel";
 
+#[cfg(not(target_family = "wasm"))]
+use crate::codex_app_server::{CodexAppServerModel, CodexModelInfo};
+#[cfg(not(target_family = "wasm"))]
+use crate::opencode_server::{OpenCodeModelInfo, OpenCodeServerModel};
 use warp_cli::agent::Harness;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::color::{coloru_with_opacity, Opacity};
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
-#[cfg(not(target_family = "wasm"))]
-use crate::codex_app_server::{CodexAppServerModel, CodexModelInfo};
-#[cfg(not(target_family = "wasm"))]
-use crate::opencode_server::{OpenCodeModelInfo, OpenCodeServerModel};
 
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
@@ -1085,16 +1085,22 @@ impl ProfileModelSelector {
             .clone()
             .and_then(|id| {
                 llm_preferences
-                    .get_llm_info(&id)
+                    .get_agent_mode_llm_info_for_terminal(&id, ctx, Some(self.terminal_view_id))
                     .map(|info| info.id.clone())
             })
-            .unwrap_or_else(|| llm_preferences.get_default_base_model().id.clone());
+            .unwrap_or_else(|| {
+                llm_preferences
+                    .get_profile_default_base_model(ctx, Some(self.terminal_view_id))
+                    .id
+                    .clone()
+            });
 
         let model_id_to_add_profile_default_label_to = Some(&profile_base_model_id);
 
         // Store all model choices for reasoning variant lookups
         self.all_model_choices = llm_preferences
-            .get_base_llm_choices_for_agent_mode(ctx)
+            .get_base_llm_choices_for_agent_mode_for_terminal(ctx, Some(self.terminal_view_id))
+            .into_iter()
             .cloned()
             .collect();
 
@@ -1102,7 +1108,8 @@ impl ProfileModelSelector {
         // custom-endpoint choices (rendered separately under a `Custom models` sub-header so
         // the server-curated list stays visually distinct).
         let custom_ids: std::collections::HashSet<LLMId> = llm_preferences
-            .custom_llm_choices(ctx)
+            .custom_llm_choices_for_terminal(ctx, Some(self.terminal_view_id))
+            .into_iter()
             .map(|info| info.id.clone())
             .collect();
         let server_choices: Vec<&LLMInfo> = self
@@ -1287,8 +1294,9 @@ impl ProfileModelSelector {
         if model.is_default {
             label = format!("{label} (default)");
         }
-        let mut fields = MenuItemFields::new(label)
-            .with_on_select_action(ProfileModelSelectorAction::SelectCodexModel(model.id.clone()));
+        let mut fields = MenuItemFields::new(label).with_on_select_action(
+            ProfileModelSelectorAction::SelectCodexModel(model.id.clone()),
+        );
         if is_selected {
             fields = fields.with_icon(Icon::Check);
         } else {
@@ -1321,9 +1329,9 @@ impl ProfileModelSelector {
                 }
             })
             .or_else(|| {
-                items.iter().position(|item| {
-                    matches!(item, MenuItem::Item(fields) if !fields.is_disabled())
-                })
+                items.iter().position(
+                    |item| matches!(item, MenuItem::Item(fields) if !fields.is_disabled()),
+                )
             })
             .unwrap_or(0)
     }
@@ -1442,7 +1450,8 @@ impl ProfileModelSelector {
 
         let items: Vec<MenuItem<ProfileModelSelectorAction>> = match kind {
             ModelSpecSidecarKind::Auto => llm_preferences
-                .get_base_llm_choices_for_agent_mode(ctx)
+                .get_base_llm_choices_for_agent_mode_for_terminal(ctx, Some(self.terminal_view_id))
+                .into_iter()
                 .filter(|llm| is_auto(llm))
                 .map(|llm| {
                     let is_selected = llm.id == active_llm_id;
@@ -1633,13 +1642,23 @@ impl ProfileModelSelector {
                 .and_then(|action| {
                     match action {
                         ProfileModelSelectorAction::SelectModel(llm_id) => {
-                            LLMPreferences::as_ref(ctx).get_llm_info(llm_id).cloned()
+                            LLMPreferences::as_ref(ctx)
+                                .get_agent_mode_llm_info_for_terminal(
+                                    llm_id,
+                                    ctx,
+                                    Some(self.terminal_view_id),
+                                )
+                                .cloned()
                         }
                         ProfileModelSelectorAction::SelectAutoModel => {
                             // Get the first "auto" variant as the generic auto model
                             let llm_prefs = LLMPreferences::as_ref(ctx);
                             llm_prefs
-                                .get_base_llm_choices_for_agent_mode(ctx)
+                                .get_base_llm_choices_for_agent_mode_for_terminal(
+                                    ctx,
+                                    Some(self.terminal_view_id),
+                                )
+                                .into_iter()
                                 .find(|llm| is_auto(llm))
                                 .cloned()
                         }

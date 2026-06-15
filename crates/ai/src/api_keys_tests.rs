@@ -69,6 +69,7 @@ fn serde_round_trip_with_provider_keys() {
         google: Some("AIzaSy123".into()),
         open_router: Some("sk-or-xxx".into()),
         custom_endpoints: vec![],
+        ..Default::default()
     };
     let json = serde_json::to_string(&keys).unwrap();
     let deser: ApiKeys = serde_json::from_str(&json).unwrap();
@@ -91,6 +92,7 @@ fn serde_round_trip_with_custom_endpoints() {
                 &[("llama-70b", None), ("mixtral", Some("mix"))],
             ),
         ],
+        ..Default::default()
     };
     let json = serde_json::to_string(&keys).unwrap();
     let deser: ApiKeys = serde_json::from_str(&json).unwrap();
@@ -103,6 +105,68 @@ fn serde_ignores_unknown_fields() {
     let keys: ApiKeys = serde_json::from_str(json).unwrap();
     assert_eq!(keys.openai, Some("sk-x".into()));
     assert!(keys.custom_endpoints.is_empty());
+}
+
+#[test]
+fn default_profile_settings_fall_back_to_legacy_fields_before_migration() {
+    let keys = ApiKeys {
+        openai: Some("sk-openai".into()),
+        anthropic: Some("sk-anthropic".into()),
+        openai_base_url: Some("http://127.0.0.1:1234/v1".into()),
+        custom_endpoints: vec![endpoint("ep", "https://a.io", "key", &[("m", None)])],
+        ..Default::default()
+    };
+
+    let settings = keys.profile_settings(DEFAULT_PROFILE_INFERENCE_KEY);
+    assert_eq!(settings.openai.as_deref(), Some("sk-openai"));
+    assert_eq!(settings.anthropic.as_deref(), Some("sk-anthropic"));
+    assert_eq!(
+        settings.openai_base_url.as_deref(),
+        Some("http://127.0.0.1:1234/v1")
+    );
+    assert_eq!(settings.custom_endpoints.len(), 1);
+}
+
+#[test]
+fn local_settings_migration_populates_default_profile_once() {
+    let mut keys = ApiKeys {
+        openai: Some("sk-openai".into()),
+        ..Default::default()
+    };
+
+    assert!(keys.migrate_default_profile_if_needed());
+    assert!(keys.migrate_default_profile_local_settings_if_needed(
+        Some(" http://127.0.0.1:1234/v1/ ".into()),
+        r#"{"auto-autocomplete":"local/model"}"#.into(),
+        "local/model,local/other".into(),
+        true,
+    ));
+
+    let settings = keys.profile_settings(DEFAULT_PROFILE_INFERENCE_KEY);
+    assert_eq!(settings.openai.as_deref(), Some("sk-openai"));
+    assert_eq!(
+        settings.openai_base_url.as_deref(),
+        Some("http://127.0.0.1:1234/v1")
+    );
+    assert_eq!(
+        settings.local_model_aliases,
+        r#"{"auto-autocomplete":"local/model"}"#
+    );
+    assert_eq!(settings.local_model_list, "local/model,local/other");
+    assert!(settings.local_ai_autocomplete_enabled);
+
+    assert!(!keys.migrate_default_profile_local_settings_if_needed(
+        Some("http://different.test/v1".into()),
+        r#"{"auto":"different"}"#.into(),
+        "different".into(),
+        false,
+    ));
+    let settings = keys.profile_settings(DEFAULT_PROFILE_INFERENCE_KEY);
+    assert_eq!(
+        settings.openai_base_url.as_deref(),
+        Some("http://127.0.0.1:1234/v1")
+    );
+    assert!(settings.local_ai_autocomplete_enabled);
 }
 
 // ── has_any_key ─────────────────────────────────────────────────
@@ -160,7 +224,9 @@ fn has_custom_endpoints_true_when_present() {
 #[test]
 fn custom_model_providers_none_when_empty() {
     let mgr = make_manager(ApiKeys::default());
-    assert!(mgr.custom_model_providers_for_request(true).is_none());
+    assert!(mgr
+        .custom_model_providers_for_request(DEFAULT_PROFILE_INFERENCE_KEY, true)
+        .is_none());
 }
 
 #[test]
@@ -169,7 +235,9 @@ fn custom_model_providers_none_when_byo_disabled() {
         custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
         ..Default::default()
     });
-    assert!(mgr.custom_model_providers_for_request(false).is_none());
+    assert!(mgr
+        .custom_model_providers_for_request(DEFAULT_PROFILE_INFERENCE_KEY, false)
+        .is_none());
 }
 
 #[test]
@@ -183,7 +251,9 @@ fn custom_model_providers_populates_single_endpoint() {
         )],
         ..Default::default()
     });
-    let result = mgr.custom_model_providers_for_request(true).unwrap();
+    let result = mgr
+        .custom_model_providers_for_request(DEFAULT_PROFILE_INFERENCE_KEY, true)
+        .unwrap();
     assert_eq!(result.providers.len(), 1);
     let p = &result.providers[0];
     assert_eq!(p.base_url, "https://custom.io/v1");
@@ -215,7 +285,9 @@ fn multiple_endpoints_all_serialize() {
         ],
         ..Default::default()
     });
-    let result = mgr.custom_model_providers_for_request(true).unwrap();
+    let result = mgr
+        .custom_model_providers_for_request(DEFAULT_PROFILE_INFERENCE_KEY, true)
+        .unwrap();
     assert_eq!(result.providers.len(), 2);
     assert_eq!(result.providers[0].base_url, "https://a.io");
     assert_eq!(result.providers[0].models[0].config_key, "uuid-a");
@@ -232,7 +304,9 @@ fn byok_disabled_returns_none_even_with_endpoints() {
         custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
         ..Default::default()
     });
-    assert!(mgr.custom_model_providers_for_request(false).is_none());
+    assert!(mgr
+        .custom_model_providers_for_request(DEFAULT_PROFILE_INFERENCE_KEY, false)
+        .is_none());
 }
 
 #[test]
@@ -244,7 +318,9 @@ fn empty_api_key_endpoints_are_skipped() {
         ],
         ..Default::default()
     });
-    let result = mgr.custom_model_providers_for_request(true).unwrap();
+    let result = mgr
+        .custom_model_providers_for_request(DEFAULT_PROFILE_INFERENCE_KEY, true)
+        .unwrap();
     assert_eq!(result.providers.len(), 1);
     assert_eq!(result.providers[0].base_url, "https://b.io");
 }
@@ -260,7 +336,9 @@ fn endpoints_with_only_empty_models_are_skipped() {
         )],
         ..Default::default()
     });
-    assert!(mgr.custom_model_providers_for_request(true).is_none());
+    assert!(mgr
+        .custom_model_providers_for_request(DEFAULT_PROFILE_INFERENCE_KEY, true)
+        .is_none());
 }
 
 // ── display_label fallback ─────────────────────────────────────
@@ -300,7 +378,9 @@ fn display_label_falls_back_to_name_when_alias_is_whitespace() {
 #[test]
 fn api_keys_for_request_none_when_empty() {
     let mgr = make_manager(ApiKeys::default());
-    assert!(mgr.api_keys_for_request(true, false).is_none());
+    assert!(mgr
+        .api_keys_for_request(DEFAULT_PROFILE_INFERENCE_KEY, true, false)
+        .is_none());
 }
 
 #[test]
@@ -310,7 +390,9 @@ fn api_keys_for_request_populates_provider_keys() {
         anthropic: Some("sk-a".into()),
         ..Default::default()
     });
-    let result = mgr.api_keys_for_request(true, false).unwrap();
+    let result = mgr
+        .api_keys_for_request(DEFAULT_PROFILE_INFERENCE_KEY, true, false)
+        .unwrap();
     assert_eq!(result.openai, "sk-o");
     assert_eq!(result.anthropic, "sk-a");
     assert!(result.google.is_empty());
@@ -323,7 +405,9 @@ fn api_keys_for_request_omits_keys_when_byo_disabled() {
         ..Default::default()
     });
     // With BYO disabled and no other credentials, returns None.
-    assert!(mgr.api_keys_for_request(false, false).is_none());
+    assert!(mgr
+        .api_keys_for_request(DEFAULT_PROFILE_INFERENCE_KEY, false, false)
+        .is_none());
 }
 
 #[test]
@@ -332,5 +416,73 @@ fn api_keys_for_request_none_for_custom_endpoints_only() {
         custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
         ..Default::default()
     });
-    assert!(mgr.api_keys_for_request(true, false).is_none());
+    assert!(mgr
+        .api_keys_for_request(DEFAULT_PROFILE_INFERENCE_KEY, true, false)
+        .is_none());
+}
+
+#[test]
+fn api_keys_for_request_uses_requested_profile() {
+    let mut keys = ApiKeys::default();
+    keys.profile_inference_settings.insert(
+        DEFAULT_PROFILE_INFERENCE_KEY.to_string(),
+        ProfileInferenceSettings {
+            openai: Some("sk-default".into()),
+            ..Default::default()
+        },
+    );
+    keys.profile_inference_settings.insert(
+        "profile-2".to_string(),
+        ProfileInferenceSettings {
+            openai: Some("sk-profile-2".into()),
+            anthropic: Some("sk-anthropic-2".into()),
+            ..Default::default()
+        },
+    );
+    let mgr = make_manager(keys);
+
+    let result = mgr
+        .api_keys_for_request("profile-2", true, false)
+        .expect("profile scoped keys should be present");
+    assert_eq!(result.openai, "sk-profile-2");
+    assert_eq!(result.anthropic, "sk-anthropic-2");
+}
+
+#[test]
+fn custom_model_providers_for_request_uses_requested_profile() {
+    let mut keys = ApiKeys::default();
+    keys.profile_inference_settings.insert(
+        DEFAULT_PROFILE_INFERENCE_KEY.to_string(),
+        ProfileInferenceSettings {
+            custom_endpoints: vec![endpoint_with_keys(
+                "default",
+                "https://default.test/v1",
+                "default-key",
+                &[("default-model", None, "default-cfg")],
+            )],
+            ..Default::default()
+        },
+    );
+    keys.profile_inference_settings.insert(
+        "profile-2".to_string(),
+        ProfileInferenceSettings {
+            custom_endpoints: vec![endpoint_with_keys(
+                "profile",
+                "https://profile.test/v1",
+                "profile-key",
+                &[("profile-model", None, "profile-cfg")],
+            )],
+            ..Default::default()
+        },
+    );
+    let mgr = make_manager(keys);
+
+    let result = mgr
+        .custom_model_providers_for_request("profile-2", true)
+        .expect("profile custom endpoint should be present");
+    assert_eq!(result.providers.len(), 1);
+    assert_eq!(result.providers[0].base_url, "https://profile.test/v1");
+    assert_eq!(result.providers[0].api_key, "profile-key");
+    assert_eq!(result.providers[0].models[0].slug, "profile-model");
+    assert_eq!(result.providers[0].models[0].config_key, "profile-cfg");
 }

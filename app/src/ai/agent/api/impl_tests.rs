@@ -37,6 +37,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         custom_model_providers: None,
         openai_base_url: None,
         local_multi_agent_server_root_url: None,
+        local_model_aliases: None,
         allow_use_of_warp_credits: false,
         autonomy_level: api::AutonomyLevel::Supervised,
         isolation_level: api::IsolationLevel::None,

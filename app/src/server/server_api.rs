@@ -63,6 +63,7 @@ use crate::settings::PrivacySettingsSnapshot;
 use crate::{settings_view, ChannelState};
 
 const OPENAI_BASE_URL_HEADER: &str = "X-Warp-OpenAI-Base-URL";
+const LOCAL_MODEL_ALIASES_HEADER: &str = "X-Warp-Local-Model-Aliases";
 
 fn multi_agent_output_url(
     is_passive: bool,
@@ -1362,6 +1363,7 @@ impl ServerApi {
         request: &warp_multi_agent_api::Request,
         server_root_url_override: Option<&str>,
         openai_base_url: Option<&str>,
+        local_model_aliases: Option<&str>,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
         let is_passive = request.input.as_ref().is_some_and(|input| {
@@ -1415,6 +1417,10 @@ impl ServerApi {
         if server_root_url_override.is_some() {
             if let Some(openai_base_url) = openai_base_url {
                 request_builder = request_builder.header(OPENAI_BASE_URL_HEADER, openai_base_url);
+            }
+            if let Some(local_model_aliases) = local_model_aliases {
+                request_builder =
+                    request_builder.header(LOCAL_MODEL_ALIASES_HEADER, local_model_aliases);
             }
         }
 

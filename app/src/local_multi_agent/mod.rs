@@ -650,6 +650,109 @@ impl LocalMultiAgentManager {
         );
     }
 
+    pub fn test_profile_backend(
+        &mut self,
+        profile_key: String,
+        provider_base_url: Option<String>,
+        openai_api_key: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Err(error) = self.config.validate() {
+            self.test_status = LocalMultiAgentTestStatus::Failed {
+                message: error.to_string(),
+            };
+            ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
+            return;
+        }
+
+        let Some(root_url) = self.root_url() else {
+            self.test_status = LocalMultiAgentTestStatus::Failed {
+                message: "Invalid local service URL.".to_string(),
+            };
+            ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
+            return;
+        };
+
+        let provider_base_url = provider_base_url
+            .as_deref()
+            .and_then(non_empty_str)
+            .unwrap_or(DEFAULT_OPENAI_BASE_URL)
+            .to_string();
+        let service_config = self.config.clone();
+        let service_openai_api_key = openai_api_key.clone();
+        self.test_status = LocalMultiAgentTestStatus::Testing;
+        ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
+
+        let _ = ctx.spawn(
+            async move {
+                let start_result = match health_check(root_url.clone()).await {
+                    Ok(()) => None,
+                    Err(error) => {
+                        log::info!(
+                            "Local multi-agent service was not healthy during profile test; attempting restart: {error:#}"
+                        );
+                        Some(start_service(service_config, service_openai_api_key).await?)
+                    }
+                };
+                let models =
+                    fetch_provider_models(&provider_base_url, openai_api_key.as_deref()).await?;
+                Ok::<_, anyhow::Error>((start_result, models))
+            },
+            move |manager, result, ctx| {
+                match result {
+                    Ok((start_result, models)) => {
+                        if let Some(start_result) = start_result {
+                            manager.apply_start_result(start_result, ctx);
+                            ctx.emit(LocalMultiAgentManagerEvent::StatusChanged);
+                        }
+
+                        let model_count = models.len();
+                        manager.discovered_models = models.clone();
+
+                        let profile_settings = ::ai::api_keys::ApiKeyManager::as_ref(ctx)
+                            .keys()
+                            .profile_settings(&profile_key);
+                        let mut profile_config = manager.config.clone();
+                        profile_config.local_model_aliases =
+                            profile_settings.local_model_aliases.clone();
+                        profile_config.local_model_list = profile_settings.local_model_list.clone();
+
+                        match profile_config.apply_discovered_models(&models) {
+                            Ok(_) => {
+                                ::ai::api_keys::ApiKeyManager::handle(ctx).update(
+                                    ctx,
+                                    |api_keys, ctx| {
+                                        api_keys.set_local_model_settings_for_profile(
+                                            &profile_key,
+                                            profile_config.local_model_aliases.clone(),
+                                            profile_config.local_model_list.clone(),
+                                            ctx,
+                                        );
+                                    },
+                                );
+                            }
+                            Err(error) => {
+                                manager.test_status = LocalMultiAgentTestStatus::Failed {
+                                    message: error.to_string(),
+                                };
+                                ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
+                                return;
+                            }
+                        }
+                        manager.test_status = LocalMultiAgentTestStatus::Passed { model_count };
+                        manager.refresh_llm_preferences(ctx);
+                    }
+                    Err(error) => {
+                        manager.test_status = LocalMultiAgentTestStatus::Failed {
+                            message: format!("{error:#}"),
+                        };
+                    }
+                }
+                ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
+            },
+        );
+    }
+
     pub fn record_config_error(&mut self, message: String, ctx: &mut ModelContext<Self>) {
         self.status = LocalMultiAgentStatus::Failed { message };
         ctx.emit(LocalMultiAgentManagerEvent::StatusChanged);

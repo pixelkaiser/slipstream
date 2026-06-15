@@ -188,8 +188,8 @@ use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::predict::local_command_autocomplete::{
-    AutocompleteBlockContext, LocalCommandAutocompleteRequest, file_candidates_for_context,
-    request_local_command_autocomplete,
+    AutocompleteBlockContext, LocalCommandAutocompleteProviderSettings,
+    LocalCommandAutocompleteRequest, file_candidates_for_context, request_local_command_autocomplete,
 };
 use crate::ai::predict::next_command_model::{
     is_command_valid, is_next_command_enabled, NextCommandModel, NextCommandModelEvent,
@@ -9037,12 +9037,29 @@ impl Input {
         self.abort_latest_autosuggestion_future();
 
         #[cfg(not(target_family = "wasm"))]
-        let local_autocomplete_root_url =
-            if *InputSettings::as_ref(ctx).local_ai_autocomplete.value() {
-                crate::local_multi_agent::local_no_cloud_root_url()
+        let (local_autocomplete_root_url, local_autocomplete_provider_settings) = {
+            let active_profile = AIExecutionProfilesModel::as_ref(ctx)
+                .active_profile(Some(self.terminal_view_id), ctx);
+            let profile_key = active_profile.inference_profile_key();
+            let api_key_manager = ::ai::api_keys::ApiKeyManager::as_ref(ctx);
+            if api_key_manager.local_ai_autocomplete_enabled_for_profile(&profile_key) {
+                (
+                    crate::local_multi_agent::local_no_cloud_root_url(),
+                    LocalCommandAutocompleteProviderSettings {
+                        openai_api_key: api_key_manager.openai_key_for_profile(&profile_key),
+                        openai_base_url: api_key_manager.openai_base_url_for_profile(&profile_key),
+                        local_model_aliases: non_empty_string(
+                            api_key_manager.local_model_aliases_for_profile(&profile_key),
+                        ),
+                    },
+                )
             } else {
-                None
-            };
+                (
+                    None,
+                    LocalCommandAutocompleteProviderSettings::default(),
+                )
+            }
+        };
         #[cfg(target_family = "wasm")]
         let local_autocomplete_root_url: Option<url::Url> = None;
 
@@ -9157,7 +9174,13 @@ impl Input {
                             file_candidates,
                         };
                         let started = std::time::Instant::now();
-                        match request_local_command_autocomplete(root_url, &request).await {
+                        match request_local_command_autocomplete(
+                            root_url,
+                            &request,
+                            local_autocomplete_provider_settings,
+                        )
+                        .await
+                        {
                             Ok(response) => {
                                 let duration_ms = started.elapsed().as_millis();
                                 log::debug!(
@@ -16011,6 +16034,12 @@ fn maybe_render_ai_input_indicators(
             .with_margin_right(em_width)
             .finish(),
     )
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn non_empty_string(value: String) -> Option<String> {
+    let value = value.trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 #[cfg(feature = "integration_tests")]

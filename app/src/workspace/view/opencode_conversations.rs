@@ -28,11 +28,11 @@ use crate::{
         EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions,
         TextOptions,
     },
+    menu::{Event as MenuEvent, Menu, MenuItemFields},
     opencode_server::{
         opencode_session_updated_at_utc, opencode_start_command, OpenCodeServerModel,
         OpenCodeServerModelEvent, OpenCodeServerStatus, OpenCodeSessionSummary,
     },
-    menu::{Event as MenuEvent, Menu, MenuItemFields},
     settings::OpenCodeServerSettings,
     ui_components::icons::Icon,
     ui_components::menu_button::{icon_button_with_context_menu, MenuDirection},

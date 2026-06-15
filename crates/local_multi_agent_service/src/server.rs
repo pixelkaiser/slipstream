@@ -32,6 +32,7 @@ use crate::{
 
 const MAX_REQUEST_BYTES: usize = 25 * 1024 * 1024;
 const OPENAI_BASE_URL_HEADER: &str = "x-warp-openai-base-url";
+const LOCAL_MODEL_ALIASES_HEADER: &str = "x-warp-local-model-aliases";
 
 #[derive(Clone)]
 struct AppState {
@@ -161,7 +162,11 @@ async fn passive_suggestions(
     handle_multi_agent(state, headers, body, true).await
 }
 
-async fn local_command_autocomplete(State(state): State<AppState>, body: Body) -> Response {
+async fn local_command_autocomplete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
     let body = match to_bytes(body, MAX_REQUEST_BYTES).await {
         Ok(body) => body,
         Err(error) => {
@@ -198,7 +203,13 @@ async fn local_command_autocomplete(State(state): State<AppState>, body: Body) -
     let started = Instant::now();
     match state
         .provider
-        .command_autocomplete(&state.config, &request)
+        .command_autocomplete(
+            &state.config,
+            &request,
+            bearer_token(&headers),
+            header_value(&headers, OPENAI_BASE_URL_HEADER),
+            header_value(&headers, LOCAL_MODEL_ALIASES_HEADER),
+        )
         .await
     {
         Ok(response) => {
@@ -325,6 +336,7 @@ async fn handle_multi_agent(
         .and_then(|value| value.to_str().ok())
         .and_then(non_empty_str)
         .map(str::to_owned);
+    let request_local_model_aliases = header_value(&headers, LOCAL_MODEL_ALIASES_HEADER);
     let (tx, rx) = mpsc::unbounded_channel::<String>();
     let task_state = state.clone();
     tokio::spawn(async move {
@@ -333,6 +345,7 @@ async fn handle_multi_agent(
             tx,
             warp_request,
             request_openai_base_url,
+            request_local_model_aliases,
             passive_suggestions,
         )
         .await;
@@ -358,6 +371,7 @@ async fn process_multi_agent(
     tx: mpsc::UnboundedSender<String>,
     warp_request: WarpRequestSummary,
     request_openai_base_url: Option<String>,
+    request_local_model_aliases: Option<String>,
     passive_suggestions: bool,
 ) {
     state
@@ -380,6 +394,7 @@ async fn process_multi_agent(
                 "warpModel": warp_request.model,
                 "hasRequestApiKey": warp_request.openai_api_key.is_some(),
                 "hasOpenAiBaseUrlHeader": request_openai_base_url.is_some(),
+                "hasLocalModelAliasesHeader": request_local_model_aliases.is_some(),
             }),
         )
         .await;
@@ -419,6 +434,7 @@ async fn process_multi_agent(
                     },
                     api_key: warp_request.openai_api_key.clone(),
                     base_url: request_openai_base_url,
+                    local_model_aliases: request_local_model_aliases,
                     model: warp_request.model.clone(),
                     max_tokens: None,
                     temperature: None,
@@ -797,6 +813,23 @@ fn stream_finished_for_error(error: &LocalAgentError) -> api::ResponseEvent {
 
 fn send_event(tx: &mpsc::UnboundedSender<String>, event: api::ResponseEvent) {
     let _ = tx.send(response::format_sse_data_event(&event));
+}
+
+fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(non_empty_str)
+        .map(str::to_owned)
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(non_empty_str)
+        .map(str::to_owned)
 }
 
 fn status_for_local_agent_error(error: &LocalAgentError) -> StatusCode {
