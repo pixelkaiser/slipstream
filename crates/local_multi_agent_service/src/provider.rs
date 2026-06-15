@@ -69,6 +69,7 @@ pub struct ChatCompletionParams {
     pub messages: Vec<ProviderChatMessage>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
+    pub local_model_aliases: Option<String>,
     pub model: Option<String>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
@@ -155,7 +156,11 @@ impl ProviderRuntime {
         let model = resolve_provider_model(
             config.openai_model.as_deref(),
             params.model.as_deref(),
-            config.local_model_aliases.as_deref(),
+            params
+                .local_model_aliases
+                .as_deref()
+                .and_then(non_empty_str)
+                .or(config.local_model_aliases.as_deref()),
         )
         .map_err(|error| LocalAgentError::internal(error.to_string()))?;
         let context_window_tokens = self
@@ -324,6 +329,9 @@ impl ProviderRuntime {
         &self,
         config: &Config,
         request: &LocalCommandAutocompleteRequest,
+        api_key: Option<String>,
+        base_url: Option<String>,
+        local_model_aliases: Option<String>,
     ) -> Result<LocalCommandAutocompleteResponse, LocalAgentError> {
         if let Some(command) = deterministic_autocomplete_command(request) {
             return Ok(LocalCommandAutocompleteResponse::from_command(command));
@@ -334,8 +342,9 @@ impl ProviderRuntime {
                 config,
                 ChatCompletionParams {
                     messages: autocomplete_provider_messages(request),
-                    api_key: None,
-                    base_url: None,
+                    api_key,
+                    base_url,
+                    local_model_aliases,
                     model: Some(AUTOCOMPLETE_MODEL_ALIAS.to_string()),
                     max_tokens: Some(AUTOCOMPLETE_MAX_TOKENS),
                     temperature: Some(0.0),

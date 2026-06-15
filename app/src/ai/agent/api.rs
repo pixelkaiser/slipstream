@@ -123,6 +123,7 @@ pub struct RequestParams {
     pub custom_model_routers: Option<warp_multi_agent_api::request::settings::CustomModelRouters>,
     pub openai_base_url: Option<String>,
     pub local_multi_agent_server_root_url: Option<String>,
+    pub local_model_aliases: Option<String>,
     pub allow_use_of_warp_credits: bool,
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
     pub isolation_level: warp_multi_agent_api::IsolationLevel,
@@ -280,12 +281,16 @@ impl RequestParams {
 
         let user_workspaces = UserWorkspaces::as_ref(app);
         let api_key_manager = ApiKeyManager::as_ref(app);
+        let active_profile =
+            AIExecutionProfilesModel::as_ref(app).active_profile(terminal_view_id, app);
+        let inference_profile_key = active_profile.inference_profile_key();
         let is_byo_enabled = user_workspaces.is_byo_api_key_enabled(app);
         #[cfg(not(target_family = "wasm"))]
         let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
         #[cfg(target_family = "wasm")]
         let geap_binding: Option<::ai::api_keys::GeapMintBinding> = None;
         let api_keys = api_key_manager.api_keys_for_request(
+            &inference_profile_key,
             is_byo_enabled,
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
             geap_binding,
@@ -294,7 +299,10 @@ impl RequestParams {
         let custom_model_providers = FeatureFlag::CustomInferenceEndpoints
             .is_enabled()
             .then(|| {
-                api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled)
+                api_key_manager.custom_model_providers_for_request(
+                    &inference_profile_key,
+                    is_custom_inference_enabled,
+                )
             })
             .flatten();
         let custom_model_routers = FeatureFlag::CustomModelRouters.is_enabled().then(|| {
@@ -308,23 +316,17 @@ impl RequestParams {
             crate::local_multi_agent::LocalMultiAgentManager::global_root_url()
                 .map(|url| url.to_string())
                 .or_else(|| {
-                    api_key_manager
-                        .keys()
-                        .local_multi_agent_server_root_url
-                        .clone()
+                    api_key_manager.local_multi_agent_server_root_url_for_profile(
+                        &inference_profile_key,
+                    )
                 });
         #[cfg(target_family = "wasm")]
-        let local_multi_agent_server_root_url = api_key_manager
-            .keys()
-            .local_multi_agent_server_root_url
-            .clone();
-        #[cfg(not(target_family = "wasm"))]
-        let openai_base_url = crate::local_multi_agent::LocalMultiAgentManager::as_ref(app)
-            .config()
-            .openai_base_url
-            .clone();
-        #[cfg(target_family = "wasm")]
-        let openai_base_url = api_key_manager.keys().openai_base_url.clone();
+        let local_multi_agent_server_root_url =
+            api_key_manager.local_multi_agent_server_root_url_for_profile(&inference_profile_key);
+        let openai_base_url = api_key_manager.openai_base_url_for_profile(&inference_profile_key);
+        let local_model_aliases = non_empty_string(
+            api_key_manager.local_model_aliases_for_profile(&inference_profile_key),
+        );
         let allow_use_of_warp_credits = *AISettings::as_ref(app).can_use_warp_credits_for_fallback;
 
         let app_execution_mode = AppExecutionMode::as_ref(app);
@@ -375,8 +377,7 @@ impl RequestParams {
         // server-side, drop the override; otherwise clamp it to the model's
         // current `[min, max]` range. This closes the window between an
         // in-flight model metadata refresh and the next request.
-        let context_window_limit = AIExecutionProfilesModel::as_ref(app)
-            .active_profile(terminal_view_id, app)
+        let context_window_limit = active_profile
             .data()
             .context_window_limit_for_request(app);
 
@@ -404,6 +405,7 @@ impl RequestParams {
             custom_model_routers,
             openai_base_url,
             local_multi_agent_server_root_url,
+            local_model_aliases,
             allow_use_of_warp_credits,
             autonomy_level,
             isolation_level,
@@ -417,4 +419,9 @@ impl RequestParams {
             agent_name: None,
         }
     }
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    let value = value.trim().to_string();
+    (!value.is_empty()).then_some(value)
 }

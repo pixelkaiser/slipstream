@@ -1640,10 +1640,7 @@ impl MCPServersListPageView {
         match paths.as_slice() {
             [] => None,
             [path] => Some(format!("Detected from config file: {path}")),
-            _ => Some(format!(
-                "Detected from config files: {}",
-                paths.join(", ")
-            )),
+            _ => Some(format!("Detected from config files: {}", paths.join(", "))),
         }
     }
 
@@ -1812,11 +1809,7 @@ impl MCPServersListPageView {
         });
     }
 
-    fn remove_file_based_server_from_my_mcps(
-        &self,
-        uuid: Uuid,
-        ctx: &mut ViewContext<Self>,
-    ) {
+    fn remove_file_based_server_from_my_mcps(&self, uuid: Uuid, ctx: &mut ViewContext<Self>) {
         FileBasedMCPManager::handle(ctx).update(ctx, |mgr, ctx| {
             mgr.set_server_activation(uuid, false, ctx);
         });

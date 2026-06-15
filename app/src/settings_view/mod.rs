@@ -104,7 +104,7 @@ mod platform_page;
 mod privacy;
 mod privacy_page;
 mod referrals_page;
-mod remove_custom_endpoint_confirmation_dialog;
+pub(crate) mod remove_custom_endpoint_confirmation_dialog;
 mod scripting_page;
 mod settings_file_footer;
 pub(crate) mod settings_page;
@@ -188,7 +188,7 @@ pub(super) fn render_beta_chip(appearance: &Appearance) -> Box<dyn Element> {
 
 /// Renders a horizontal row of pill-shaped chips for model labels.
 /// Used by custom inference endpoint cards and the remove confirmation dialog.
-pub(super) fn render_model_chips(
+pub(crate) fn render_model_chips(
     labels: impl IntoIterator<Item = String>,
     appearance: &Appearance,
     text_color: warp_core::ui::theme::Fill,
@@ -1155,8 +1155,25 @@ pub struct SettingsView {
 }
 
 impl SettingsView {
+    fn initial_page(page: Option<SettingsSection>) -> SettingsSection {
+        match page {
+            Some(SettingsSection::AI) => SettingsSection::WarpAgent,
+            Some(SettingsSection::Code) => SettingsSection::CodeIndexing,
+            Some(SettingsSection::Scripting) if !FeatureFlag::WarpControlCli.is_enabled() => {
+                SettingsSection::Account
+            }
+            Some(section) if section.is_subpage() => section.visible_or_default(),
+            other => other.unwrap_or_default().visible_or_default(),
+        }
+    }
+
+    fn initial_ai_subpage(initial_page: SettingsSection) -> AISubpage {
+        AISubpage::from_section(initial_page).unwrap_or(AISubpage::Profiles)
+    }
+
     pub fn new(page: Option<SettingsSection>, ctx: &mut ViewContext<Self>) -> Self {
         let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Settings"));
+        let initial_page = Self::initial_page(page);
 
         let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
         // Main settings page with accounts info
@@ -1198,7 +1215,10 @@ impl SettingsView {
         let about_page_handle = ctx.add_view(AboutPageView::new);
 
         // AI page
-        let ai_page_handle = ctx.add_typed_action_view(AISettingsPageView::new);
+        let initial_ai_subpage = Self::initial_ai_subpage(initial_page);
+        let ai_page_handle = ctx.add_typed_action_view(move |ctx| {
+            AISettingsPageView::new_with_subpage(Some(initial_ai_subpage), ctx)
+        });
         let ai_page_handle_for_nav = ai_page_handle.clone();
         ctx.subscribe_to_view(&ai_page_handle, |me, _, event, ctx| {
             me.handle_ai_page_event(event, ctx);
@@ -1378,18 +1398,6 @@ impl SettingsView {
                 SettingsNavItem::Page(SettingsSection::Scripting),
             );
         }
-
-        // Resolve the initial page: map internal backing-page sections to their default subpage.
-        let initial_page = match page {
-            Some(SettingsSection::AI) => SettingsSection::WarpAgent,
-            Some(SettingsSection::Code) => SettingsSection::CodeIndexing,
-            Some(SettingsSection::Scripting) if !FeatureFlag::WarpControlCli.is_enabled() => {
-                SettingsSection::Account
-            }
-            Some(section) if section.is_subpage() => section.visible_or_default(),
-            other => other.unwrap_or_default().visible_or_default(),
-        };
-
         // Auto-expand the umbrella if the initial page is one of its subpages.
         if initial_page.is_subpage() {
             for item in &mut nav_items {

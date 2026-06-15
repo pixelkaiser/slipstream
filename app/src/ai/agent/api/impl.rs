@@ -8,7 +8,7 @@ use warp_multi_agent_api as api;
 use super::convert_to::convert_input;
 use super::{ConvertToAPITypeError, RequestParams, ResponseStream};
 use crate::ai::agent::redaction;
-use crate::server::server_api::{AIApiError, ServerApi};
+use crate::server::server_api::ServerApi;
 use crate::terminal::model::session::SessionType;
 
 pub async fn generate_multi_agent_output(
@@ -136,52 +136,25 @@ pub async fn generate_multi_agent_output(
         mcp_context: params.mcp_context.map(Into::into),
     };
 
-    let response_stream = warp_multi_agent_client::generate_multi_agent_output_with_server_root_url(
-        server_api.as_ref(),
-        &request,
-        params.local_multi_agent_server_root_url.as_deref(),
-        params.openai_base_url.as_deref(),
-    )
-    .await;
+    let response_stream = server_api
+        .generate_multi_agent_output(
+            &request,
+            params.local_multi_agent_server_root_url.as_deref(),
+            params.openai_base_url.as_deref(),
+            params.local_model_aliases.as_deref(),
+        )
+        .await;
     match response_stream {
         Ok(stream) => {
-            let output_stream = stream
-                .then(|result| async {
-                    match result {
-                        Ok(event) => Ok(event),
-                        Err(error) => Err(convert_multi_agent_client_error(error).await),
-                    }
-                })
-                .take_until(cancellation_rx);
+            let output_stream = stream.take_until(cancellation_rx);
             Ok(Box::pin(output_stream))
         }
         Err(e) => {
             let (tx, rx) = async_channel::unbounded();
-            let _ = tx
-                .send(Err(convert_multi_agent_client_error(e).await))
-                .await;
+            let _ = tx.send(Err(e)).await;
             Ok(Box::pin(rx))
         }
     }
-}
-
-async fn convert_multi_agent_client_error(
-    error: warp_multi_agent_client::Error,
-) -> Arc<AIApiError> {
-    let error = match error {
-        warp_multi_agent_client::Error::Authentication(error)
-        | warp_multi_agent_client::Error::AmbientHeaders(error) => AIApiError::Other(error),
-        warp_multi_agent_client::Error::Base64Decode(error) => {
-            AIApiError::Other(anyhow::Error::from(error))
-        }
-        warp_multi_agent_client::Error::ProtobufDecode(error) => {
-            AIApiError::Other(anyhow::Error::from(error))
-        }
-        warp_multi_agent_client::Error::EventSource(error) => {
-            AIApiError::from_stream_error("GenerateMultiAgentOutput", *error).await
-        }
-    };
-    Arc::new(error)
 }
 
 fn api_keys_with_warp_credit_fallback_setting(
