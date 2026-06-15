@@ -218,7 +218,7 @@ async fn command_autocomplete_uses_alias_without_tools() {
     config.local_model_aliases = Some(format!(r#"{{"auto-autocomplete":"{MODEL}"}}"#));
 
     let response = ProviderRuntime::new()
-        .command_autocomplete(&config, &request)
+        .command_autocomplete(&config, &request, None, None, None)
         .await
         .unwrap();
 
@@ -243,6 +243,40 @@ async fn command_autocomplete_uses_alias_without_tools() {
 }
 
 #[tokio::test]
+async fn command_autocomplete_uses_request_alias_override() {
+    let (base_url, request_bodies) = spawn_openai_compatible_server(vec![json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "git status" }
+        }]
+    })])
+    .await;
+
+    let request = crate::autocomplete::LocalCommandAutocompleteRequest {
+        prefix: "git ".to_string(),
+        ..Default::default()
+    };
+
+    let mut config = test_config(base_url);
+    config.local_model_aliases = Some(r#"{"auto-autocomplete":"config/model"}"#.to_string());
+
+    let response = ProviderRuntime::new()
+        .command_autocomplete(
+            &config,
+            &request,
+            None,
+            None,
+            Some(r#"{"auto-autocomplete":"request/model"}"#.to_string()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.most_likely_action, "git status");
+    let request_bodies = request_bodies.lock().unwrap();
+    assert_eq!(request_bodies[0]["model"], "request/model");
+}
+
+#[tokio::test]
 async fn command_autocomplete_short_circuits_docker_ps_context() {
     let (base_url, request_bodies) = spawn_openai_compatible_server(Vec::new()).await;
     let request = crate::autocomplete::LocalCommandAutocompleteRequest {
@@ -261,7 +295,7 @@ eb48dced80cd   supabase/edge-runtime:v1.69.28   \"edge-runtime start\"    5 mont
     };
 
     let response = ProviderRuntime::new()
-        .command_autocomplete(&test_config(base_url), &request)
+        .command_autocomplete(&test_config(base_url), &request, None, None, None)
         .await
         .unwrap();
 
@@ -342,6 +376,7 @@ fn test_params(enable_tools: bool) -> ChatCompletionParams {
         messages: vec![user_text_message(PUZZLE_PROMPT)],
         api_key: None,
         base_url: None,
+        local_model_aliases: None,
         model: Some(MODEL.to_owned()),
         max_tokens: None,
         temperature: None,

@@ -22,13 +22,17 @@ use ::http::header::CONTENT_LENGTH;
 use ai::AIClient;
 use anyhow::{anyhow, Context, Result};
 use auth::AuthClient;
+use base64::prelude::BASE64_URL_SAFE;
+use base64::Engine;
 use block::BlockClient;
 use channel_versions::ChannelVersions;
 use chrono::{DateTime, FixedOffset};
+use futures::StreamExt;
 use instant::Instant;
 use managed_mcp::ManagedMcpClient;
 use object::ObjectClient;
 use parking_lot::Mutex;
+use prost::Message;
 use referral::ReferralsClient;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -41,6 +45,7 @@ use warp_managed_secrets::client::ManagedSecretsClient;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig,
+    AMBIENT_WORKLOAD_TOKEN_HEADER, EVAL_USER_ID_HEADER,
 };
 use warp_server_client::iap::{IapManager, IapState};
 use warp_server_client::network_logging::NetworkLogModel;
@@ -61,6 +66,30 @@ use crate::auth::auth_state::AuthState;
 use crate::server::telemetry::TelemetryApi;
 use crate::settings::PrivacySettingsSnapshot;
 use crate::{settings_view, ChannelState};
+
+const OPENAI_BASE_URL_HEADER: &str = "X-Warp-OpenAI-Base-URL";
+const LOCAL_MODEL_ALIASES_HEADER: &str = "X-Warp-Local-Model-Aliases";
+
+fn multi_agent_output_url(
+    is_passive: bool,
+    is_evals: bool,
+    server_root_url_override: Option<&str>,
+) -> String {
+    let server_root_url = server_root_url_override
+        .map(str::to_string)
+        .unwrap_or_else(|| ChannelState::server_root_url().into_owned());
+
+    format!(
+        "{}/{}/{}",
+        server_root_url.trim_end_matches('/'),
+        if is_evals { "agent-mode-evals" } else { "ai" },
+        if is_passive {
+            "passive-suggestions"
+        } else {
+            "multi-agent"
+        }
+    )
+}
 pub const FETCH_CHANNEL_VERSIONS_TIMEOUT: std::time::Duration = Duration::from_secs(60);
 
 const WARP_NO_CLOUD_ENV: &str = "WARP_NO_CLOUD";
@@ -121,6 +150,10 @@ pub(crate) fn server_root_url_override_for_startup(
 
 fn should_send_authenticated_graphql_context() -> bool {
     !no_cloud_mode_enabled()
+}
+
+fn should_send_authenticated_multi_agent_request(server_root_url_override: Option<&str>) -> bool {
+    server_root_url_override.is_none() && !no_cloud_mode_enabled()
 }
 
 /// ResponseType received by Client
@@ -1130,6 +1163,119 @@ impl ServerApi {
         }
     }
 
+    pub async fn generate_multi_agent_output(
+        &self,
+        request: &warp_multi_agent_api::Request,
+        server_root_url_override: Option<&str>,
+        openai_base_url: Option<&str>,
+        local_model_aliases: Option<&str>,
+    ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
+    {
+        let is_passive = request.input.as_ref().is_some_and(|input| {
+            matches!(
+                input.r#type,
+                Some(warp_multi_agent_api::request::input::Type::GeneratePassiveSuggestions(_))
+            )
+        });
+        let is_evals = cfg!(feature = "agent_mode_evals");
+        let url = multi_agent_output_url(is_passive, is_evals, server_root_url_override);
+
+        let auth_token = if should_send_authenticated_multi_agent_request(server_root_url_override)
+        {
+            Some(
+                self.get_or_refresh_access_token()
+                    .await
+                    .map_err(Into::into)
+                    .map_err(Arc::new)?,
+            )
+        } else {
+            None
+        };
+
+        let ambient_workload_token = if is_passive {
+            // Do not include cloud agent workload metadata in passive suggestion requests - they
+            // read from the main conversation, but cannot modify it.
+            None
+        } else {
+            self.get_or_create_ambient_workload_token()
+                .await
+                .map_err(Into::into)
+                .map_err(Arc::new)?
+        };
+
+        let mut request_builder = self
+            .base_client
+            .http_client()
+            .post(url)
+            .proto(request)
+            .prevent_sleep("Agent Mode request in-progress");
+        if let Some(token) = auth_token
+            .as_ref()
+            .and_then(|token| token.as_bearer_token())
+        {
+            request_builder = request_builder.bearer_auth(token);
+        }
+
+        if let Some(token) = ambient_workload_token {
+            request_builder = request_builder.header(AMBIENT_WORKLOAD_TOKEN_HEADER, token);
+        }
+
+        if server_root_url_override.is_some() {
+            if let Some(openai_base_url) = openai_base_url {
+                request_builder = request_builder.header(OPENAI_BASE_URL_HEADER, openai_base_url);
+            }
+            if let Some(local_model_aliases) = local_model_aliases {
+                request_builder =
+                    request_builder.header(LOCAL_MODEL_ALIASES_HEADER, local_model_aliases);
+            }
+        }
+
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "agent_mode_evals")] {
+                let mut request = request_builder;
+                if let Some(eval_user_id) = self.eval_user_id {
+                    request = request.header(EVAL_USER_ID_HEADER, eval_user_id.to_string());
+                }
+            } else {
+                let request = request_builder;
+            }
+        }
+
+        let raw_stream = self.wrap_eventsource_with_iap_detection(request.eventsource());
+        let output_stream = raw_stream.filter_map(|event| async {
+            let result = match event {
+                Ok(reqwest_eventsource::Event::Message(message_event)) => {
+                    match BASE64_URL_SAFE.decode(message_event.data.trim_matches('"')) {
+                        Ok(decoded_data) => {
+                            let action = warp_multi_agent_api::ResponseEvent::decode(
+                                decoded_data.as_slice(),
+                            );
+                            Some(action.map_err(|e| AIApiError::Other(anyhow::Error::from(e))))
+                        }
+                        Err(e) => Some(Err(AIApiError::Other(anyhow::Error::from(e)))),
+                    }
+                }
+                Ok(reqwest_eventsource::Event::Open) => None,
+                Err(err) => Some(Err(AIApiError::from_stream_error(
+                    "GenerateMultiAgentOutput",
+                    err,
+                )
+                .await)),
+            }
+            // Wrap errors in an Arc so that they're cloneable by downstream event
+            // handlers.
+            .map(|item| item.map_err(Arc::new));
+            result
+        });
+
+        cfg_if::cfg_if! {
+            if #[cfg(target_family = "wasm")] {
+                Ok(output_stream.boxed_local())
+            } else {
+                Ok(output_stream.boxed())
+            }
+        }
+    }
     fn set_server_time(&self, server_time: ServerTime) {
         let mut last_server_time = self.last_server_time.lock();
         *last_server_time = Some(server_time);

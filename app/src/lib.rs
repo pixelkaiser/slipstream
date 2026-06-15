@@ -307,7 +307,9 @@ use crate::server::telemetry::{AppStartupInfo, CloseTarget, PaletteSource, Telem
 use crate::session_management::{RunningSessionSummary, SessionNavigationData};
 use crate::settings::cloud_preferences_syncer::initialize_cloud_preferences_syncer;
 use crate::settings::manager::SettingsManager;
-use crate::settings::{AISettings, AccessibilitySettings, ScrollSettings, SelectionSettings};
+use crate::settings::{
+    AISettings, AccessibilitySettings, InputSettings, ScrollSettings, SelectionSettings,
+};
 use crate::settings_view::keybindings::KeybindingChangedNotifier;
 use crate::settings_view::DisplayCount;
 use crate::suggestions::ignored_suggestions_model::IgnoredSuggestionsModel;
@@ -1608,14 +1610,28 @@ pub(crate) fn initialize_app(
     #[cfg(not(target_family = "wasm"))]
     ctx.add_singleton_model(|ctx| {
         let mut manager = local_multi_agent::LocalMultiAgentManager::new(ctx);
-        let api_keys = ::ai::api_keys::ApiKeyManager::as_ref(ctx).keys().clone();
-        manager.update_provider_config(api_keys.openai, ctx);
+        let local_config = manager.config().clone();
+        let local_ai_autocomplete_enabled =
+            *InputSettings::as_ref(ctx).local_ai_autocomplete.value();
+        ::ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |api_keys, ctx| {
+            api_keys.migrate_default_profile_local_settings_if_needed(
+                local_config.openai_base_url.clone(),
+                local_config.local_model_aliases.clone(),
+                local_config.local_model_list.clone(),
+                local_ai_autocomplete_enabled,
+                ctx,
+            );
+        });
+        let openai_key = ::ai::api_keys::ApiKeyManager::as_ref(ctx)
+            .openai_key_for_profile(::ai::api_keys::DEFAULT_PROFILE_INFERENCE_KEY);
+        manager.update_provider_config(openai_key, ctx);
         ctx.subscribe_to_model(
             &::ai::api_keys::ApiKeyManager::handle(ctx),
             |manager: &mut local_multi_agent::LocalMultiAgentManager, event, ctx| {
                 if matches!(event, ::ai::api_keys::ApiKeyManagerEvent::KeysUpdated) {
-                    let keys = ::ai::api_keys::ApiKeyManager::as_ref(ctx).keys().clone();
-                    manager.update_provider_config(keys.openai, ctx);
+                    let openai_key = ::ai::api_keys::ApiKeyManager::as_ref(ctx)
+                        .openai_key_for_profile(::ai::api_keys::DEFAULT_PROFILE_INFERENCE_KEY);
+                    manager.update_provider_config(openai_key, ctx);
                 }
             },
         );

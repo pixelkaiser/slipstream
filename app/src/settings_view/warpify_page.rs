@@ -607,10 +607,8 @@ impl WarpifyPageView {
             .finish();
         let editor = Container::new(
             ConstrainedBox::new(
-                Clipped::new(
-                    ChildView::new(&self.ssh_extension_download_base_url_editor).finish(),
-                )
-                .finish(),
+                Clipped::new(ChildView::new(&self.ssh_extension_download_base_url_editor).finish())
+                    .finish(),
             )
             .with_height(28.)
             .finish(),
@@ -1117,7 +1115,9 @@ impl SettingsWidget for SSHWidget {
                     Container::new(render_dropdown_item(
                         appearance,
                         "SSH extension channel",
-                        Some("Release channel remote hosts use to fetch the SSH extension tarball."),
+                        Some(
+                            "Release channel remote hosts use to fetch the SSH extension tarball.",
+                        ),
                         None,
                         LocalOnlyIconState::for_setting(
                             SshExtensionDownloadChannel::storage_key(),
@@ -1230,7 +1230,9 @@ impl SettingsWidget for SSHWidget {
                                     return;
                                 }
 
-                                ctx.dispatch_typed_action(WarpifyPageAction::ToggleTmuxWarpification);
+                                ctx.dispatch_typed_action(
+                                    WarpifyPageAction::ToggleTmuxWarpification,
+                                );
                             })
                             .finish(),
                         None,
