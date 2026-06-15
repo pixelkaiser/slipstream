@@ -650,7 +650,7 @@ impl LLMPreferences {
     }
 
     fn should_refresh_models_on_init() -> bool {
-        cfg!(feature = "agent_mode_evals")
+        cfg!(feature = "agent_mode_evals") || no_cloud_mode_enabled()
     }
 
     /// Returns the `LLMInfo` for the base LLM to be used for an Agent Mode request.
