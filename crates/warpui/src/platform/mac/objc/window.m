@@ -23,6 +23,7 @@ NSWindowStyleMask warpWindowMask = NSWindowStyleMaskClosable | NSWindowStyleMask
 static const CGFloat DEFAULT_TITLEBAR_HEIGHT = 28.0;
 static const NSSize MIN_WINDOW_SIZE = {480.0, 192.0};
 static const NSSize TEST_MIN_WINDOW_SIZE = {124.0, 34.0};
+static const CGFloat RESIZE_EVENT_FORWARDING_MARGIN = 8.0;
 
 // A back-to-front ordered array of windows, identified by their `windowNumber`
 // property.
@@ -316,13 +317,9 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     }
 }
 
-@interface NSWindow (PrivateAPI)
-- (NSInteger)_resizeDirectionForMouseLocation:(NSPoint)location;
-@end
-
 @interface WarpWindow ()
 - (NSButton *)standardWindowButtonAtEvent:(NSEvent *)event;
-- (BOOL)eventIsOverResizeEdge:(NSEvent *)event;
+- (BOOL)pointIsInResizeRegion:(NSPoint)windowPoint;
 @end
 
 @implementation WarpWindow {
@@ -341,7 +338,9 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     // macOS from cascading or clamping the window position while a tab-drag preview window is
     // being created and positioned under the cursor.
     BOOL _suppressFrameConstraintsDuringDrag;
-    BOOL _leftMouseDownStartedInNativeWindowChrome;
+    // Whether the current left mouse sequence started in the native resize border. When it did,
+    // AppKit must receive the matching drag/up events to perform live resize.
+    BOOL _leftMouseDownInResizeRegion;
 }
 
 @synthesize testMode;
@@ -431,14 +430,19 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
     return nil;
 }
 
-- (BOOL)eventIsOverResizeEdge:(NSEvent *)event {
-    if ((self.styleMask & NSWindowStyleMaskResizable) == 0) {
-        return NO;
-    }
-    if ([self respondsToSelector:@selector(_resizeDirectionForMouseLocation:)]) {
-        return [self _resizeDirectionForMouseLocation:event.locationInWindow] != -1;
-    }
-    return NO;
+- (BOOL)pointIsInResizeRegion:(NSPoint)windowPoint {
+    if (!(self.styleMask & NSWindowStyleMaskResizable)) return NO;
+    if (self.styleMask & NSWindowStyleMaskFullScreen) return NO;
+
+    NSView *contentView = self.contentView;
+    if (!contentView) return NO;
+
+    NSPoint point = [contentView convertPoint:windowPoint fromView:nil];
+    NSRect bounds = contentView.bounds;
+    return point.x <= RESIZE_EVENT_FORWARDING_MARGIN ||
+           point.x >= NSMaxX(bounds) - RESIZE_EVENT_FORWARDING_MARGIN ||
+           point.y <= RESIZE_EVENT_FORWARDING_MARGIN ||
+           point.y >= NSMaxY(bounds) - RESIZE_EVENT_FORWARDING_MARGIN;
 }
 
 - (void)sendEvent:(NSEvent *)event {
@@ -446,11 +450,11 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         case NSEventTypeLeftMouseDown: {
             NSButton *windowButton = [self standardWindowButtonAtEvent:event];
             if (windowButton) {
-                _leftMouseDownStartedInNativeWindowChrome = NO;
+                _leftMouseDownInResizeRegion = NO;
                 [windowButton mouseDown:event];
                 break;
             }
-            _leftMouseDownStartedInNativeWindowChrome = [self eventIsOverResizeEdge:event];
+            _leftMouseDownInResizeRegion = [self pointIsInResizeRegion:event.locationInWindow];
             [super sendEvent:event];
             break;
         }
@@ -464,24 +468,16 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         // This breaks drag-and-drop for panes and tabs (see CLD-2581), so we work around it with
         // custom dispatching.
         case NSEventTypeLeftMouseUp:
-            if (@available(macOS 27, *)) {
-                if (_leftMouseDownStartedInNativeWindowChrome) {
-                    [super sendEvent:event];
-                } else {
-                    [self.contentView mouseUp:event];
-                }
+            if (_leftMouseDownInResizeRegion) {
+                [super sendEvent:event];
+                _leftMouseDownInResizeRegion = NO;
             } else {
                 [self.contentView mouseUp:event];
             }
-            _leftMouseDownStartedInNativeWindowChrome = NO;
             break;
         case NSEventTypeLeftMouseDragged:
-            if (@available(macOS 27, *)) {
-                if (_leftMouseDownStartedInNativeWindowChrome) {
-                    [super sendEvent:event];
-                } else {
-                    [self.contentView mouseDragged:event];
-                }
+            if (_leftMouseDownInResizeRegion) {
+                [super sendEvent:event];
             } else {
                 [self.contentView mouseDragged:event];
             }
