@@ -425,13 +425,28 @@ impl BlocklistAIActionExecutor {
         &self.run_agents_executor
     }
 
-    pub fn action_phase(&self, action: &AIAgentAction, ctx: &AppContext) -> RunningActionPhase {
-        match &action.action {
+    pub(super) fn static_parallel_phase_for_action(
+        action: &AIAgentActionType,
+    ) -> Option<RunningActionPhase> {
+        match action {
+            // MCP tool calls are read-only local actions and can run in parallel when
+            // multiple independent calls arrive together in one response.
             AIAgentActionType::ReadFiles(..)
             | AIAgentActionType::SearchCodebase(..)
-            | AIAgentActionType::ReadSkill(_) => {
-                RunningActionPhase::Parallel(ParallelExecutionPolicy::ReadOnlyLocalContext)
-            }
+            | AIAgentActionType::ReadSkill(_)
+            | AIAgentActionType::CallMCPTool { .. } => Some(RunningActionPhase::Parallel(
+                ParallelExecutionPolicy::ReadOnlyLocalContext,
+            )),
+            _ => None,
+        }
+    }
+
+    pub fn action_phase(&self, action: &AIAgentAction, ctx: &AppContext) -> RunningActionPhase {
+        if let Some(phase) = Self::static_parallel_phase_for_action(&action.action) {
+            return phase;
+        }
+
+        match &action.action {
             AIAgentActionType::Grep { .. }
                 if self.grep_executor.as_ref(ctx).can_execute_in_parallel(ctx) =>
             {
