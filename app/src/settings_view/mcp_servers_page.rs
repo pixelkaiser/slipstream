@@ -445,7 +445,7 @@ impl MCPServersSettingsPageView {
             match self.current_page {
                 MCPServersSettingsPage::List => self
                     .list_view
-                    .read(app, |list_view, _| list_view.get_modal_content()),
+                    .read(app, |list_view, _| list_view.get_modal_content(app)),
                 MCPServersSettingsPage::Edit { .. } => None,
             }
         }
