@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fs;
 use std::path::PathBuf;
 
 use repo_metadata::repositories::DetectedRepositories;
@@ -10,7 +11,10 @@ use warp_core::features::FeatureFlag;
 use warpui::{App, Entity, ModelHandle, SingletonEntity as _};
 use watcher::HomeDirectoryWatcher;
 
-use super::{CloudEnvMcpScanServer, FileBasedMCPManager, FileBasedMCPManagerEvent, MCPProvider};
+use super::{
+    CloudEnvMcpScanServer, FileBasedMCPActivationMode, FileBasedMCPManager,
+    FileBasedMCPManagerEvent, MCPProvider,
+};
 use crate::ai::mcp::{FileMCPWatcher, ParsedTemplatableMCPServerResult};
 use crate::auth::AuthStateProvider;
 use crate::global_resource_handles::{GlobalResourceHandles, GlobalResourceHandlesProvider};
@@ -232,6 +236,143 @@ fn test_deactivating_file_based_server_emits_despawn() {
         manager_handle.update(&mut app, |manager, ctx| {
             manager.apply_parsed_servers(repo_path.clone(), MCPProvider::Claude, parsed, ctx);
             manager.set_server_activation(installation_uuid, false, ctx);
+        });
+
+        events.read(&app, |events, _| {
+            assert_eq!(events.spawned_uuids, vec![installation_uuid]);
+            assert_eq!(events.despawned_uuids, vec![installation_uuid]);
+        });
+    });
+}
+
+#[test]
+fn test_activating_external_file_based_server_copies_to_warp_config() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+    let repo_path = temp_dir.path().join("test-repo");
+    let codex_config_path = repo_path.join(".codex/config.toml");
+    let parsed = parse_config_mcp_json(
+        r#"{"mcpServers": {"linear": {"command": "npx", "args": ["-y", "mcp-remote", "https://mcp.linear.app/sse"]}}}"#,
+    );
+    let installation_uuid = parsed[0]
+        .templatable_mcp_server_installation
+        .as_ref()
+        .expect("server should have an installation")
+        .uuid();
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+        let events = subscribe_events(&mut app, &manager_handle);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.apply_parsed_servers_from_config(
+                repo_path.clone(),
+                MCPProvider::Codex,
+                codex_config_path.clone(),
+                parsed,
+                ctx,
+            );
+            manager.set_server_activation_with_mode(
+                installation_uuid,
+                true,
+                FileBasedMCPActivationMode::CopyToWarpConfig,
+                ctx,
+            );
+        });
+
+        let warp_config_path = repo_path.join(".warp/.mcp.json");
+        let warp_config = fs::read_to_string(&warp_config_path)
+            .expect("activation should copy the detected MCP into Warp config");
+        let warp_config: serde_json::Value =
+            serde_json::from_str(&warp_config).expect("Warp MCP config should be valid JSON");
+        assert_eq!(
+            warp_config["mcpServers"]["linear"]["command"],
+            serde_json::Value::String("npx".to_string())
+        );
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.remove_servers_for_root_provider(
+                &repo_path,
+                MCPProvider::Codex,
+                &codex_config_path,
+                ctx,
+            );
+
+            assert!(
+                manager.get_installation_by_uuid(installation_uuid).is_some(),
+                "Copied Warp reference should keep the activated server installed after the external source is removed"
+            );
+            assert_eq!(
+                manager.directory_paths_for_installation_and_provider(
+                    installation_uuid,
+                    MCPProvider::Warp,
+                ),
+                vec![repo_path.clone()],
+            );
+        });
+
+        events.read(&app, |events, _| {
+            assert_eq!(events.spawned_uuids, vec![installation_uuid]);
+            assert!(
+                events.despawned_uuids.is_empty(),
+                "Removing the external source must not despawn a server copied into Warp config"
+            );
+        });
+    });
+}
+
+#[test]
+fn test_activating_external_file_based_server_can_reference_without_copying() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir should be created");
+    let repo_path = temp_dir.path().join("test-repo");
+    let codex_config_path = repo_path.join(".codex/config.toml");
+    let parsed = parse_config_mcp_json(
+        r#"{"mcpServers": {"linear": {"command": "npx", "args": ["-y", "mcp-remote", "https://mcp.linear.app/sse"]}}}"#,
+    );
+    let installation_uuid = parsed[0]
+        .templatable_mcp_server_installation
+        .as_ref()
+        .expect("server should have an installation")
+        .uuid();
+
+    App::test((), |mut app| async move {
+        let manager_handle = setup_app(&mut app);
+        let events = subscribe_events(&mut app, &manager_handle);
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.apply_parsed_servers_from_config(
+                repo_path.clone(),
+                MCPProvider::Codex,
+                codex_config_path.clone(),
+                parsed,
+                ctx,
+            );
+            manager.set_server_activation_with_mode(
+                installation_uuid,
+                true,
+                FileBasedMCPActivationMode::ReferenceOnly,
+                ctx,
+            );
+        });
+
+        assert!(
+            !repo_path.join(".warp/.mcp.json").exists(),
+            "reference-only activation should not create a Warp config copy"
+        );
+
+        manager_handle.update(&mut app, |manager, ctx| {
+            manager.remove_servers_for_root_provider(
+                &repo_path,
+                MCPProvider::Codex,
+                &codex_config_path,
+                ctx,
+            );
+
+            assert!(
+                manager
+                    .get_installation_by_uuid(installation_uuid)
+                    .is_none(),
+                "Reference-only activation should depend on the external source remaining present"
+            );
         });
 
         events.read(&app, |events, _| {

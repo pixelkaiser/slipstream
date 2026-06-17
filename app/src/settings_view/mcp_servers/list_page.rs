@@ -13,7 +13,7 @@ use warp_core::ui::appearance::AppearanceEvent;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::Icon;
 use warpui::elements::{
-    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
+    Align, Border, ChildView, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Dismiss,
     Expanded, Fill, Flex, FormattedTextElement, HighlightedHyperlink, MainAxisAlignment,
     MainAxisSize, ParentElement, Radius, Text,
 };
@@ -37,8 +37,8 @@ use crate::ai::mcp::{
     FileMCPWatcherEvent,
 };
 use crate::ai::mcp::{
-    logs, FileBasedMCPManager, MCPGalleryManager, MCPProvider, MCPServerUpdate,
-    TemplatableMCPServerInstallation,
+    logs, FileBasedMCPActivationMode, FileBasedMCPManager, MCPGalleryManager, MCPProvider,
+    MCPServerUpdate, TemplatableMCPServerInstallation,
 };
 use crate::appearance::Appearance;
 use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
@@ -62,8 +62,11 @@ use crate::settings_view::settings_page::{
     build_toggle_element, render_body_item_label, LocalOnlyIconState, ToggleState,
 };
 use crate::ui_components::blended_colors;
+use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::util::truncation::truncate_from_end;
-use crate::view_components::action_button::{ActionButton, NakedTheme};
+use crate::view_components::action_button::{
+    ActionButton, NakedTheme, PrimaryTheme, SecondaryTheme,
+};
 use crate::view_components::DismissibleToast;
 use crate::workflows::local_workflows::tail_command_for_shell;
 use crate::workspace::Workspace;
@@ -109,8 +112,142 @@ pub enum MCPServersListPageViewAction {
     ToggleFileBasedMcp,
 }
 
+const FILE_BASED_ACTIVATION_DIALOG_WIDTH: f32 = 520.;
+
 const EMPTY_STATE_TEXT: &str = "Once you add a MCP server, it will be shown here.";
 const NO_SEARCH_RESULTS_TEXT: &str = "No search results found";
+
+#[derive(Debug, Clone)]
+enum DetectedFileBasedMCPActivationDialogEvent {
+    Cancel,
+    ReferenceOnly,
+    CopyToWarpConfig,
+}
+
+#[derive(Debug, Clone)]
+enum DetectedFileBasedMCPActivationDialogAction {
+    Cancel,
+    ReferenceOnly,
+    CopyToWarpConfig,
+}
+
+struct DetectedFileBasedMCPActivationDialog {
+    server_name: String,
+    cancel_button: ViewHandle<ActionButton>,
+    reference_button: ViewHandle<ActionButton>,
+    copy_button: ViewHandle<ActionButton>,
+}
+
+impl DetectedFileBasedMCPActivationDialog {
+    fn new(ctx: &mut ViewContext<Self>) -> Self {
+        let cancel_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(DetectedFileBasedMCPActivationDialogAction::Cancel)
+            })
+        });
+
+        let reference_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Reference only", SecondaryTheme)
+                .with_icon(Icon::LinkExternal)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(
+                        DetectedFileBasedMCPActivationDialogAction::ReferenceOnly,
+                    )
+                })
+        });
+
+        let copy_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new(
+                format!("Copy to {}", ChannelState::product_name()),
+                PrimaryTheme,
+            )
+            .with_icon(Icon::Copy)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(
+                    DetectedFileBasedMCPActivationDialogAction::CopyToWarpConfig,
+                )
+            })
+        });
+
+        Self {
+            server_name: "this server".to_string(),
+            cancel_button,
+            reference_button,
+            copy_button,
+        }
+    }
+
+    fn set_server_name(&mut self, server_name: String, ctx: &mut ViewContext<Self>) {
+        self.server_name = server_name;
+        ctx.notify();
+    }
+}
+
+impl Entity for DetectedFileBasedMCPActivationDialog {
+    type Event = DetectedFileBasedMCPActivationDialogEvent;
+}
+
+impl View for DetectedFileBasedMCPActivationDialog {
+    fn ui_name() -> &'static str {
+        "DetectedFileBasedMCPActivationDialog"
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        let product_name = ChannelState::product_name();
+        let appearance = Appearance::as_ref(app);
+        let dialog = Dialog::new(
+            "Add detected MCP server?".to_string(),
+            Some(format!(
+                "Copy {} into {product_name}'s MCP config to keep an editable copy, or reference the existing provider config without copying.",
+                self.server_name
+            )),
+            dialog_styles(appearance),
+        )
+        .with_bottom_row_child(ChildView::new(&self.cancel_button).finish())
+        .with_bottom_row_child(
+            Container::new(ChildView::new(&self.reference_button).finish())
+                .with_margin_left(12.)
+                .finish(),
+        )
+        .with_bottom_row_child(
+            Container::new(ChildView::new(&self.copy_button).finish())
+                .with_margin_left(12.)
+                .finish(),
+        )
+        .with_width(FILE_BASED_ACTIVATION_DIALOG_WIDTH)
+        .build()
+        .finish();
+
+        Dismiss::new(dialog)
+            .prevent_interaction_with_other_elements()
+            .on_dismiss(|ctx, _app| {
+                ctx.dispatch_typed_action(DetectedFileBasedMCPActivationDialogAction::Cancel)
+            })
+            .finish()
+    }
+}
+
+impl TypedActionView for DetectedFileBasedMCPActivationDialog {
+    type Action = DetectedFileBasedMCPActivationDialogAction;
+
+    fn handle_action(
+        &mut self,
+        action: &DetectedFileBasedMCPActivationDialogAction,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match action {
+            DetectedFileBasedMCPActivationDialogAction::Cancel => {
+                ctx.emit(DetectedFileBasedMCPActivationDialogEvent::Cancel);
+            }
+            DetectedFileBasedMCPActivationDialogAction::ReferenceOnly => {
+                ctx.emit(DetectedFileBasedMCPActivationDialogEvent::ReferenceOnly);
+            }
+            DetectedFileBasedMCPActivationDialogAction::CopyToWarpConfig => {
+                ctx.emit(DetectedFileBasedMCPActivationDialogEvent::CopyToWarpConfig);
+            }
+        }
+    }
+}
 
 pub struct MCPServersListPageView {
     server_cards: HashMap<ServerCardItemId, ViewHandle<ServerCardView>>,
@@ -121,7 +258,9 @@ pub struct MCPServersListPageView {
     search_editor: ViewHandle<EditorView>,
     search_bar: ViewHandle<SearchBar>,
     add_button: ViewHandle<ActionButton>,
+    detected_file_based_mcp_activation_dialog: ViewHandle<DetectedFileBasedMCPActivationDialog>,
     file_based_mcp_toggle: SwitchStateHandle,
+    pending_file_based_activation_uuid: Option<Uuid>,
 }
 
 impl MCPServersListPageView {
@@ -245,6 +384,15 @@ impl MCPServersListPageView {
                 .on_click(|ctx| ctx.dispatch_typed_action(MCPServersListPageViewAction::Add))
         });
 
+        let detected_file_based_mcp_activation_dialog =
+            ctx.add_typed_action_view(DetectedFileBasedMCPActivationDialog::new);
+        ctx.subscribe_to_view(
+            &detected_file_based_mcp_activation_dialog,
+            |me, _, event, ctx| {
+                me.handle_detected_file_based_mcp_activation_dialog_event(event, ctx);
+            },
+        );
+
         let mut me = Self {
             server_cards: Default::default(),
             gallery_server_cards,
@@ -253,7 +401,9 @@ impl MCPServersListPageView {
             search_editor,
             search_bar,
             add_button,
+            detected_file_based_mcp_activation_dialog,
             file_based_mcp_toggle: Default::default(),
+            pending_file_based_activation_uuid: None,
         };
 
         me.create_server_cards(ctx);
@@ -724,8 +874,13 @@ impl MCPServersListPageView {
             },
             ServerCardEvent::Install(item_id) => match item_id {
                 ServerCardItemId::FileBasedMCP(uuid) => {
-                    // Clicking the template card for a file-based server starts it.
-                    self.toggle_server_running_file_based(*uuid, true, ctx);
+                    // Externally detected servers can either be referenced in place or copied
+                    // into Warp's MCP config for editing.
+                    if FileBasedMCPManager::as_ref(ctx).has_external_source(*uuid) {
+                        self.show_file_based_activation_choice(*uuid, ctx);
+                    } else {
+                        self.toggle_server_running_file_based(*uuid, true, ctx);
+                    }
                 }
                 ServerCardItemId::TemplatableMCP(template_uuid) => {
                     let templatable_mcp_server = TemplatableMCPServerManager::as_ref(ctx)
@@ -1095,9 +1250,11 @@ impl MCPServersListPageView {
         ctx.notify();
     }
 
-    pub fn get_modal_content(&self) -> Option<Box<dyn Element>> {
+    pub fn get_modal_content(&self, _app: &AppContext) -> Option<Box<dyn Element>> {
         if self.update_modal_state.is_open() {
             Some(self.update_modal_state.render())
+        } else if self.pending_file_based_activation_uuid.is_some() {
+            Some(ChildView::new(&self.detected_file_based_mcp_activation_dialog).finish())
         } else {
             None
         }
@@ -1798,14 +1955,86 @@ impl MCPServersListPageView {
         self.create_file_based_server_cards(ctx);
     }
 
+    fn show_file_based_activation_choice(&mut self, uuid: Uuid, ctx: &mut ViewContext<Self>) {
+        let server_name = FileBasedMCPManager::as_ref(ctx)
+            .get_installation_by_uuid(uuid)
+            .map(|installation| installation.templatable_mcp_server().name.clone())
+            .unwrap_or_else(|| "this server".to_string());
+        self.detected_file_based_mcp_activation_dialog
+            .update(ctx, |dialog, ctx| dialog.set_server_name(server_name, ctx));
+        self.pending_file_based_activation_uuid = Some(uuid);
+        ctx.emit(MCPServersListPageViewEvent::ShowModal);
+        ctx.notify();
+    }
+
+    fn hide_file_based_activation_choice(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.pending_file_based_activation_uuid.take().is_some() {
+            ctx.emit(MCPServersListPageViewEvent::HideModal);
+            ctx.notify();
+        }
+    }
+
+    fn activate_pending_file_based_server(
+        &mut self,
+        mode: FileBasedMCPActivationMode,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(uuid) = self.pending_file_based_activation_uuid.take() else {
+            return;
+        };
+
+        self.toggle_server_running_file_based_with_mode(uuid, true, mode, ctx);
+        ctx.emit(MCPServersListPageViewEvent::HideModal);
+        ctx.notify();
+    }
+
+    fn handle_detected_file_based_mcp_activation_dialog_event(
+        &mut self,
+        event: &DetectedFileBasedMCPActivationDialogEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            DetectedFileBasedMCPActivationDialogEvent::Cancel => {
+                self.hide_file_based_activation_choice(ctx);
+            }
+            DetectedFileBasedMCPActivationDialogEvent::ReferenceOnly => {
+                self.activate_pending_file_based_server(
+                    FileBasedMCPActivationMode::ReferenceOnly,
+                    ctx,
+                );
+            }
+            DetectedFileBasedMCPActivationDialogEvent::CopyToWarpConfig => {
+                self.activate_pending_file_based_server(
+                    FileBasedMCPActivationMode::CopyToWarpConfig,
+                    ctx,
+                );
+            }
+        }
+    }
+
     fn toggle_server_running_file_based(
         &self,
         uuid: Uuid,
         switch_state: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        self.toggle_server_running_file_based_with_mode(
+            uuid,
+            switch_state,
+            FileBasedMCPActivationMode::ReferenceOnly,
+            ctx,
+        );
+    }
+
+    fn toggle_server_running_file_based_with_mode(
+        &self,
+        uuid: Uuid,
+        switch_state: bool,
+        mode: FileBasedMCPActivationMode,
+        ctx: &mut ViewContext<Self>,
+    ) {
         FileBasedMCPManager::handle(ctx).update(ctx, |mgr, ctx| {
-            mgr.set_server_activation(uuid, switch_state, ctx);
+            mgr.set_server_activation_with_mode(uuid, switch_state, mode, ctx);
         });
     }
 

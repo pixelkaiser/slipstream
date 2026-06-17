@@ -6,6 +6,12 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 use super::MCPProvider;
 use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileBasedMCPActivationMode {
+    ReferenceOnly,
+    CopyToWarpConfig,
+}
+
 pub struct FileBasedMCPManager {}
 
 impl FileBasedMCPManager {
@@ -55,10 +61,23 @@ impl FileBasedMCPManager {
         vec![]
     }
 
+    pub fn has_external_source(&self, _installation_uuid: Uuid) -> bool {
+        false
+    }
+
     pub fn set_server_activation(
         &mut self,
         _installation_uuid: Uuid,
         _active: bool,
+        _ctx: &mut ModelContext<Self>,
+    ) {
+    }
+
+    pub fn set_server_activation_with_mode(
+        &mut self,
+        _installation_uuid: Uuid,
+        _active: bool,
+        _mode: FileBasedMCPActivationMode,
         _ctx: &mut ModelContext<Self>,
     ) {
     }

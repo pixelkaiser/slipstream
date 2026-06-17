@@ -1,20 +1,30 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use itertools::Itertools as _;
 use repo_metadata::repositories::DetectedRepositories;
+use serde_json::{Map, Value};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::{FileMCPWatcher, FileMCPWatcherEvent, MCPProvider};
+use crate::ai::mcp::parsing::resolve_json;
 use crate::ai::mcp::templatable_installation::TemplatableMCPServerInstallation;
 use crate::ai::mcp::ParsedTemplatableMCPServerResult;
 use crate::settings::ai::AISettings;
 use crate::settings::AISettingsChangedEvent;
 use crate::warp_managed_paths_watcher::warp_managed_mcp_config_path;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FileBasedMCPActivationMode {
+    ReferenceOnly,
+    CopyToWarpConfig,
+}
 
 /// Singleton model to manage file-based MCP servers.
 #[derive(Default)]
@@ -217,7 +227,13 @@ impl FileBasedMCPManager {
         ctx: &mut ModelContext<Self>,
     ) {
         let config_path = Self::default_config_path_for_root_provider(&root_path, provider);
-        self.apply_parsed_servers_from_config(root_path, provider, config_path, parsed_servers, ctx);
+        self.apply_parsed_servers_from_config(
+            root_path,
+            provider,
+            config_path,
+            parsed_servers,
+            ctx,
+        );
     }
 
     fn apply_parsed_servers_from_config(
@@ -386,6 +402,195 @@ impl FileBasedMCPManager {
 
         root_path.join(provider.project_config_path())
     }
+
+    fn external_root_paths_for_installation(&self, installation_uuid: Uuid) -> Vec<PathBuf> {
+        let Some(hash) = self.get_hash_by_uuid(installation_uuid) else {
+            return vec![];
+        };
+
+        self.file_based_servers_by_root
+            .iter()
+            .filter(|(_, provider_map)| {
+                provider_map.iter().any(|(provider, hashes)| {
+                    *provider != MCPProvider::Warp && hashes.contains(&hash)
+                })
+            })
+            .map(|(root_path, _)| root_path.clone())
+            .sorted()
+            .collect()
+    }
+
+    pub fn has_external_source(&self, installation_uuid: Uuid) -> bool {
+        !self
+            .external_root_paths_for_installation(installation_uuid)
+            .is_empty()
+    }
+
+    fn add_warp_config_reference_for_installation(
+        &mut self,
+        root_path: PathBuf,
+        config_path: PathBuf,
+        installation: &TemplatableMCPServerInstallation,
+    ) {
+        let Some(hash) = installation.hash() else {
+            return;
+        };
+
+        self.file_based_servers
+            .entry(hash)
+            .or_insert_with(|| installation.clone());
+        self.file_based_servers_by_root
+            .entry(root_path.clone())
+            .or_default()
+            .entry(MCPProvider::Warp)
+            .or_default()
+            .insert(hash);
+        self.config_paths_by_root_provider
+            .entry(root_path)
+            .or_default()
+            .insert(MCPProvider::Warp, config_path);
+    }
+
+    fn copy_external_installation_to_warp_configs(
+        &mut self,
+        installation: &TemplatableMCPServerInstallation,
+    ) {
+        for root_path in self.external_root_paths_for_installation(installation.uuid()) {
+            let config_path =
+                Self::default_config_path_for_root_provider(&root_path, MCPProvider::Warp);
+            match Self::merge_installation_into_warp_config(installation, &config_path) {
+                Ok(()) => self.add_warp_config_reference_for_installation(
+                    root_path,
+                    config_path,
+                    installation,
+                ),
+                Err(err) => {
+                    log::error!(
+                        "Failed to copy externally detected MCP server '{}' into Warp config {}: {err:#}",
+                        installation.templatable_mcp_server().name,
+                        config_path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    fn merge_installation_into_warp_config(
+        installation: &TemplatableMCPServerInstallation,
+        config_path: &Path,
+    ) -> anyhow::Result<()> {
+        let server_map = Self::resolved_server_map(installation)?;
+        let mut config = Self::read_warp_mcp_config(config_path)?;
+        let servers = Self::servers_object_for_warp_config(&mut config)?;
+        servers.extend(server_map);
+
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut contents = serde_json::to_string_pretty(&config)?;
+        contents.push('\n');
+        fs::write(config_path, contents)?;
+        Ok(())
+    }
+
+    fn resolved_server_map(
+        installation: &TemplatableMCPServerInstallation,
+    ) -> anyhow::Result<Map<String, Value>> {
+        let resolved_json = resolve_json(installation);
+        let value: Value = serde_json::from_str(&resolved_json)?;
+        let object = value.as_object().ok_or_else(|| {
+            anyhow::anyhow!(
+                "resolved MCP server config for '{}' is not a JSON object",
+                installation.templatable_mcp_server().name
+            )
+        })?;
+
+        if object.len() != 1 {
+            anyhow::bail!(
+                "resolved MCP server config for '{}' must contain exactly one server, found {}",
+                installation.templatable_mcp_server().name,
+                object.len()
+            );
+        }
+
+        Ok(object.clone())
+    }
+
+    fn read_warp_mcp_config(config_path: &Path) -> anyhow::Result<Value> {
+        match fs::read_to_string(config_path) {
+            Ok(contents) if contents.trim().is_empty() => Ok(Value::Object(Map::new())),
+            Ok(contents) => Ok(serde_json::from_str(&contents)?),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(Value::Object(Map::new())),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    fn servers_object_for_warp_config(
+        config: &mut Value,
+    ) -> anyhow::Result<&mut Map<String, Value>> {
+        #[derive(Clone, Copy)]
+        enum WrapperKey {
+            NestedMcpServers,
+            Servers,
+            McpServers,
+            McpServersSnake,
+        }
+
+        let wrapper_key = if config
+            .pointer("/mcp/servers")
+            .and_then(Value::as_object)
+            .is_some()
+        {
+            Some(WrapperKey::NestedMcpServers)
+        } else if config.get("servers").and_then(Value::as_object).is_some() {
+            Some(WrapperKey::Servers)
+        } else if config
+            .get("mcpServers")
+            .and_then(Value::as_object)
+            .is_some()
+        {
+            Some(WrapperKey::McpServers)
+        } else if config
+            .get("mcp_servers")
+            .and_then(Value::as_object)
+            .is_some()
+        {
+            Some(WrapperKey::McpServersSnake)
+        } else {
+            None
+        };
+
+        match wrapper_key {
+            Some(WrapperKey::NestedMcpServers) => config
+                .pointer_mut("/mcp/servers")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| anyhow::anyhow!("mcp.servers is not a JSON object")),
+            Some(WrapperKey::Servers) => config
+                .get_mut("servers")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| anyhow::anyhow!("servers is not a JSON object")),
+            Some(WrapperKey::McpServers) => config
+                .get_mut("mcpServers")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| anyhow::anyhow!("mcpServers is not a JSON object")),
+            Some(WrapperKey::McpServersSnake) => config
+                .get_mut("mcp_servers")
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| anyhow::anyhow!("mcp_servers is not a JSON object")),
+            None => {
+                let object = config
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow::anyhow!("Warp MCP config is not a JSON object"))?;
+                object
+                    .entry("mcpServers")
+                    .or_insert_with(|| Value::Object(Map::new()))
+                    .as_object_mut()
+                    .ok_or_else(|| anyhow::anyhow!("mcpServers is not a JSON object"))
+            }
+        }
+    }
+
     fn auto_start_decision(&self, hash: u64, file_based_mcp_enabled: bool) -> AutoStartDecision {
         let server_type = if self.is_global_warp_server(hash) {
             FileBasedMCPServerType::GlobalWarp
@@ -437,9 +642,7 @@ impl FileBasedMCPManager {
                 .activated_file_based_server_uuids
                 .contains(&installation_uuid);
             if should_autostart || is_activated {
-                log::info!(
-                    "Spawning file-based MCP server '{server_name}' ({installation_uuid})"
-                );
+                log::info!("Spawning file-based MCP server '{server_name}' ({installation_uuid})");
                 auto_started_uuids.push(installation_uuid);
                 to_spawn.push(installation);
             }
@@ -554,6 +757,21 @@ impl FileBasedMCPManager {
         active: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.set_server_activation_with_mode(
+            installation_uuid,
+            active,
+            FileBasedMCPActivationMode::ReferenceOnly,
+            ctx,
+        );
+    }
+
+    pub fn set_server_activation_with_mode(
+        &mut self,
+        installation_uuid: Uuid,
+        active: bool,
+        mode: FileBasedMCPActivationMode,
+        ctx: &mut ModelContext<Self>,
+    ) {
         if active {
             let Some(installation) = self.get_installation_by_uuid(installation_uuid).cloned()
             else {
@@ -563,6 +781,9 @@ impl FileBasedMCPManager {
                 return;
             };
 
+            if mode == FileBasedMCPActivationMode::CopyToWarpConfig {
+                self.copy_external_installation_to_warp_configs(&installation);
+            }
             self.activated_file_based_server_uuids
                 .insert(installation_uuid);
             Self::persist_file_based_activation(installation_uuid, true, ctx);
