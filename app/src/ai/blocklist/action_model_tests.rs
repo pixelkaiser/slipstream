@@ -4,6 +4,7 @@ use std::sync::Arc;
 use super::*;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::AIAgentActionResultType;
+use serde_json::json;
 
 fn make_action_result(id: &str) -> Arc<AIAgentActionResult> {
     Arc::new(AIAgentActionResult {
@@ -33,6 +34,43 @@ fn count_startable_actions_for_pass(phases: &[(RunningActionPhase, bool)]) -> us
     }
 
     count
+}
+
+fn call_mcp_tool_action() -> AIAgentActionType {
+    AIAgentActionType::CallMCPTool {
+        server_id: None,
+        name: "list_tools".to_string(),
+        input: json!({}),
+    }
+}
+
+#[test]
+fn call_mcp_tool_action_phase_is_parallel_readonly() {
+    let phase = execute::BlocklistAIActionExecutor::static_parallel_phase_for_action(
+        &call_mcp_tool_action(),
+    );
+    assert_eq!(
+        phase,
+        Some(RunningActionPhase::Parallel(
+            execute::ParallelExecutionPolicy::ReadOnlyLocalContext
+        ))
+    );
+}
+
+#[test]
+fn multiple_call_mcp_tool_actions_run_in_same_parallel_batch() {
+    let phase = execute::BlocklistAIActionExecutor::static_parallel_phase_for_action(
+        &call_mcp_tool_action(),
+    )
+    .expect("callMCPTool should be read-only parallel");
+    let actions = vec![(phase, true), (phase, true), (phase, true)];
+    let actions_with_confirmation_block = vec![(phase, true), (phase, false), (phase, true)];
+
+    assert_eq!(count_startable_actions_for_pass(&actions), 3);
+    assert_eq!(
+        count_startable_actions_for_pass(&actions_with_confirmation_block),
+        1
+    );
 }
 
 #[test]
