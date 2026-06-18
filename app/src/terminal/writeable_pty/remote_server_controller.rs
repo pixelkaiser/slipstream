@@ -188,12 +188,12 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         }
     }
 
-    /// Extracts the `SessionInfo` from the stash and writes the bootstrap
-    /// script to the PTY via `PtyController::initialize_shell`.
+    /// Extracts the `SessionInfo` from the stash and writes the delayed
+    /// bootstrap script to the PTY.
     fn flush_stashed_bootstrap(&mut self, session_info: SessionInfo, ctx: &mut ModelContext<Self>) {
         if let Some(pty) = self.pty_controller.upgrade(ctx) {
             pty.update(ctx, |pty, ctx| {
-                pty.initialize_shell(&session_info, ctx);
+                pty.initialize_shell_after_deferred_ssh_setup(&session_info, ctx);
             });
         } else {
             log::warn!("Remote server PtyController dropped before bootstrap could be flushed");
@@ -209,7 +209,10 @@ impl<T: EventLoopSender> RemoteServerController<T> {
     ) {
         if let Some(pty) = self.pty_controller.upgrade(ctx) {
             pty.update(ctx, |pty, ctx| {
-                pty.initialize_shell_with_macos_remote_pty_workaround(&session_info, ctx);
+                pty.initialize_shell_after_deferred_ssh_setup_with_macos_remote_pty_workaround(
+                    &session_info,
+                    ctx,
+                );
             });
         } else {
             log::warn!("Remote server PtyController dropped before bootstrap could be flushed");

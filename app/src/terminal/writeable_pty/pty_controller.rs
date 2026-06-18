@@ -38,6 +38,7 @@ const SWITCH_TO_PS1_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'p'];
 const SWITCH_TO_WARP_PROMPT_ESCAPE_SEQUENCE: &[u8] = &[escape_sequences::C0::ESC, b'w'];
 const MACOS_REMOTE_BOOTSTRAP_CHUNK_SIZE: usize = 1000;
 const MACOS_REMOTE_BOOTSTRAP_CHUNK_DELAY_MS: u64 = 10;
+const DEFERRED_SSH_BOOTSTRAP_PRELUDE_DELAY_MS: u64 = 50;
 
 /// Represents a single call to write bytes to the PTY asynchronously.
 enum PtyWrite {
@@ -382,12 +383,9 @@ impl<T: EventLoopSender> PtyController<T> {
         self.write_bootstrap_script_to_shell(pending_session_info, ctx, shell_type, bootstrap);
     }
 
-    /// Writes the bootstrap script in small chunks for macOS remotes.
-    ///
-    /// macOS 15+ PTYs can drop or corrupt larger pasted writes. The manual SSH
-    /// warpify flow uses the same 1000-byte chunk size to avoid leaving the
-    /// remote shell waiting forever mid-bootstrap.
-    pub(super) fn initialize_shell_with_macos_remote_pty_workaround(
+    /// Writes a shell bootstrap after the SSH remote-server setup flow has
+    /// delayed the original `InitShell` response.
+    pub(super) fn initialize_shell_after_deferred_ssh_setup(
         &mut self,
         pending_session_info: &SessionInfo,
         ctx: &mut ModelContext<Self>,
@@ -401,12 +399,84 @@ impl<T: EventLoopSender> PtyController<T> {
         }
 
         let bootstrap = bootstrap::script_for_shell(shell_type, &crate::ASSETS);
-        self.write_bootstrap_script_to_shell_in_chunks(
-            bootstrap,
-            MACOS_REMOTE_BOOTSTRAP_CHUNK_SIZE,
-            MACOS_REMOTE_BOOTSTRAP_CHUNK_DELAY_MS,
+        self.write_bootstrap_script_after_deferred_ssh_setup(
+            pending_session_info.clone(),
             ctx,
+            shell_type,
+            bootstrap,
+            false,
         );
+    }
+
+    /// Writes a delayed SSH bootstrap in chunks for macOS remotes.
+    pub(super) fn initialize_shell_after_deferred_ssh_setup_with_macos_remote_pty_workaround(
+        &mut self,
+        pending_session_info: &SessionInfo,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let shell_type = pending_session_info.shell.shell_type();
+
+        #[cfg(feature = "local_fs")]
+        if let Some(path) = permanent_bootstrap_file(shell_type, pending_session_info) {
+            self.source_bootstrap_script(path, shell_type, ctx);
+            return;
+        }
+
+        let bootstrap = bootstrap::script_for_shell(shell_type, &crate::ASSETS);
+        self.write_bootstrap_script_after_deferred_ssh_setup(
+            pending_session_info.clone(),
+            ctx,
+            shell_type,
+            bootstrap,
+            true,
+        );
+    }
+
+    fn write_bootstrap_script_after_deferred_ssh_setup(
+        &mut self,
+        pending_session_info: SessionInfo,
+        ctx: &mut ModelContext<Self>,
+        shell_type: ShellType,
+        bootstrap: Cow<'static, [u8]>,
+        use_macos_remote_pty_workaround: bool,
+    ) {
+        if let Some(prelude) = deferred_ssh_bootstrap_prelude(shell_type) {
+            self.write_bytes(prelude, ctx);
+            ctx.spawn(
+                warpui::r#async::Timer::after(Duration::from_millis(
+                    DEFERRED_SSH_BOOTSTRAP_PRELUDE_DELAY_MS,
+                )),
+                move |me, _, ctx| {
+                    if use_macos_remote_pty_workaround {
+                        me.write_bootstrap_script_to_shell_in_chunks(
+                            bootstrap,
+                            MACOS_REMOTE_BOOTSTRAP_CHUNK_SIZE,
+                            MACOS_REMOTE_BOOTSTRAP_CHUNK_DELAY_MS,
+                            ctx,
+                        );
+                    } else {
+                        me.write_bootstrap_script_to_shell(
+                            &pending_session_info,
+                            ctx,
+                            shell_type,
+                            bootstrap,
+                        );
+                    }
+                },
+            );
+            return;
+        }
+
+        if use_macos_remote_pty_workaround {
+            self.write_bootstrap_script_to_shell_in_chunks(
+                bootstrap,
+                MACOS_REMOTE_BOOTSTRAP_CHUNK_SIZE,
+                MACOS_REMOTE_BOOTSTRAP_CHUNK_DELAY_MS,
+                ctx,
+            );
+        } else {
+            self.write_bootstrap_script_to_shell(&pending_session_info, ctx, shell_type, bootstrap);
+        }
     }
 
     /// Writes the bytes to to terminate and run the bootstrap script.
@@ -866,6 +936,33 @@ mod command_bytes_tests;
 #[cfg(test)]
 #[path = "pty_controller_lifecycle_tests.rs"]
 mod lifecycle_tests;
+
+fn deferred_ssh_bootstrap_prelude(shell_type: ShellType) -> Option<&'static [u8]> {
+    match shell_type {
+        ShellType::Bash => Some(b" command -p stty raw -echo 2>/dev/null || true\n"),
+        ShellType::Zsh => Some(b" unsetopt ZLE 2>/dev/null || true\n"),
+        ShellType::Fish | ShellType::PowerShell => None,
+    }
+}
+
+#[cfg(test)]
+mod deferred_ssh_bootstrap_tests {
+    use super::*;
+
+    #[test]
+    fn prelude_reenters_non_echoing_mode_for_delayed_shells() {
+        assert_eq!(
+            deferred_ssh_bootstrap_prelude(ShellType::Bash),
+            Some(&b" command -p stty raw -echo 2>/dev/null || true\n"[..])
+        );
+        assert_eq!(
+            deferred_ssh_bootstrap_prelude(ShellType::Zsh),
+            Some(&b" unsetopt ZLE 2>/dev/null || true\n"[..])
+        );
+        assert_eq!(deferred_ssh_bootstrap_prelude(ShellType::Fish), None);
+        assert_eq!(deferred_ssh_bootstrap_prelude(ShellType::PowerShell), None);
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum EventLoopSendError {
