@@ -6,7 +6,6 @@ use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use regex::Regex;
 use settings::{Setting, ToggleableSetting};
 use strum::IntoEnumIterator;
-use warp_core::features::FeatureFlag;
 use warpui::elements::{
     Border, Clipped, ConstrainedBox, Container, Flex, FormattedTextElement, HighlightedHyperlink,
     MouseStateHandle, ParentElement, Text,
@@ -65,10 +64,9 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         ));
     }
 
-    if FeatureFlag::SSHTmuxWrapper.is_enabled()
-        && WarpifySettings::as_ref(app)
-            .use_ssh_tmux_wrapper
-            .is_value_explicitly_set()
+    if WarpifySettings::as_ref(app)
+        .use_ssh_tmux_wrapper
+        .is_value_explicitly_set()
     {
         toggle_binding_pairs.push(ToggleSettingActionPair::new(
             "SSH session detection for Warpification",
@@ -233,8 +231,8 @@ impl WarpifyPageView {
         warpify_settings
             .enable_ssh_warpification
             .is_supported_on_current_platform()
-            && (FeatureFlag::SSHTmuxWrapper.is_enabled()
-                || FeatureFlag::SshRemoteServer.is_enabled())
+            && (Self::should_show_ssh_tmux_settings(app)
+                || Self::should_show_ssh_remote_server_settings())
     }
 
     /// This method ensures each command in the SubshellSettings has a matching button state for
@@ -302,11 +300,15 @@ impl WarpifyPageView {
     }
 
     fn should_show_ssh_remote_server_settings() -> bool {
+        use warp_core::features::FeatureFlag;
+
         FeatureFlag::SshRemoteServer.is_enabled()
     }
 
-    fn should_show_ssh_tmux_settings() -> bool {
-        FeatureFlag::SSHTmuxWrapper.is_enabled()
+    fn should_show_ssh_tmux_settings(app: &AppContext) -> bool {
+        WarpifySettings::as_ref(app)
+            .use_ssh_tmux_wrapper
+            .is_value_explicitly_set()
     }
 
     fn create_ssh_extension_download_base_url_editor(
@@ -457,7 +459,6 @@ impl WarpifyPageView {
                     warpify_settings.denylist_ssh_host(new_command, ctx);
                 });
 
-                send_telemetry_from_ctx!(TelemetryEvent::AddDenylistedSshTmuxWrapperHost, ctx);
             }
             SubmittableTextInputEvent::Escape => ctx.emit(SettingsPageEvent::FocusModal),
         }
@@ -478,7 +479,6 @@ impl WarpifyPageView {
     }
 
     fn remove_denylisted_ssh_host(&self, index: usize, ctx: &mut ViewContext<Self>) {
-        send_telemetry_from_ctx!(TelemetryEvent::RemoveDenylistedSshTmuxWrapperHost, ctx);
         WarpifySettings::handle(ctx).update(ctx, |warpify, ctx| {
             warpify.remove_denylisted_ssh_host(index, ctx)
         });
@@ -779,12 +779,6 @@ impl TypedActionView for WarpifyPageView {
             ToggleTmuxWarpification => {
                 WarpifySettings::handle(ctx).update(ctx, |ssh_settings, ctx| {
                     report_if_error!(ssh_settings.use_ssh_tmux_wrapper.toggle_and_save_value(ctx));
-                    send_telemetry_from_ctx!(
-                        TelemetryEvent::ToggleSshTmuxWrapper {
-                            enabled: *ssh_settings.use_ssh_tmux_wrapper.value(),
-                        },
-                        ctx
-                    );
                 });
             }
             SetSshExtensionInstallMode(mode) => {
@@ -1191,11 +1185,7 @@ impl SettingsWidget for SSHWidget {
         // Only show the tmux warpification toggle if the user has explicitly changed
         // the setting. We are gradually deprecating tmux warpification, so new users
         // should not see this option, but existing users who opted in keep it.
-        if WarpifyPageView::should_show_ssh_tmux_settings()
-            && WarpifySettings::as_ref(app)
-                .use_ssh_tmux_wrapper
-                .is_value_explicitly_set()
-        {
+        if WarpifyPageView::should_show_ssh_tmux_settings(app) {
             add_setting(
                 &mut column,
                 &WarpifySettings::as_ref(app).use_ssh_tmux_wrapper,
@@ -1305,8 +1295,9 @@ mod tests {
 
     #[test]
     fn ssh_category_shows_when_only_remote_server_flag_is_enabled() {
+        use warp_core::features::FeatureFlag;
+
         let _remote_server = FeatureFlag::SshRemoteServer.override_enabled(true);
-        let _tmux_wrapper = FeatureFlag::SSHTmuxWrapper.override_enabled(false);
 
         App::test((), |mut app| async move {
             initialize_settings_for_tests(&mut app);
@@ -1319,23 +1310,34 @@ mod tests {
 
     #[test]
     fn remote_server_only_shows_remote_server_settings_without_tmux_settings() {
+        use warp_core::features::FeatureFlag;
+
         let _remote_server = FeatureFlag::SshRemoteServer.override_enabled(true);
-        let _tmux_wrapper = FeatureFlag::SSHTmuxWrapper.override_enabled(false);
-
-        assert!(WarpifyPageView::should_show_ssh_remote_server_settings());
-        assert!(!WarpifyPageView::should_show_ssh_tmux_settings());
-    }
-
-    #[test]
-    fn ssh_category_hides_when_remote_server_and_tmux_flags_are_disabled() {
-        let _remote_server = FeatureFlag::SshRemoteServer.override_enabled(false);
-        let _tmux_wrapper = FeatureFlag::SSHTmuxWrapper.override_enabled(false);
 
         App::test((), |mut app| async move {
             initialize_settings_for_tests(&mut app);
 
             app.update(|ctx| {
-                assert!(!WarpifyPageView::should_show_ssh_category(ctx));
+                assert!(WarpifyPageView::should_show_ssh_remote_server_settings());
+                assert!(!WarpifyPageView::should_show_ssh_tmux_settings(ctx));
+            });
+        });
+    }
+
+    #[test]
+    fn ssh_category_shows_when_remote_server_flag_is_disabled_for_existing_tmux_settings() {
+        use warp_core::features::FeatureFlag;
+
+        let _remote_server = FeatureFlag::SshRemoteServer.override_enabled(false);
+
+        App::test((), |mut app| async move {
+            initialize_settings_for_tests(&mut app);
+
+            app.update(|ctx| {
+                WarpifySettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.use_ssh_tmux_wrapper.set_value(false, ctx));
+                });
+                assert!(WarpifyPageView::should_show_ssh_category(ctx));
             });
         });
     }

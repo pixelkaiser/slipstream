@@ -433,7 +433,7 @@ impl CodexAppServerModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(
             &CodexAppServerSettings::handle(ctx),
-            |model, event, ctx| match event {
+            |model, _, event, ctx| match event {
                 CodexAppServerSettingsChangedEvent::CodexAppServerEnabled { .. }
                 | CodexAppServerSettingsChangedEvent::CodexAppServerUrl { .. }
                 | CodexAppServerSettingsChangedEvent::CodexImportedProjectPaths { .. }

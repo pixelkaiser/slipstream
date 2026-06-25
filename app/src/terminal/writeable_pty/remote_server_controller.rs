@@ -465,8 +465,12 @@ impl<T: EventLoopSender> RemoteServerController<T> {
         };
 
         let install_options = WarpifySettings::as_ref(ctx).ssh_extension_install_options();
-        let transport =
-            SshTransport::new(socket_path, self.build_auth_context(ctx), install_options);
+        let transport = SshTransport::new(
+            socket_path,
+            self.build_auth_context(ctx),
+            true,
+            install_options,
+        );
         self.did_install = true;
         self.remote_platform = None;
         self.preinstall_check = None;

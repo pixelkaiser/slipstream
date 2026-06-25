@@ -49,7 +49,7 @@ use super::lifecycle::{
 use super::secrets::{RespectObfuscatedSecrets, SecretAndHandle};
 use super::selection::ScrollDelta;
 use super::session::{
-    BootstrapSessionType, InBandCommandOutputReceiver, IsLegacySSHSession, SessionId,
+    BootstrapSessionType, InBandCommandOutputReceiver, IsSSHWrapperSession, SessionId,
 };
 use super::{Secret, SecretHandle};
 use crate::ai::ambient_agents::AmbientAgentTaskId;
@@ -1597,7 +1597,7 @@ impl TerminalModel {
     pub fn has_pending_ssh_session(&self) -> bool {
         self.pending_ssh_wrapper_session.is_some()
             || self.pending_session_info.as_ref().is_some_and(|info| {
-                matches!(info.is_legacy_ssh_session, IsLegacySSHSession::Yes { .. })
+                matches!(info.is_ssh_wrapper_session, IsSSHWrapperSession::Yes { .. })
             })
     }
 
@@ -1997,8 +1997,8 @@ impl TerminalModel {
     pub fn recover_failed_ssh_bootstrap(&mut self) -> Option<BootstrappedEvent> {
         let pending_session_info = self.pending_session_info.take()?;
         if !matches!(
-            pending_session_info.is_legacy_ssh_session,
-            IsLegacySSHSession::Yes { .. }
+            pending_session_info.is_ssh_wrapper_session,
+            IsSSHWrapperSession::Yes { .. }
         ) {
             self.pending_session_info = Some(pending_session_info);
             return None;

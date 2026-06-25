@@ -1627,7 +1627,7 @@ pub(crate) fn initialize_app(
         manager.update_provider_config(openai_key, ctx);
         ctx.subscribe_to_model(
             &::ai::api_keys::ApiKeyManager::handle(ctx),
-            |manager: &mut local_multi_agent::LocalMultiAgentManager, event, ctx| {
+            |manager: &mut local_multi_agent::LocalMultiAgentManager, _, event, ctx| {
                 if matches!(event, ::ai::api_keys::ApiKeyManagerEvent::KeysUpdated) {
                     let openai_key = ::ai::api_keys::ApiKeyManager::as_ref(ctx)
                         .openai_key_for_profile(::ai::api_keys::DEFAULT_PROFILE_INFERENCE_KEY);

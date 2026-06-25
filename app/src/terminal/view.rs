@@ -62,7 +62,6 @@ use std::hash::Hash;
 use std::ops::{Deref as _, Range};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
@@ -193,26 +192,13 @@ use super::model::secrets::RichContentSecretTooltipInfo;
 use super::model::selection::ExpandedSelectionRange;
 use super::model::session::SessionBootstrappedEvent;
 use super::settings::AltScreenPaddingMode;
-use super::ssh::SSH_WARPIFY_TIMEOUT_DURATION;
-use super::ssh::error::{SSH_ERROR_BLOCK_VISIBLE_KEY, SshErrorBlock, SshErrorBlockEvent};
-use super::ssh::install_tmux::{
-    SshInstallTmuxBlock, SshInstallTmuxBlockEvent, SshKeyEvent, TmuxInstallMethod,
-    install_root_tmux_script, install_tmux_script,
-};
-use super::ssh::root_access::RootAccess;
-use super::ssh::ssh_detection::evaluate_warpify_ssh_host;
 use super::ssh::util::{
-    InteractiveSshCommand, SshWarpifyCommand, convert_script_to_one_line,
-    parse_interactive_ssh_command,
-};
-use super::ssh::warpify::{
-    SshWarpifyBlock, SshWarpifyBlockEvent, begin_warpify_ssh_session_command,
-    warpify_ssh_session_command,
+    InteractiveSshCommand, SshWarpifyCommand, parse_interactive_ssh_command,
 };
 use super::warpify::success_block::{WarpifySuccessBlock, WarpifySuccessBlockEvent};
 use super::warpify::trigger_state::{SshBlockState, WarpifyState};
 use super::warpify::WarpificationSource;
-use super::{cli_agent, CLIAgent, GridType, HistoryEvent};
+use super::{cli_agent, CLIAgent, GridType};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
 use crate::ai::agent::redaction::redact_secrets;
