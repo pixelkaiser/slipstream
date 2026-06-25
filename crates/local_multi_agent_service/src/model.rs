@@ -38,6 +38,10 @@ pub fn configured_model_aliases(raw_aliases: Option<&str>) -> Result<BTreeMap<St
         .collect())
 }
 
+fn is_auto_alias_id(model_id: &str) -> bool {
+    model_id == "auto" || model_id.starts_with("auto-")
+}
+
 pub fn resolve_provider_model(
     openai_model: Option<&str>,
     warp_model: Option<&str>,
@@ -48,11 +52,11 @@ pub fn resolve_provider_model(
     aliases.extend(configured_model_aliases(local_model_aliases)?);
 
     if let Some(requested_model) = requested_model {
+        if !is_auto_alias_id(requested_model) {
+            return Ok(requested_model.to_owned());
+        }
         if let Some(mapped) = aliases.get(requested_model) {
             return Ok(mapped.clone());
-        }
-        if !requested_model.starts_with("auto") {
-            return Ok(requested_model.to_owned());
         }
     }
 
@@ -93,5 +97,27 @@ mod tests {
     fn non_auto_requested_model_is_preserved() {
         let model = resolve_provider_model(Some("fallback"), Some("provider/model"), None).unwrap();
         assert_eq!(model, "provider/model");
+    }
+
+    #[test]
+    fn autocomplete_requested_model_is_preserved() {
+        let model = resolve_provider_model(
+            Some("Qwen/Qwen3.6-27B-FP8"),
+            Some("autocomplete"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(model, "autocomplete");
+    }
+
+    #[test]
+    fn non_auto_requested_model_is_preserved_even_when_alias_exists() {
+        let model = resolve_provider_model(
+            Some("fallback"),
+            Some("autocomplete"),
+            Some(r#"{"autocomplete":"Qwen/Qwen3.6-27B-FP8","auto-coding":"local/model"}"#),
+        )
+        .unwrap();
+        assert_eq!(model, "autocomplete");
     }
 }
