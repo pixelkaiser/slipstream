@@ -1010,7 +1010,7 @@ impl Session {
     /// background command channels, while keeping the foreground SSH PTY alive.
     pub fn disable_remote_command_execution(&self) -> bool {
         if !matches!(self.session_type(), SessionType::WarpifiedRemote { .. })
-            && !self.is_legacy_ssh_session()
+            && !self.is_ssh_wrapper_session()
         {
             return false;
         }
@@ -1070,9 +1070,9 @@ impl Session {
     }
 
     pub fn legacy_ssh_socket_path(&self) -> Option<PathBuf> {
-        match &self.info.is_legacy_ssh_session {
-            IsLegacySSHSession::Yes { socket_path } => Some(socket_path.clone()),
-            IsLegacySSHSession::No => None,
+        match &self.info.is_ssh_wrapper_session {
+            IsSSHWrapperSession::Yes { socket_path, .. } => Some(socket_path.clone()),
+            IsSSHWrapperSession::No => None,
         }
     }
 

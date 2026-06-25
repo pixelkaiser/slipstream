@@ -17,7 +17,7 @@ use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::grid::Dimensions as _;
 use crate::terminal::model::image_map::StoredImageMetadata;
 use crate::terminal::model::index::Side;
-use crate::terminal::model::session::IsLegacySSHSession;
+use crate::terminal::model::session::IsSSHWrapperSession;
 use crate::terminal::model::selection::ExpandedSelectionRange;
 use crate::terminal::model::test_utils::block_size;
 use crate::terminal::model::ObfuscateSecrets;
@@ -271,8 +271,8 @@ fn recover_failed_ssh_bootstrap_registers_degraded_remote_session() {
         BootstrapSessionType::WarpifiedRemote
     );
     assert!(matches!(
-        event.session_info.is_legacy_ssh_session,
-        IsLegacySSHSession::Yes { .. }
+        event.session_info.is_ssh_wrapper_session,
+        IsSSHWrapperSession::Yes { .. }
     ));
 }
 

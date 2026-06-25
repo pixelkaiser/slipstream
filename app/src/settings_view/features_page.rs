@@ -3013,6 +3013,8 @@ impl FeaturesPageView {
             #[cfg(not(target_family = "wasm"))]
             valid_opencode_server_url: true,
 
+            ssh_wrapper_toggled: false,
+
             #[cfg(any(target_os = "linux", target_os = "freebsd"))]
             force_x11_changed: false,
             gpu_power_preference_changed: false,

@@ -168,7 +168,9 @@ impl Network {
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let heartbeat = ctx.add_model(|_| Heartbeat::default());
-        ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
+        ctx.subscribe_to_model(&heartbeat, |me, _, event, ctx| {
+            me.handle_heartbeat_event(event, ctx);
+        });
         let session_id = join_args.session_id;
 
         let model = Network {
@@ -232,7 +234,9 @@ impl Network {
         let (selection_throttled_tx, selection_rx) = async_channel::unbounded();
         let selection_throttled_rx = throttle(SELECTION_THROTTLE_PERIOD, selection_rx);
         let heartbeat = ctx.add_model(|_| Heartbeat::default());
-        ctx.subscribe_to_model(&heartbeat, Self::handle_heartbeat_event);
+        ctx.subscribe_to_model(&heartbeat, |me, _, event, ctx| {
+            me.handle_heartbeat_event(event, ctx);
+        });
         let session_id = SessionId::new();
         let viewer_id = ParticipantId::new();
         let viewer_firebase_uid = UserUid::new("mock_firebase_uid");

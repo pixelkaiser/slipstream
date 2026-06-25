@@ -42,7 +42,7 @@ impl TerminalView {
             return "Local".to_string();
         };
 
-        if session.is_legacy_ssh_session()
+        if session.is_ssh_wrapper_session()
             || matches!(session.session_type(), SessionType::WarpifiedRemote { .. })
         {
             format!("{}@{}", session.user(), session.hostname())

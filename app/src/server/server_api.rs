@@ -45,8 +45,10 @@ use warp_managed_secrets::client::ManagedSecretsClient;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
 use warp_server_client::base_client::{
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig,
-    AMBIENT_WORKLOAD_TOKEN_HEADER, EVAL_USER_ID_HEADER,
+    AMBIENT_WORKLOAD_TOKEN_HEADER,
 };
+#[cfg(feature = "agent_mode_evals")]
+use warp_server_client::base_client::EVAL_USER_ID_HEADER;
 use warp_server_client::iap::{IapManager, IapState};
 use warp_server_client::network_logging::NetworkLogModel;
 use warpui::r#async::BoxFuture;
@@ -257,6 +259,16 @@ pub enum AIApiError {
     /// between chunks, surfacing as a clean EOF.
     #[error("Response stream ended unexpectedly before completion.")]
     UnexpectedEof,
+}
+
+cfg_if::cfg_if! {
+    if #[cfg(target_family = "wasm")] {
+        pub type AIOutputStream<T> =
+            futures::stream::LocalBoxStream<'static, Result<T, Arc<AIApiError>>>;
+    } else {
+        pub type AIOutputStream<T> =
+            futures::stream::BoxStream<'static, Result<T, Arc<AIApiError>>>;
+    }
 }
 
 impl From<http_client::ResponseError> for AIApiError {

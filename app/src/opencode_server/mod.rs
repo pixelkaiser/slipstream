@@ -232,7 +232,7 @@ impl OpenCodeServerModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(
             &OpenCodeServerSettings::handle(ctx),
-            |model, event, ctx| match event {
+            |model, _, event, ctx| match event {
                 OpenCodeServerSettingsChangedEvent::OpenCodeServerEnabled { .. }
                 | OpenCodeServerSettingsChangedEvent::OpenCodeServerUrl { .. }
                 | OpenCodeServerSettingsChangedEvent::OpenCodeServerUsername { .. }

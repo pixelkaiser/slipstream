@@ -153,6 +153,7 @@ fn new_command_executor_for_local_tty_session(
     use wsl_command_executor::WslCommandExecutor;
 
     use super::IsSSHWrapperSession;
+    use crate::features::FeatureFlag;
     use crate::remote_server::manager::RemoteServerManager;
     use crate::settings::DebugSettings;
     use crate::terminal::available_shells::AvailableShells;

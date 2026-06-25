@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+#[cfg(not(target_family = "wasm"))]
+use std::path::PathBuf;
 use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
@@ -2647,7 +2649,12 @@ impl RemoteServerManager {
     #[cfg(not(target_family = "wasm"))]
     pub fn control_path_for_session(&self, session_id: SessionId) -> Option<PathBuf> {
         match self.sessions.get(&session_id) {
-            Some(RemoteSessionState::Connected { control_path, .. }) => control_path.clone(),
+            Some(RemoteSessionState::Connected { control_path, .. }) => match control_path {
+                ControlPath::WarpManaged(path) | ControlPath::UserOwned(path) => {
+                    Some(path.clone())
+                }
+                ControlPath::None => None,
+            },
             _ => None,
         }
     }
