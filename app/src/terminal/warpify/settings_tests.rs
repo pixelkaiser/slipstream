@@ -116,13 +116,7 @@ fn test_enable_ssh_wrapper_default_does_not_affect_enable_ssh_warpification() {
 }
 
 #[cfg(not(windows))]
-use super::WarpifySettings;
-#[cfg(not(windows))]
-use settings::Setting as _;
-#[cfg(not(windows))]
 use warp_core::features::FeatureFlag;
-#[cfg(not(windows))]
-use warpui::App;
 
 #[cfg(windows)]
 #[test]

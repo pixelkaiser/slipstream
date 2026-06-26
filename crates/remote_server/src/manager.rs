@@ -293,7 +293,7 @@ fn version_is_compatible_for_transport(
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]
-mod tests {
+mod version_tests {
     use super::*;
 
     #[test]
