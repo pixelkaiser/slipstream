@@ -41,7 +41,7 @@ use crate::terminal::model::session::{
     CommandExecutor, ExecuteCommandOptions, SessionId, SessionInfo, Sessions,
 };
 use crate::terminal::model::terminal_model::BlockIndex;
-use crate::terminal::model_events::ModelEvent;
+use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
 use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};
 use crate::terminal::shell::Shell;
 use crate::terminal::view::PromptPosition;
@@ -235,6 +235,9 @@ fn test_last_command_runtime_chip_updates_from_completed_user_block() {
         });
 
         let sessions = app.add_model(|_| Sessions::new_for_test());
+        let (_model_events_tx, model_events_rx) = async_channel::unbounded();
+        let model_events =
+            app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
         let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
 
         current_prompt.update(&mut app, |current_prompt, ctx| {
@@ -246,7 +249,7 @@ fn test_last_command_runtime_chip_updates_from_completed_user_block() {
 
             let event =
                 after_user_block_completed(user_block_completed("sleep 132", Some(0), Some(132)));
-            current_prompt.handle_model_event(&event, ctx);
+            current_prompt.handle_model_event(model_events.clone(), &event, ctx);
 
             assert_eq!(
                 current_prompt
@@ -281,6 +284,9 @@ fn test_last_command_runtime_chip_ignores_empty_command_and_clears_invalid_durat
         });
 
         let sessions = app.add_model(|_| Sessions::new_for_test());
+        let (_model_events_tx, model_events_rx) = async_channel::unbounded();
+        let model_events =
+            app.add_model(|ctx| ModelEventDispatcher::new(model_events_rx, sessions.clone(), ctx));
         let current_prompt = app.add_model(move |ctx| CurrentPrompt::new(sessions, ctx));
 
         current_prompt.update(&mut app, |current_prompt, ctx| {
@@ -288,7 +294,7 @@ fn test_last_command_runtime_chip_ignores_empty_command_and_clears_invalid_durat
 
             let valid_event =
                 after_user_block_completed(user_block_completed("echo ok", Some(0), Some(12)));
-            current_prompt.handle_model_event(&valid_event, ctx);
+            current_prompt.handle_model_event(model_events.clone(), &valid_event, ctx);
             assert_eq!(
                 current_prompt
                     .latest_chip_value(&ContextChipKind::LastCommandRuntime)
@@ -298,7 +304,7 @@ fn test_last_command_runtime_chip_ignores_empty_command_and_clears_invalid_durat
 
             let empty_event =
                 after_user_block_completed(user_block_completed("   ", Some(0), Some(132)));
-            current_prompt.handle_model_event(&empty_event, ctx);
+            current_prompt.handle_model_event(model_events.clone(), &empty_event, ctx);
             assert_eq!(
                 current_prompt
                     .latest_chip_value(&ContextChipKind::LastCommandRuntime)
@@ -308,7 +314,7 @@ fn test_last_command_runtime_chip_ignores_empty_command_and_clears_invalid_durat
 
             let missing_duration_event =
                 after_user_block_completed(user_block_completed("echo missing", None, Some(132)));
-            current_prompt.handle_model_event(&missing_duration_event, ctx);
+            current_prompt.handle_model_event(model_events.clone(), &missing_duration_event, ctx);
             assert_eq!(
                 current_prompt.latest_chip_value(&ContextChipKind::LastCommandRuntime),
                 None
@@ -319,7 +325,7 @@ fn test_last_command_runtime_chip_ignores_empty_command_and_clears_invalid_durat
                 Some(132),
                 Some(0),
             ));
-            current_prompt.handle_model_event(&negative_duration_event, ctx);
+            current_prompt.handle_model_event(model_events.clone(), &negative_duration_event, ctx);
             assert_eq!(
                 current_prompt.latest_chip_value(&ContextChipKind::LastCommandRuntime),
                 None

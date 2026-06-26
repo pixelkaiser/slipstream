@@ -35,6 +35,7 @@ fn transport_does_not_trust_tagged_server_for_untagged_client_by_default() {
     let transport = SshTransport::new(
         PathBuf::from("/tmp/control-master.sock"),
         static_auth_context(),
+        true,
         InstallScriptOptions::new(
             remote_server::setup::default_download_base_url().to_string(),
             remote_server::setup::default_download_channel().to_string(),
@@ -49,6 +50,7 @@ fn transport_can_trust_tagged_server_after_user_approved_install() {
     let transport = SshTransport::new(
         PathBuf::from("/tmp/control-master.sock"),
         static_auth_context(),
+        true,
         InstallScriptOptions::new(
             remote_server::setup::default_download_base_url().to_string(),
             remote_server::setup::default_download_channel().to_string(),
