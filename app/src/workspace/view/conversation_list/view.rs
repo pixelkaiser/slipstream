@@ -99,7 +99,7 @@ enum ListItem {
         /// The section the conversation is rendered under.
         section: ConversationSection,
     },
-    /// The "+ New conversation" item at the end of the active section.
+    /// The "+ New conversation" item shown before the conversation sections.
     StartNewConversation,
     ToggleViewAllButton,
 }
@@ -407,6 +407,11 @@ impl ConversationListView {
         let mut items = Vec::new();
         let has_content = !active_items.is_empty() || !past_items.is_empty();
 
+        // Keep the new conversation action at the top whenever the list has content.
+        if has_content {
+            items.push(ListItem::StartNewConversation);
+        }
+
         // If the section is not empty, add the section header + items.
         if !active_items.is_empty() {
             items.push(ListItem::SectionHeader(ConversationSection::Active));
@@ -416,12 +421,6 @@ impl ConversationListView {
             {
                 items.extend(active_items);
             }
-        }
-
-        // Insert new conversation button between active and past sections if there are items
-        // (otherwise we show the "no matching conversations" state).
-        if has_content {
-            items.push(ListItem::StartNewConversation);
         }
 
         // We truncate the past section to INITIAL_MAX_PAST_ITEMS if the user has not selected "view all".

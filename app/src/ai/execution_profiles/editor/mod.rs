@@ -317,6 +317,14 @@ pub struct ExecutionProfileEditorView {
     local_agent_alias_dropdowns:
         HashMap<&'static str, ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>>,
     #[cfg(not(target_family = "wasm"))]
+    local_agent_max_completion_tokens_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_context_tokens_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_autocomplete_max_completion_tokens_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_autocomplete_context_tokens_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
     local_agent_autocomplete_switch: SwitchStateHandle,
     #[cfg(not(target_family = "wasm"))]
     local_agent_restart_button: ViewHandle<ActionButton>,
@@ -785,6 +793,85 @@ impl ExecutionProfileEditorView {
         );
 
         #[cfg(not(target_family = "wasm"))]
+        create_profile_inference_key_editor!(
+            local_agent_max_completion_tokens_editor,
+            inference_settings
+                .local_max_completion_tokens
+                .map(|value| value.to_string()),
+            "2048",
+            false,
+            |manager, profile_key, key, ctx| {
+                match Self::parse_optional_positive_u32(
+                    key,
+                    "Maximum completion tokens must be a positive number.",
+                ) {
+                    Ok(tokens) => manager.set_local_max_completion_tokens_for_profile(
+                        &profile_key,
+                        tokens,
+                        ctx,
+                    ),
+                    Err(message) => {
+                        LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                            manager.record_config_error(message, ctx);
+                        });
+                    }
+                }
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_profile_inference_key_editor!(
+            local_agent_context_tokens_editor,
+            inference_settings.local_model_context_tokens.clone(),
+            r#"{"model-id":131072}"#,
+            false,
+            |manager, profile_key, key, ctx| {
+                manager.set_local_model_context_tokens_for_profile(&profile_key, key, ctx);
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_profile_inference_key_editor!(
+            local_agent_autocomplete_max_completion_tokens_editor,
+            inference_settings
+                .local_autocomplete_max_completion_tokens
+                .map(|value| value.to_string()),
+            "256",
+            false,
+            |manager, profile_key, key, ctx| {
+                match Self::parse_optional_positive_u32(
+                    key,
+                    "Autocomplete maximum completion tokens must be a positive number.",
+                ) {
+                    Ok(tokens) => manager.set_local_autocomplete_max_completion_tokens_for_profile(
+                        &profile_key,
+                        tokens,
+                        ctx,
+                    ),
+                    Err(message) => {
+                        LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                            manager.record_config_error(message, ctx);
+                        });
+                    }
+                }
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_profile_inference_key_editor!(
+            local_agent_autocomplete_context_tokens_editor,
+            inference_settings
+                .local_autocomplete_model_context_tokens
+                .clone(),
+            "4096",
+            false,
+            |manager, profile_key, key, ctx| {
+                manager.set_local_autocomplete_model_context_tokens_for_profile(
+                    &profile_key,
+                    key,
+                    ctx,
+                );
+            }
+        );
+
+        #[cfg(not(target_family = "wasm"))]
         let local_agent_alias_dropdowns: HashMap<
             &'static str,
             ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
@@ -958,6 +1045,14 @@ impl ExecutionProfileEditorView {
             openai_base_url_editor,
             #[cfg(not(target_family = "wasm"))]
             local_agent_alias_dropdowns,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_max_completion_tokens_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_context_tokens_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_autocomplete_max_completion_tokens_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_autocomplete_context_tokens_editor,
             #[cfg(not(target_family = "wasm"))]
             local_agent_autocomplete_switch: Default::default(),
             #[cfg(not(target_family = "wasm"))]
@@ -1194,6 +1289,25 @@ impl ExecutionProfileEditorView {
         });
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn parse_optional_positive_u32(
+        value: Option<String>,
+        error_message: &'static str,
+    ) -> Result<Option<u32>, String> {
+        let Some(value) = value.map(|value| value.trim().to_string()) else {
+            return Ok(None);
+        };
+        if value.is_empty() {
+            return Ok(None);
+        }
+        value
+            .parse::<u32>()
+            .ok()
+            .filter(|value| *value > 0)
+            .map(Some)
+            .ok_or_else(|| error_message.to_string())
+    }
+
     fn sync_profile_inference_editors(&self, ctx: &mut AppContext) {
         let Some(profile_key) = self.inference_profile_key(ctx) else {
             return;
@@ -1206,6 +1320,34 @@ impl ExecutionProfileEditorView {
         Self::sync_editor_text(&self.google_api_key_editor, settings.google, ctx);
         #[cfg(not(target_family = "wasm"))]
         Self::sync_editor_text(&self.openai_base_url_editor, settings.openai_base_url, ctx);
+        #[cfg(not(target_family = "wasm"))]
+        Self::sync_editor_text(
+            &self.local_agent_max_completion_tokens_editor,
+            settings
+                .local_max_completion_tokens
+                .map(|value| value.to_string()),
+            ctx,
+        );
+        #[cfg(not(target_family = "wasm"))]
+        Self::sync_editor_text(
+            &self.local_agent_context_tokens_editor,
+            settings.local_model_context_tokens,
+            ctx,
+        );
+        #[cfg(not(target_family = "wasm"))]
+        Self::sync_editor_text(
+            &self.local_agent_autocomplete_max_completion_tokens_editor,
+            settings
+                .local_autocomplete_max_completion_tokens
+                .map(|value| value.to_string()),
+            ctx,
+        );
+        #[cfg(not(target_family = "wasm"))]
+        Self::sync_editor_text(
+            &self.local_agent_autocomplete_context_tokens_editor,
+            settings.local_autocomplete_model_context_tokens,
+            ctx,
+        );
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -1928,6 +2070,31 @@ impl ExecutionProfileEditorView {
         #[cfg(not(target_family = "wasm"))]
         Self::update_editor_interaction_state(
             view.openai_base_url_editor.clone(),
+            inference_settings_editable,
+            ctx,
+        );
+        #[cfg(not(target_family = "wasm"))]
+        Self::update_editor_interaction_state(
+            view.local_agent_max_completion_tokens_editor.clone(),
+            inference_settings_editable,
+            ctx,
+        );
+        #[cfg(not(target_family = "wasm"))]
+        Self::update_editor_interaction_state(
+            view.local_agent_context_tokens_editor.clone(),
+            inference_settings_editable,
+            ctx,
+        );
+        #[cfg(not(target_family = "wasm"))]
+        Self::update_editor_interaction_state(
+            view.local_agent_autocomplete_max_completion_tokens_editor
+                .clone(),
+            inference_settings_editable,
+            ctx,
+        );
+        #[cfg(not(target_family = "wasm"))]
+        Self::update_editor_interaction_state(
+            view.local_agent_autocomplete_context_tokens_editor.clone(),
             inference_settings_editable,
             ctx,
         );

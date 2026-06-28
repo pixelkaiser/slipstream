@@ -200,6 +200,8 @@ fn local_settings_migration_populates_default_profile_once() {
         Some(" http://127.0.0.1:1234/v1/ ".into()),
         r#"{"auto-autocomplete":"local/model"}"#.into(),
         "local/model,local/other".into(),
+        Some(12_000),
+        Some(r#"{"local/model":131072}"#.into()),
         true,
     ));
 
@@ -214,12 +216,21 @@ fn local_settings_migration_populates_default_profile_once() {
         r#"{"auto-autocomplete":"local/model"}"#
     );
     assert_eq!(settings.local_model_list, "local/model,local/other");
+    assert_eq!(settings.local_max_completion_tokens, Some(12_000));
+    assert_eq!(
+        settings.local_model_context_tokens.as_deref(),
+        Some(r#"{"local/model":131072}"#)
+    );
+    assert_eq!(settings.local_autocomplete_max_completion_tokens, None);
+    assert_eq!(settings.local_autocomplete_model_context_tokens, None);
     assert!(settings.local_ai_autocomplete_enabled);
 
     assert!(!keys.migrate_default_profile_local_settings_if_needed(
         Some("http://different.test/v1".into()),
         r#"{"auto":"different"}"#.into(),
         "different".into(),
+        Some(4_096),
+        Some("4096".into()),
         false,
     ));
     let settings = keys.profile_settings(DEFAULT_PROFILE_INFERENCE_KEY);
@@ -268,7 +279,12 @@ fn has_any_key_false_for_endpoint_with_empty_api_key() {
 
 #[test]
 fn provider_key_count_zero_when_empty() {
-    assert_eq!(ApiKeys::default().provider_key_count(), 0);
+    assert_eq!(
+        ApiKeys::default()
+            .default_profile_settings()
+            .provider_key_count(),
+        0
+    );
 }
 
 #[test]
@@ -279,8 +295,9 @@ fn provider_key_count_counts_each_provider_key() {
         google: Some("AIza".into()),
         open_router: Some("sk-or".into()),
         custom_endpoints: vec![],
+        ..Default::default()
     };
-    assert_eq!(keys.provider_key_count(), 4);
+    assert_eq!(keys.default_profile_settings().provider_key_count(), 4);
 }
 
 #[test]
@@ -291,10 +308,11 @@ fn provider_key_count_ignores_blank_keys_and_endpoints() {
         google: None,
         open_router: None,
         custom_endpoints: vec![endpoint("ep", "https://a.io", "k", &[("m", None)])],
+        ..Default::default()
     };
     // Only the non-blank OpenAI key counts; the whitespace Anthropic key and the
     // custom endpoint are excluded.
-    assert_eq!(keys.provider_key_count(), 1);
+    assert_eq!(keys.default_profile_settings().provider_key_count(), 1);
 }
 
 // ── custom_model_providers_for_request ──────────────────────────

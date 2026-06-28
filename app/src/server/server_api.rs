@@ -71,6 +71,8 @@ use crate::{settings_view, ChannelState};
 
 const OPENAI_BASE_URL_HEADER: &str = "X-Warp-OpenAI-Base-URL";
 const LOCAL_MODEL_ALIASES_HEADER: &str = "X-Warp-Local-Model-Aliases";
+const LOCAL_MAX_COMPLETION_TOKENS_HEADER: &str = "X-Warp-Local-Max-Completion-Tokens";
+const LOCAL_MODEL_CONTEXT_TOKENS_HEADER: &str = "X-Warp-Local-Model-Context-Tokens";
 
 fn multi_agent_output_url(
     is_passive: bool,
@@ -1181,6 +1183,8 @@ impl ServerApi {
         server_root_url_override: Option<&str>,
         openai_base_url: Option<&str>,
         local_model_aliases: Option<&str>,
+        local_max_completion_tokens: Option<u32>,
+        local_model_context_tokens: Option<&str>,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
         let is_passive = request.input.as_ref().is_some_and(|input| {
@@ -1239,6 +1243,18 @@ impl ServerApi {
             if let Some(local_model_aliases) = local_model_aliases {
                 request_builder =
                     request_builder.header(LOCAL_MODEL_ALIASES_HEADER, local_model_aliases);
+            }
+            if let Some(local_max_completion_tokens) = local_max_completion_tokens {
+                request_builder = request_builder.header(
+                    LOCAL_MAX_COMPLETION_TOKENS_HEADER,
+                    local_max_completion_tokens.to_string(),
+                );
+            }
+            if let Some(local_model_context_tokens) = local_model_context_tokens {
+                request_builder = request_builder.header(
+                    LOCAL_MODEL_CONTEXT_TOKENS_HEADER,
+                    local_model_context_tokens,
+                );
             }
         }
 

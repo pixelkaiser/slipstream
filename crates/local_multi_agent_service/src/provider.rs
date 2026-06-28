@@ -72,6 +72,7 @@ pub struct ChatCompletionParams {
     pub local_model_aliases: Option<String>,
     pub model: Option<String>,
     pub max_tokens: Option<u32>,
+    pub local_model_context_tokens: Option<String>,
     pub temperature: Option<f32>,
     pub mcp_tools: Vec<McpToolSummary>,
     pub enable_tools: bool,
@@ -164,7 +165,13 @@ impl ProviderRuntime {
         )
         .map_err(|error| LocalAgentError::internal(error.to_string()))?;
         let context_window_tokens = self
-            .context_window_tokens_for_model(config, &base_url, &api_key, &model)
+            .context_window_tokens_for_model(
+                config,
+                &base_url,
+                &api_key,
+                &model,
+                params.local_model_context_tokens.as_deref(),
+            )
             .await;
         let tools = (params.enable_tools && config.local_enable_tools).then(local_tool_schemas);
         let messages = build_provider_messages(
@@ -332,6 +339,8 @@ impl ProviderRuntime {
         api_key: Option<String>,
         base_url: Option<String>,
         local_model_aliases: Option<String>,
+        local_max_completion_tokens: Option<u32>,
+        local_model_context_tokens: Option<String>,
     ) -> Result<LocalCommandAutocompleteResponse, LocalAgentError> {
         if let Some(command) = deterministic_autocomplete_command(request) {
             return Ok(LocalCommandAutocompleteResponse::from_command(command));
@@ -346,7 +355,10 @@ impl ProviderRuntime {
                     base_url,
                     local_model_aliases,
                     model: Some(AUTOCOMPLETE_MODEL_ALIAS.to_string()),
-                    max_tokens: Some(AUTOCOMPLETE_MAX_TOKENS),
+                    max_tokens: Some(
+                        local_max_completion_tokens.unwrap_or(AUTOCOMPLETE_MAX_TOKENS),
+                    ),
+                    local_model_context_tokens,
                     temperature: Some(0.0),
                     mcp_tools: Vec::new(),
                     enable_tools: false,
@@ -412,10 +424,13 @@ impl ProviderRuntime {
         base_url: &str,
         api_key: &str,
         model: &str,
+        request_context_tokens: Option<&str>,
     ) -> Option<u32> {
-        if let Some(configured) =
-            configured_context_window_tokens(config.local_model_context_tokens.as_deref(), model)
-        {
+        if let Some(configured) = configured_context_window_tokens_with_request(
+            request_context_tokens,
+            config.local_model_context_tokens.as_deref(),
+            model,
+        ) {
             return Some(configured);
         }
         let provider_models = self
@@ -1495,6 +1510,16 @@ fn configured_context_window_tokens(raw: Option<&str>, model: &str) -> Option<u3
         .or_else(|| object.get("default").and_then(value_positive_u32))
 }
 
+fn configured_context_window_tokens_with_request(
+    request_raw: Option<&str>,
+    config_raw: Option<&str>,
+    model: &str,
+) -> Option<u32> {
+    request_raw
+        .and_then(|raw| configured_context_window_tokens(Some(raw), model))
+        .or_else(|| configured_context_window_tokens(config_raw, model))
+}
+
 fn context_window_from_provider_model(model: &Value) -> Option<u32> {
     let direct_keys = [
         "context_length",
@@ -1752,6 +1777,26 @@ mod tests {
         assert_eq!(
             configured_context_window_tokens(Some(r#"{"default":99}"#), "other"),
             Some(99)
+        );
+    }
+
+    #[test]
+    fn request_context_window_overrides_config_when_applicable() {
+        assert_eq!(
+            configured_context_window_tokens_with_request(
+                Some(r#"{"model":4096}"#),
+                Some(r#"{"model":131072}"#),
+                "model",
+            ),
+            Some(4096)
+        );
+        assert_eq!(
+            configured_context_window_tokens_with_request(
+                Some(r#"{"other":4096}"#),
+                Some(r#"{"model":131072}"#),
+                "model",
+            ),
+            Some(131072)
         );
     }
 
