@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use warp_core::features::FeatureFlag;
+use warp_core::user_preferences::GetUserPreferences as _;
 use warp_graphql::object_permissions::AccessLevel;
 use warpui::{App, SingletonEntity};
 
@@ -7,6 +8,7 @@ use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::execution_profiles::{
     AIExecutionProfile, ActionPermission, CloudAIExecutionProfileModel, WriteToPtyPermission,
 };
+use crate::ai::llms::LLMId;
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::auth::user::TEST_USER_UID;
 use crate::auth::{AuthStateProvider, UserUid};
@@ -89,6 +91,42 @@ fn install_singletons(app: &mut App, auth_state: AuthStateProvider) {
     app.add_singleton_model(UserWorkspaces::default_mock);
 }
 
+#[test]
+fn loads_local_default_profile_when_logged_out() {
+    App::test((), |mut app| async move {
+        install_singletons(&mut app, AuthStateProvider::new_logged_out_for_test());
+
+        let model_id = LLMId::from("local-default-model");
+        let saved_profile = AIExecutionProfile {
+            name: "Default".to_string(),
+            is_default_profile: false,
+            base_model: Some(model_id.clone()),
+            ..Default::default()
+        };
+        app.update(|ctx| {
+            ctx.private_user_preferences()
+                .write_value(
+                    super::LOCAL_DEFAULT_PROFILE_PREF_KEY,
+                    serde_json::to_string(&saved_profile).expect("profile should serialize"),
+                )
+                .expect("preference write should succeed");
+        });
+
+        let profile_model = app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+
+        profile_model.read(&app, |model, ctx| {
+            let default_profile = model.default_profile(ctx);
+            assert_eq!(default_profile.data().base_model.clone(), Some(model_id));
+            assert!(
+                default_profile.data().is_default_profile,
+                "loaded local default profile should be normalized as the default"
+            );
+        });
+    })
+}
+
 /// Regression test for the onboarding autonomy bug where
 /// `edit_profile_internal` would silently drop edits made to an `Unsynced`
 /// default profile whenever `personal_drive` returned `None` (logged-out
@@ -133,6 +171,21 @@ fn edits_persist_on_unsynced_default_profile_when_logged_out() {
                 ActionPermission::AlwaysAllow,
                 "edit was dropped: default profile still has the baseline \
                  apply_code_diffs value after an edit made while logged out",
+            );
+        });
+
+        app.update(|ctx| {
+            let json = ctx
+                .private_user_preferences()
+                .read_value(super::LOCAL_DEFAULT_PROFILE_PREF_KEY)
+                .expect("preference read should succeed")
+                .expect("local default profile should be persisted");
+            let persisted_profile: AIExecutionProfile =
+                serde_json::from_str(&json).expect("persisted profile should deserialize");
+            assert_eq!(
+                persisted_profile.apply_code_diffs,
+                ActionPermission::AlwaysAllow,
+                "logged-out default profile edit should be saved for restart"
             );
         });
     })

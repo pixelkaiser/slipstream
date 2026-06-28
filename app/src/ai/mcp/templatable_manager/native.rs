@@ -387,6 +387,14 @@ impl TemplatableMCPServerManager {
     }
 
     fn delete_orphaned_installations(&mut self, ctx: &mut ModelContext<Self>) {
+        // Logged-out/no-cloud users can create local MCP installations whose
+        // templates are embedded in the local installation row but do not have a
+        // cloud template object. Do not delete those on startup just because
+        // CloudModel has no corresponding template.
+        if UserWorkspaces::as_ref(ctx).personal_drive(ctx).is_none() {
+            return;
+        }
+
         let orphaned_installations: Vec<Uuid> = self.locally_installed_servers
             .iter()
             .filter(|(_, installation)| {
@@ -1839,3 +1847,7 @@ impl TemplatableMCPServerManager {
             .contains_key(&installation_hash)
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;
