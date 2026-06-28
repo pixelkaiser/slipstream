@@ -1,4 +1,4 @@
-use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, ApiKeys};
+use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 #[cfg(not(target_family = "wasm"))]
 use ::ai::grok_subscription::oauth::{self, ManualCodeExchange};
 use chrono::{DateTime, Local};
@@ -8239,6 +8239,10 @@ struct ApiKeysWidget {
     #[cfg(not(target_family = "wasm"))]
     local_agent_context_tokens_editor: ViewHandle<EditorView>,
     #[cfg(not(target_family = "wasm"))]
+    local_agent_autocomplete_max_completion_tokens_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_autocomplete_context_tokens_editor: ViewHandle<EditorView>,
+    #[cfg(not(target_family = "wasm"))]
     local_agent_graphql_db_path_editor: ViewHandle<EditorView>,
     #[cfg(not(target_family = "wasm"))]
     local_agent_log_level_editor: ViewHandle<EditorView>,
@@ -8292,6 +8296,23 @@ impl ApiKeysWidget {
     }
 
     #[cfg(not(target_family = "wasm"))]
+    fn parse_optional_positive_u32(
+        value: &str,
+        error_message: &'static str,
+    ) -> Result<Option<u32>, String> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Ok(None);
+        }
+        value
+            .parse::<u32>()
+            .ok()
+            .filter(|value| *value > 0)
+            .map(Some)
+            .ok_or_else(|| error_message.to_string())
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     #[allow(clippy::too_many_arguments)]
     fn sync_profile_inference_editors(
         openai_api_key_editor: &ViewHandle<EditorView>,
@@ -8299,6 +8320,10 @@ impl ApiKeysWidget {
         google_api_key_editor: &ViewHandle<EditorView>,
         openai_base_url_editor: &ViewHandle<EditorView>,
         local_agent_model_aliases_editor: &ViewHandle<EditorView>,
+        local_agent_max_completion_tokens_editor: &ViewHandle<EditorView>,
+        local_agent_context_tokens_editor: &ViewHandle<EditorView>,
+        local_agent_autocomplete_max_completion_tokens_editor: &ViewHandle<EditorView>,
+        local_agent_autocomplete_context_tokens_editor: &ViewHandle<EditorView>,
         ctx: &mut AppContext,
     ) {
         let profile_key = Self::active_inference_profile_key(ctx);
@@ -8312,6 +8337,30 @@ impl ApiKeysWidget {
         Self::sync_editor_text(
             local_agent_model_aliases_editor,
             Some(settings.local_model_aliases),
+            ctx,
+        );
+        Self::sync_editor_text(
+            local_agent_max_completion_tokens_editor,
+            settings
+                .local_max_completion_tokens
+                .map(|value| value.to_string()),
+            ctx,
+        );
+        Self::sync_editor_text(
+            local_agent_context_tokens_editor,
+            settings.local_model_context_tokens,
+            ctx,
+        );
+        Self::sync_editor_text(
+            local_agent_autocomplete_max_completion_tokens_editor,
+            settings
+                .local_autocomplete_max_completion_tokens
+                .map(|value| value.to_string()),
+            ctx,
+        );
+        Self::sync_editor_text(
+            local_agent_autocomplete_context_tokens_editor,
+            settings.local_autocomplete_model_context_tokens,
             ctx,
         );
     }
@@ -8789,33 +8838,99 @@ impl ApiKeysWidget {
             }
         );
         #[cfg(not(target_family = "wasm"))]
-        create_local_agent_editor!(
+        create_profile_inference_editor!(
             local_agent_max_completion_tokens_editor,
-            local_config.local_max_completion_tokens.to_string(),
+            inference_settings
+                .local_max_completion_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             "2048",
-            |config, buffer_text| {
-                config.local_max_completion_tokens =
-                    buffer_text.trim().parse::<u32>().map_err(|_| {
-                        "Maximum completion tokens must be a positive number.".to_string()
-                    })?;
-                Ok(())
+            |manager, profile_key, buffer_text, ctx| {
+                match Self::parse_optional_positive_u32(
+                    &buffer_text,
+                    "Maximum completion tokens must be a positive number.",
+                ) {
+                    Ok(tokens) => {
+                        manager.set_local_max_completion_tokens_for_profile(
+                            &profile_key,
+                            tokens,
+                            ctx,
+                        );
+                    }
+                    Err(message) => {
+                        LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                            manager.record_config_error(message, ctx);
+                        });
+                    }
+                }
             }
         );
         #[cfg(not(target_family = "wasm"))]
-        create_local_agent_editor!(
+        create_profile_inference_editor!(
             local_agent_context_tokens_editor,
-            local_config
+            inference_settings
                 .local_model_context_tokens
                 .clone()
                 .unwrap_or_default(),
             r#"{"model-id":131072}"#,
-            |config, buffer_text| {
-                config.local_model_context_tokens = buffer_text
-                    .trim()
-                    .is_empty()
-                    .not()
-                    .then_some(buffer_text.trim().to_string());
-                Ok(())
+            |manager, profile_key, buffer_text, ctx| {
+                manager.set_local_model_context_tokens_for_profile(
+                    &profile_key,
+                    buffer_text
+                        .trim()
+                        .is_empty()
+                        .not()
+                        .then_some(buffer_text.trim().to_string()),
+                    ctx,
+                );
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_profile_inference_editor!(
+            local_agent_autocomplete_max_completion_tokens_editor,
+            inference_settings
+                .local_autocomplete_max_completion_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            "256",
+            |manager, profile_key, buffer_text, ctx| {
+                match Self::parse_optional_positive_u32(
+                    &buffer_text,
+                    "Autocomplete maximum completion tokens must be a positive number.",
+                ) {
+                    Ok(tokens) => {
+                        manager.set_local_autocomplete_max_completion_tokens_for_profile(
+                            &profile_key,
+                            tokens,
+                            ctx,
+                        );
+                    }
+                    Err(message) => {
+                        LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
+                            manager.record_config_error(message, ctx);
+                        });
+                    }
+                }
+            }
+        );
+        #[cfg(not(target_family = "wasm"))]
+        create_profile_inference_editor!(
+            local_agent_autocomplete_context_tokens_editor,
+            inference_settings
+                .local_autocomplete_model_context_tokens
+                .clone()
+                .unwrap_or_default(),
+            "4096",
+            |manager, profile_key, buffer_text, ctx| {
+                manager.set_local_autocomplete_model_context_tokens_for_profile(
+                    &profile_key,
+                    buffer_text
+                        .trim()
+                        .is_empty()
+                        .not()
+                        .then_some(buffer_text.trim().to_string()),
+                    ctx,
+                );
             }
         );
         #[cfg(not(target_family = "wasm"))]
@@ -9008,6 +9123,17 @@ impl ApiKeysWidget {
             #[cfg(not(target_family = "wasm"))]
             let local_agent_model_aliases_editor_clone = local_agent_model_aliases_editor.clone();
             #[cfg(not(target_family = "wasm"))]
+            let local_agent_max_completion_tokens_editor_clone =
+                local_agent_max_completion_tokens_editor.clone();
+            #[cfg(not(target_family = "wasm"))]
+            let local_agent_context_tokens_editor_clone = local_agent_context_tokens_editor.clone();
+            #[cfg(not(target_family = "wasm"))]
+            let local_agent_autocomplete_max_completion_tokens_editor_clone =
+                local_agent_autocomplete_max_completion_tokens_editor.clone();
+            #[cfg(not(target_family = "wasm"))]
+            let local_agent_autocomplete_context_tokens_editor_clone =
+                local_agent_autocomplete_context_tokens_editor.clone();
+            #[cfg(not(target_family = "wasm"))]
             let default_model_dropdown = local_agent_default_model_dropdown.clone();
             #[cfg(not(target_family = "wasm"))]
             let alias_dropdowns = local_agent_alias_dropdowns.clone();
@@ -9019,6 +9145,10 @@ impl ApiKeysWidget {
                     &google_editor,
                     &openai_base_url_editor_clone,
                     &local_agent_model_aliases_editor_clone,
+                    &local_agent_max_completion_tokens_editor_clone,
+                    &local_agent_context_tokens_editor_clone,
+                    &local_agent_autocomplete_max_completion_tokens_editor_clone,
+                    &local_agent_autocomplete_context_tokens_editor_clone,
                     ctx,
                 );
                 #[cfg(target_family = "wasm")]
@@ -9046,6 +9176,17 @@ impl ApiKeysWidget {
             #[cfg(not(target_family = "wasm"))]
             let local_agent_model_aliases_editor_clone = local_agent_model_aliases_editor.clone();
             #[cfg(not(target_family = "wasm"))]
+            let local_agent_max_completion_tokens_editor_clone =
+                local_agent_max_completion_tokens_editor.clone();
+            #[cfg(not(target_family = "wasm"))]
+            let local_agent_context_tokens_editor_clone = local_agent_context_tokens_editor.clone();
+            #[cfg(not(target_family = "wasm"))]
+            let local_agent_autocomplete_max_completion_tokens_editor_clone =
+                local_agent_autocomplete_max_completion_tokens_editor.clone();
+            #[cfg(not(target_family = "wasm"))]
+            let local_agent_autocomplete_context_tokens_editor_clone =
+                local_agent_autocomplete_context_tokens_editor.clone();
+            #[cfg(not(target_family = "wasm"))]
             let default_model_dropdown = local_agent_default_model_dropdown.clone();
             #[cfg(not(target_family = "wasm"))]
             let alias_dropdowns = local_agent_alias_dropdowns.clone();
@@ -9059,6 +9200,10 @@ impl ApiKeysWidget {
                         &google_editor,
                         &openai_base_url_editor_clone,
                         &local_agent_model_aliases_editor_clone,
+                        &local_agent_max_completion_tokens_editor_clone,
+                        &local_agent_context_tokens_editor_clone,
+                        &local_agent_autocomplete_max_completion_tokens_editor_clone,
+                        &local_agent_autocomplete_context_tokens_editor_clone,
                         ctx,
                     );
                     #[cfg(target_family = "wasm")]
@@ -9103,6 +9248,10 @@ impl ApiKeysWidget {
             local_agent_max_completion_tokens_editor,
             #[cfg(not(target_family = "wasm"))]
             local_agent_context_tokens_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_autocomplete_max_completion_tokens_editor,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_autocomplete_context_tokens_editor,
             #[cfg(not(target_family = "wasm"))]
             local_agent_graphql_db_path_editor,
             #[cfg(not(target_family = "wasm"))]
@@ -9963,6 +10112,12 @@ impl ApiKeysWidget {
             ));
         }
 
+        column.add_child(render_group_label(
+            appearance,
+            "Token Budgets",
+            is_enabled,
+            app,
+        ));
         column.add_child(render_input(
             appearance,
             "LOCAL_MODEL_CONTEXT_TOKENS",
@@ -9974,6 +10129,27 @@ impl ApiKeysWidget {
             appearance,
             "LOCAL_MAX_COMPLETION_TOKENS",
             self.local_agent_max_completion_tokens_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_group_label(
+            appearance,
+            "Autocomplete Token Budgets",
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_input(
+            appearance,
+            "AUTOCOMPLETE_MODEL_CONTEXT_TOKENS",
+            self.local_agent_autocomplete_context_tokens_editor.clone(),
+            is_enabled,
+            app,
+        ));
+        column.add_child(render_input(
+            appearance,
+            "AUTOCOMPLETE_MAX_COMPLETION_TOKENS",
+            self.local_agent_autocomplete_max_completion_tokens_editor
+                .clone(),
             is_enabled,
             app,
         ));
@@ -10096,7 +10272,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai anthropic google claude gemini gpt custom inference endpoint grok supergrok xai subscription base url compatible local agent backend multi agent server host port model tools tokens max completion graphql logs prompt"
+        "api keys bring your own byo openai anthropic google claude gemini gpt custom inference endpoint grok supergrok xai subscription base url compatible local agent backend multi agent server host port model tools tokens max completion autocomplete context graphql logs prompt"
     }
 
     fn render(

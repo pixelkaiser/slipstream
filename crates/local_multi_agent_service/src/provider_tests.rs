@@ -218,7 +218,7 @@ async fn command_autocomplete_uses_alias_without_tools() {
     config.local_model_aliases = Some(format!(r#"{{"auto-autocomplete":"{MODEL}"}}"#));
 
     let response = ProviderRuntime::new()
-        .command_autocomplete(&config, &request, None, None, None)
+        .command_autocomplete(&config, &request, None, None, None, None, None)
         .await
         .unwrap();
 
@@ -267,6 +267,8 @@ async fn command_autocomplete_uses_request_alias_override() {
             None,
             None,
             Some(r#"{"auto-autocomplete":"request/model"}"#.to_string()),
+            None,
+            None,
         )
         .await
         .unwrap();
@@ -274,6 +276,39 @@ async fn command_autocomplete_uses_request_alias_override() {
     assert_eq!(response.most_likely_action, "git status");
     let request_bodies = request_bodies.lock().unwrap();
     assert_eq!(request_bodies[0]["model"], "request/model");
+}
+
+#[tokio::test]
+async fn command_autocomplete_uses_request_token_overrides() {
+    let (base_url, request_bodies) = spawn_openai_compatible_server(vec![json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "git status" }
+        }]
+    })])
+    .await;
+
+    let request = crate::autocomplete::LocalCommandAutocompleteRequest {
+        prefix: "git ".to_string(),
+        ..Default::default()
+    };
+
+    let response = ProviderRuntime::new()
+        .command_autocomplete(
+            &test_config(base_url),
+            &request,
+            None,
+            None,
+            None,
+            Some(64),
+            Some(r#"{"default":4096}"#.to_string()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.most_likely_action, "git status");
+    let request_bodies = request_bodies.lock().unwrap();
+    assert_eq!(request_bodies[0]["max_tokens"], 64);
 }
 
 #[tokio::test]
@@ -295,7 +330,15 @@ eb48dced80cd   supabase/edge-runtime:v1.69.28   \"edge-runtime start\"    5 mont
     };
 
     let response = ProviderRuntime::new()
-        .command_autocomplete(&test_config(base_url), &request, None, None, None)
+        .command_autocomplete(
+            &test_config(base_url),
+            &request,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
 
@@ -379,6 +422,7 @@ fn test_params(enable_tools: bool) -> ChatCompletionParams {
         local_model_aliases: None,
         model: Some(MODEL.to_owned()),
         max_tokens: None,
+        local_model_context_tokens: None,
         temperature: None,
         mcp_tools: Vec::new(),
         enable_tools,

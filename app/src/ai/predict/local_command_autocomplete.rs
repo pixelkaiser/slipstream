@@ -7,12 +7,16 @@ use crate::completer::SessionContext;
 const MAX_FILE_CANDIDATES: usize = 80;
 const OPENAI_BASE_URL_HEADER: &str = "X-Warp-OpenAI-Base-URL";
 const LOCAL_MODEL_ALIASES_HEADER: &str = "X-Warp-Local-Model-Aliases";
+const LOCAL_MAX_COMPLETION_TOKENS_HEADER: &str = "X-Warp-Local-Max-Completion-Tokens";
+const LOCAL_MODEL_CONTEXT_TOKENS_HEADER: &str = "X-Warp-Local-Model-Context-Tokens";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LocalCommandAutocompleteProviderSettings {
     pub openai_api_key: Option<String>,
     pub openai_base_url: Option<String>,
     pub local_model_aliases: Option<String>,
+    pub local_max_completion_tokens: Option<u32>,
+    pub local_model_context_tokens: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -92,6 +96,20 @@ pub async fn request_local_command_autocomplete(
     }
     if let Some(local_model_aliases) = provider_settings.local_model_aliases.as_deref() {
         request_builder = request_builder.header(LOCAL_MODEL_ALIASES_HEADER, local_model_aliases);
+    }
+    if let Some(local_max_completion_tokens) = provider_settings.local_max_completion_tokens {
+        request_builder = request_builder.header(
+            LOCAL_MAX_COMPLETION_TOKENS_HEADER,
+            local_max_completion_tokens.to_string(),
+        );
+    }
+    if let Some(local_model_context_tokens) =
+        provider_settings.local_model_context_tokens.as_deref()
+    {
+        request_builder = request_builder.header(
+            LOCAL_MODEL_CONTEXT_TOKENS_HEADER,
+            local_model_context_tokens,
+        );
     }
     Ok(request_builder
         .send()

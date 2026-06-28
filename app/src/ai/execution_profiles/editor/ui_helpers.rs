@@ -678,6 +678,30 @@ pub fn render_local_inference_section(
                 ));
             }
         }
+        column.add_child(render_profile_inference_input(
+            appearance,
+            "LOCAL_MODEL_CONTEXT_TOKENS",
+            "Context window override for this profile's local models.",
+            &view.local_agent_context_tokens_editor,
+        ));
+        column.add_child(render_profile_inference_input(
+            appearance,
+            "LOCAL_MAX_COMPLETION_TOKENS",
+            "Completion-token cap for this profile's local agent requests.",
+            &view.local_agent_max_completion_tokens_editor,
+        ));
+        column.add_child(render_profile_inference_input(
+            appearance,
+            "AUTOCOMPLETE_MODEL_CONTEXT_TOKENS",
+            "Context window override for this profile's autocomplete model.",
+            &view.local_agent_autocomplete_context_tokens_editor,
+        ));
+        column.add_child(render_profile_inference_input(
+            appearance,
+            "AUTOCOMPLETE_MAX_COMPLETION_TOKENS",
+            "Completion-token cap for this profile's autocomplete model.",
+            &view.local_agent_autocomplete_max_completion_tokens_editor,
+        ));
     }
 
     Container::new(column.finish())

@@ -1618,6 +1618,8 @@ pub(crate) fn initialize_app(
                 local_config.openai_base_url.clone(),
                 local_config.local_model_aliases.clone(),
                 local_config.local_model_list.clone(),
+                Some(local_config.local_max_completion_tokens),
+                local_config.local_model_context_tokens.clone(),
                 local_ai_autocomplete_enabled,
                 ctx,
             );

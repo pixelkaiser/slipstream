@@ -124,6 +124,8 @@ pub struct RequestParams {
     pub openai_base_url: Option<String>,
     pub local_multi_agent_server_root_url: Option<String>,
     pub local_model_aliases: Option<String>,
+    pub local_max_completion_tokens: Option<u32>,
+    pub local_model_context_tokens: Option<String>,
     pub allow_use_of_warp_credits: bool,
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
     pub isolation_level: warp_multi_agent_api::IsolationLevel,
@@ -186,6 +188,8 @@ impl RequestParams {
             custom_model_providers: None,
             custom_model_routers: None,
             local_model_aliases: None,
+            local_max_completion_tokens: None,
+            local_model_context_tokens: None,
             local_multi_agent_server_root_url: None,
             openai_base_url: None,
             allow_use_of_warp_credits: false,
@@ -330,6 +334,10 @@ impl RequestParams {
         let local_model_aliases = non_empty_string(
             api_key_manager.local_model_aliases_for_profile(&inference_profile_key),
         );
+        let local_max_completion_tokens =
+            api_key_manager.local_max_completion_tokens_for_profile(&inference_profile_key);
+        let local_model_context_tokens =
+            api_key_manager.local_model_context_tokens_for_profile(&inference_profile_key);
         let allow_use_of_warp_credits = *AISettings::as_ref(app).can_use_warp_credits_for_fallback;
 
         let app_execution_mode = AppExecutionMode::as_ref(app);
@@ -409,6 +417,8 @@ impl RequestParams {
             openai_base_url,
             local_multi_agent_server_root_url,
             local_model_aliases,
+            local_max_completion_tokens,
+            local_model_context_tokens,
             allow_use_of_warp_credits,
             autonomy_level,
             isolation_level,

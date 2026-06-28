@@ -61,6 +61,10 @@ pub struct ProfileInferenceSettings {
     pub custom_endpoints: Vec<CustomEndpoint>,
     pub local_model_aliases: String,
     pub local_model_list: String,
+    pub local_max_completion_tokens: Option<u32>,
+    pub local_model_context_tokens: Option<String>,
+    pub local_autocomplete_max_completion_tokens: Option<u32>,
+    pub local_autocomplete_model_context_tokens: Option<String>,
     pub local_ai_autocomplete_enabled: bool,
 }
 
@@ -143,6 +147,10 @@ impl ApiKeys {
             custom_endpoints: self.custom_endpoints.clone(),
             local_model_aliases: String::new(),
             local_model_list: String::new(),
+            local_max_completion_tokens: None,
+            local_model_context_tokens: None,
+            local_autocomplete_max_completion_tokens: None,
+            local_autocomplete_model_context_tokens: None,
             local_ai_autocomplete_enabled: false,
         }
     }
@@ -183,6 +191,8 @@ impl ApiKeys {
         openai_base_url: Option<String>,
         local_model_aliases: String,
         local_model_list: String,
+        local_max_completion_tokens: Option<u32>,
+        local_model_context_tokens: Option<String>,
         local_ai_autocomplete_enabled: bool,
     ) -> bool {
         if self.local_profile_settings_migrated {
@@ -201,6 +211,14 @@ impl ApiKeys {
         if default_profile.local_model_list.trim().is_empty() && !local_model_list.trim().is_empty()
         {
             default_profile.local_model_list = local_model_list;
+        }
+        if default_profile.local_max_completion_tokens.is_none() {
+            default_profile.local_max_completion_tokens =
+                local_max_completion_tokens.filter(|value| *value > 0);
+        }
+        if default_profile.local_model_context_tokens.is_none() {
+            default_profile.local_model_context_tokens =
+                non_empty_local_setting(local_model_context_tokens);
         }
         default_profile.local_ai_autocomplete_enabled = local_ai_autocomplete_enabled;
         self.local_profile_settings_migrated = true;
@@ -303,6 +321,12 @@ fn normalize_absolute_http_url(url: Option<String>) -> Option<String> {
     }
 
     Some(url)
+}
+
+fn non_empty_local_setting(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
@@ -553,6 +577,58 @@ impl ApiKeyManager {
         self.write_keys_to_secure_storage(ctx);
     }
 
+    pub fn set_local_max_completion_tokens_for_profile(
+        &mut self,
+        profile_key: &str,
+        tokens: Option<u32>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys
+            .profile_settings_mut(profile_key)
+            .local_max_completion_tokens = tokens.filter(|value| *value > 0);
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_local_model_context_tokens_for_profile(
+        &mut self,
+        profile_key: &str,
+        tokens: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys
+            .profile_settings_mut(profile_key)
+            .local_model_context_tokens = non_empty_local_setting(tokens);
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_local_autocomplete_max_completion_tokens_for_profile(
+        &mut self,
+        profile_key: &str,
+        tokens: Option<u32>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys
+            .profile_settings_mut(profile_key)
+            .local_autocomplete_max_completion_tokens = tokens.filter(|value| *value > 0);
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_local_autocomplete_model_context_tokens_for_profile(
+        &mut self,
+        profile_key: &str,
+        tokens: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys
+            .profile_settings_mut(profile_key)
+            .local_autocomplete_model_context_tokens = non_empty_local_setting(tokens);
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
     pub fn set_local_ai_autocomplete_enabled_for_profile(
         &mut self,
         profile_key: &str,
@@ -626,6 +702,8 @@ impl ApiKeyManager {
         openai_base_url: Option<String>,
         local_model_aliases: String,
         local_model_list: String,
+        local_max_completion_tokens: Option<u32>,
+        local_model_context_tokens: Option<String>,
         local_ai_autocomplete_enabled: bool,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -633,6 +711,8 @@ impl ApiKeyManager {
             openai_base_url,
             local_model_aliases,
             local_model_list,
+            local_max_completion_tokens,
+            local_model_context_tokens,
             local_ai_autocomplete_enabled,
         ) {
             ctx.emit(ApiKeyManagerEvent::KeysUpdated);
@@ -1078,6 +1158,36 @@ impl ApiKeyManager {
 
     pub fn local_model_list_for_profile(&self, profile_key: &str) -> String {
         self.keys.profile_settings(profile_key).local_model_list
+    }
+
+    pub fn local_max_completion_tokens_for_profile(&self, profile_key: &str) -> Option<u32> {
+        self.keys
+            .profile_settings(profile_key)
+            .local_max_completion_tokens
+    }
+
+    pub fn local_model_context_tokens_for_profile(&self, profile_key: &str) -> Option<String> {
+        self.keys
+            .profile_settings(profile_key)
+            .local_model_context_tokens
+    }
+
+    pub fn local_autocomplete_max_completion_tokens_for_profile(
+        &self,
+        profile_key: &str,
+    ) -> Option<u32> {
+        self.keys
+            .profile_settings(profile_key)
+            .local_autocomplete_max_completion_tokens
+    }
+
+    pub fn local_autocomplete_model_context_tokens_for_profile(
+        &self,
+        profile_key: &str,
+    ) -> Option<String> {
+        self.keys
+            .profile_settings(profile_key)
+            .local_autocomplete_model_context_tokens
     }
 
     pub fn local_ai_autocomplete_enabled_for_profile(&self, profile_key: &str) -> bool {

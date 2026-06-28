@@ -33,6 +33,8 @@ use crate::{
 const MAX_REQUEST_BYTES: usize = 25 * 1024 * 1024;
 const OPENAI_BASE_URL_HEADER: &str = "x-warp-openai-base-url";
 const LOCAL_MODEL_ALIASES_HEADER: &str = "x-warp-local-model-aliases";
+const LOCAL_MAX_COMPLETION_TOKENS_HEADER: &str = "x-warp-local-max-completion-tokens";
+const LOCAL_MODEL_CONTEXT_TOKENS_HEADER: &str = "x-warp-local-model-context-tokens";
 
 #[derive(Clone)]
 struct AppState {
@@ -209,6 +211,8 @@ async fn local_command_autocomplete(
             bearer_token(&headers),
             header_value(&headers, OPENAI_BASE_URL_HEADER),
             header_value(&headers, LOCAL_MODEL_ALIASES_HEADER),
+            positive_u32_header(&headers, LOCAL_MAX_COMPLETION_TOKENS_HEADER),
+            header_value(&headers, LOCAL_MODEL_CONTEXT_TOKENS_HEADER),
         )
         .await
     {
@@ -337,6 +341,10 @@ async fn handle_multi_agent(
         .and_then(non_empty_str)
         .map(str::to_owned);
     let request_local_model_aliases = header_value(&headers, LOCAL_MODEL_ALIASES_HEADER);
+    let request_local_max_completion_tokens =
+        positive_u32_header(&headers, LOCAL_MAX_COMPLETION_TOKENS_HEADER);
+    let request_local_model_context_tokens =
+        header_value(&headers, LOCAL_MODEL_CONTEXT_TOKENS_HEADER);
     let (tx, rx) = mpsc::unbounded_channel::<String>();
     let task_state = state.clone();
     tokio::spawn(async move {
@@ -346,6 +354,8 @@ async fn handle_multi_agent(
             warp_request,
             request_openai_base_url,
             request_local_model_aliases,
+            request_local_max_completion_tokens,
+            request_local_model_context_tokens,
             passive_suggestions,
         )
         .await;
@@ -372,6 +382,8 @@ async fn process_multi_agent(
     warp_request: WarpRequestSummary,
     request_openai_base_url: Option<String>,
     request_local_model_aliases: Option<String>,
+    request_local_max_completion_tokens: Option<u32>,
+    request_local_model_context_tokens: Option<String>,
     passive_suggestions: bool,
 ) {
     state
@@ -395,6 +407,8 @@ async fn process_multi_agent(
                 "hasRequestApiKey": warp_request.openai_api_key.is_some(),
                 "hasOpenAiBaseUrlHeader": request_openai_base_url.is_some(),
                 "hasLocalModelAliasesHeader": request_local_model_aliases.is_some(),
+                "hasLocalMaxCompletionTokensHeader": request_local_max_completion_tokens.is_some(),
+                "hasLocalModelContextTokensHeader": request_local_model_context_tokens.is_some(),
             }),
         )
         .await;
@@ -436,7 +450,8 @@ async fn process_multi_agent(
                     base_url: request_openai_base_url,
                     local_model_aliases: request_local_model_aliases,
                     model: warp_request.model.clone(),
-                    max_tokens: None,
+                    max_tokens: request_local_max_completion_tokens,
+                    local_model_context_tokens: request_local_model_context_tokens,
                     temperature: None,
                     mcp_tools: warp_request.mcp_tools.clone(),
                     enable_tools: !warp_request.is_summarization_request,
@@ -821,6 +836,14 @@ fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .and_then(|value| value.to_str().ok())
         .and_then(non_empty_str)
         .map(str::to_owned)
+}
+
+fn positive_u32_header(headers: &HeaderMap, name: &str) -> Option<u32> {
+    header_value(headers, name)?
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|value| *value > 0)
 }
 
 fn bearer_token(headers: &HeaderMap) -> Option<String> {

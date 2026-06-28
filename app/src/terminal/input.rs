@@ -9349,14 +9349,18 @@ impl Input {
             let profile_key = active_profile.inference_profile_key();
             let api_key_manager = ::ai::api_keys::ApiKeyManager::as_ref(ctx);
             if api_key_manager.local_ai_autocomplete_enabled_for_profile(&profile_key) {
+                let settings = api_key_manager.keys().profile_settings(&profile_key);
                 (
                     crate::local_multi_agent::local_no_cloud_root_url(),
                     LocalCommandAutocompleteProviderSettings {
-                        openai_api_key: api_key_manager.openai_key_for_profile(&profile_key),
-                        openai_base_url: api_key_manager.openai_base_url_for_profile(&profile_key),
-                        local_model_aliases: non_empty_string(
-                            api_key_manager.local_model_aliases_for_profile(&profile_key),
-                        ),
+                        openai_api_key: settings.openai,
+                        openai_base_url: settings.openai_base_url,
+                        local_model_aliases: non_empty_string(settings.local_model_aliases),
+                        local_max_completion_tokens: settings
+                            .local_autocomplete_max_completion_tokens,
+                        local_model_context_tokens: settings
+                            .local_autocomplete_model_context_tokens
+                            .or(settings.local_model_context_tokens),
                     },
                 )
             } else {
