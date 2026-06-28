@@ -26,6 +26,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::{send_telemetry_from_ctx, CloudModel, LaunchMode, TelemetryEvent};
 
 const LOCAL_PROFILES_PREF_KEY: &str = "LocalAIExecutionProfiles";
+const LOCAL_DEFAULT_PROFILE_PREF_KEY: &str = "LocalDefaultAIExecutionProfile";
 
 /// ExecutionProfileId is the identifier that users of the AIExecutionProfilesModel use
 /// to refer back to a specific profile. These are unique across the lifespan of the app.
@@ -200,7 +201,8 @@ impl AIExecutionProfilesModel {
                             }
                             None => DefaultProfileState::Unsynced {
                                 id: ClientProfileId::new(),
-                                profile: super::create_default_from_legacy_settings(ctx),
+                                profile: Self::load_local_default_profile(ctx)
+                                    .unwrap_or_else(|| super::create_default_from_legacy_settings(ctx)),
                             },
                         }
                     }
@@ -322,7 +324,10 @@ impl AIExecutionProfilesModel {
     }
 
     fn load_local_profiles(ctx: &AppContext) -> HashMap<ClientProfileId, LocalAIExecutionProfile> {
-        let profiles = match ctx.private_user_preferences().read_value(LOCAL_PROFILES_PREF_KEY) {
+        let profiles = match ctx
+            .private_user_preferences()
+            .read_value(LOCAL_PROFILES_PREF_KEY)
+        {
             Ok(Some(json)) => match serde_json::from_str::<Vec<LocalAIExecutionProfile>>(&json) {
                 Ok(profiles) => profiles,
                 Err(error) => {
@@ -342,6 +347,44 @@ impl AIExecutionProfilesModel {
             .filter(|profile| !profile.profile.is_default_profile)
             .map(|profile| (ClientProfileId::new(), profile))
             .collect()
+    }
+
+    fn load_local_default_profile(ctx: &AppContext) -> Option<AIExecutionProfile> {
+        let json = match ctx
+            .private_user_preferences()
+            .read_value(LOCAL_DEFAULT_PROFILE_PREF_KEY)
+        {
+            Ok(Some(json)) => json,
+            Ok(None) => return None,
+            Err(error) => {
+                log::warn!("Failed to read local default AI execution profile: {error}");
+                return None;
+            }
+        };
+
+        let mut profile = match serde_json::from_str::<AIExecutionProfile>(&json) {
+            Ok(profile) => profile,
+            Err(error) => {
+                log::warn!("Failed to parse local default AI execution profile: {error}");
+                return None;
+            }
+        };
+        profile.is_default_profile = true;
+        Some(profile)
+    }
+
+    fn save_local_default_profile(profile: &AIExecutionProfile, ctx: &AppContext) {
+        let mut profile = profile.clone();
+        profile.is_default_profile = true;
+        let Ok(json) = serde_json::to_string(&profile) else {
+            return;
+        };
+        if let Err(error) = ctx
+            .private_user_preferences()
+            .write_value(LOCAL_DEFAULT_PROFILE_PREF_KEY, json)
+        {
+            log::warn!("Failed to persist local default AI execution profile: {error}");
+        }
     }
 
     fn save_local_profiles(&self, ctx: &AppContext) {
@@ -1410,11 +1453,12 @@ impl AIExecutionProfilesModel {
                 } else {
                     // The user isn't logged in yet (or personal drive isn't available),
                     // so we can't create a cloud object. Persist the edit locally on the
-                    // Unsynced profile so it isn't silently dropped; it will be promoted
-                    // to a Synced cloud object the next time an edit runs after login.
-                    // Without this, onboarding-driven edits (e.g. autonomy permissions
-                    // written by `apply_agent_settings`) disappear when onboarding is
-                    // completed before login.
+                    // Unsynced profile so it isn't silently dropped across app restarts;
+                    // it will be promoted to a Synced cloud object the next time an edit
+                    // runs after login. Without this, logged-out/no-cloud edits (e.g.
+                    // changing the default model in profile settings) disappear on
+                    // restart.
+                    Self::save_local_default_profile(&new_profile, ctx);
                     self.default_profile_state = DefaultProfileState::Unsynced {
                         id: profile_id,
                         profile: new_profile,
@@ -1759,7 +1803,11 @@ impl AIExecutionProfilesModel {
                 *sync_id = server_id;
                 log::info!("Updated profile id mapping after creating a new execution profile");
                 ::ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
-                    manager.rename_profile_settings(&client_id.to_string(), &server_id.to_string(), ctx);
+                    manager.rename_profile_settings(
+                        &client_id.to_string(),
+                        &server_id.to_string(),
+                        ctx,
+                    );
                 });
             }
         }
