@@ -16,6 +16,14 @@ pub use crate::geap_credentials::{
 
 const SECURE_STORAGE_KEY: &str = "AiApiKeys";
 pub const DEFAULT_PROFILE_INFERENCE_KEY: &str = "default";
+pub const LOCAL_THINKING_MODE_ENABLED: &str = "enabled";
+pub const LOCAL_THINKING_MODE_DISABLED: &str = "disabled";
+pub const LOCAL_THINKING_MODE_PROVIDER_DEFAULT: &str = "provider-default";
+pub const LOCAL_THINKING_MODE_CHOICES: [&str; 3] = [
+    LOCAL_THINKING_MODE_ENABLED,
+    LOCAL_THINKING_MODE_DISABLED,
+    LOCAL_THINKING_MODE_PROVIDER_DEFAULT,
+];
 
 /// Secure-storage key for the connected xAI/Grok subscription's OAuth tokens.
 /// Kept separate from [`SECURE_STORAGE_KEY`] because these are OAuth tokens with
@@ -63,6 +71,7 @@ pub struct ProfileInferenceSettings {
     pub local_model_list: String,
     pub local_max_completion_tokens: Option<u32>,
     pub local_model_context_tokens: Option<String>,
+    pub local_thinking_mode: Option<String>,
     pub local_autocomplete_max_completion_tokens: Option<u32>,
     pub local_autocomplete_model_context_tokens: Option<String>,
     pub local_ai_autocomplete_enabled: bool,
@@ -149,6 +158,7 @@ impl ApiKeys {
             local_model_list: String::new(),
             local_max_completion_tokens: None,
             local_model_context_tokens: None,
+            local_thinking_mode: None,
             local_autocomplete_max_completion_tokens: None,
             local_autocomplete_model_context_tokens: None,
             local_ai_autocomplete_enabled: false,
@@ -327,6 +337,36 @@ fn non_empty_local_setting(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+pub fn normalize_local_thinking_mode(value: Option<String>) -> String {
+    match value.as_deref().map(str::trim).map(str::to_ascii_lowercase) {
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "disabled" | "disable" | "false" | "0" | "off" | "no"
+            ) =>
+        {
+            LOCAL_THINKING_MODE_DISABLED.to_string()
+        }
+        Some(value)
+            if matches!(
+                value.as_str(),
+                "provider-default" | "provider_default" | "default" | "omit" | "unset"
+            ) =>
+        {
+            LOCAL_THINKING_MODE_PROVIDER_DEFAULT.to_string()
+        }
+        _ => LOCAL_THINKING_MODE_ENABLED.to_string(),
+    }
+}
+
+pub fn local_thinking_mode_label(value: &str) -> &'static str {
+    match normalize_local_thinking_mode(Some(value.to_string())).as_str() {
+        LOCAL_THINKING_MODE_DISABLED => "Disabled",
+        LOCAL_THINKING_MODE_PROVIDER_DEFAULT => "Provider default",
+        _ => "Enabled",
+    }
 }
 
 /// Controls how AWS credentials are refreshed by [`ApiKeyManager`].
@@ -599,6 +639,19 @@ impl ApiKeyManager {
         self.keys
             .profile_settings_mut(profile_key)
             .local_model_context_tokens = non_empty_local_setting(tokens);
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_local_thinking_mode_for_profile(
+        &mut self,
+        profile_key: &str,
+        mode: String,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys
+            .profile_settings_mut(profile_key)
+            .local_thinking_mode = Some(normalize_local_thinking_mode(Some(mode)));
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }
@@ -1170,6 +1223,10 @@ impl ApiKeyManager {
         self.keys
             .profile_settings(profile_key)
             .local_model_context_tokens
+    }
+
+    pub fn local_thinking_mode_for_profile(&self, profile_key: &str) -> String {
+        normalize_local_thinking_mode(self.keys.profile_settings(profile_key).local_thinking_mode)
     }
 
     pub fn local_autocomplete_max_completion_tokens_for_profile(

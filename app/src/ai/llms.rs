@@ -116,10 +116,15 @@ pub struct LLMSpec {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum LLMProvider {
+    #[serde(alias = "OPENAI", alias = "openai")]
     OpenAI,
+    #[serde(alias = "ANTHROPIC", alias = "anthropic")]
     Anthropic,
+    #[serde(alias = "GOOGLE", alias = "google")]
     Google,
+    #[serde(alias = "XAI", alias = "xAI", alias = "xai")]
     Xai,
+    #[serde(alias = "UNKNOWN", alias = "unknown")]
     Unknown,
 }
 
@@ -591,6 +596,7 @@ pub struct LLMPreferences {
     last_local_multi_agent_config: Option<LocalMultiAgentConfig>,
     #[cfg(not(target_family = "wasm"))]
     last_local_multi_agent_discovered_models: Vec<String>,
+    last_has_grok_tokens: bool,
 }
 
 impl LLMPreferences {
@@ -630,8 +636,14 @@ impl LLMPreferences {
         ctx.subscribe_to_model(
             &ApiKeyManager::handle(ctx),
             |me, _, _event: &ApiKeyManagerEvent, ctx| {
+                let has_grok_tokens = ApiKeyManager::as_ref(ctx).grok_tokens().is_some();
+                let grok_connection_changed = me.last_has_grok_tokens != has_grok_tokens;
+                me.last_has_grok_tokens = has_grok_tokens;
                 me.rebuild_custom_llms(ctx);
                 me.reconcile_disabled_model_preferences(ctx);
+                if grok_connection_changed {
+                    me.refresh_available_models(ctx);
+                }
                 ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
             },
         );
@@ -648,9 +660,11 @@ impl LLMPreferences {
         }
 
         let base_llm_for_terminal_view = HashMap::new();
-        let keys = ApiKeyManager::as_ref(ctx).keys();
+        let api_key_manager = ApiKeyManager::as_ref(ctx);
+        let keys = api_key_manager.keys();
         let custom_llms = build_custom_llm_infos(keys);
         let profile_custom_llms = build_profile_custom_llm_infos(keys);
+        let last_has_grok_tokens = api_key_manager.grok_tokens().is_some();
 
         let mut me = Self {
             models_by_feature,
@@ -665,6 +679,7 @@ impl LLMPreferences {
             last_local_multi_agent_config: None,
             #[cfg(not(target_family = "wasm"))]
             last_local_multi_agent_discovered_models: Vec::new(),
+            last_has_grok_tokens,
         };
 
         // Seed from any already-loaded local config (the async load emits

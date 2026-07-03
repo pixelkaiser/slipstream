@@ -18,6 +18,7 @@ Common settings:
 - `LOCAL_MODEL_ALIASES`
 - `LOCAL_MODEL_LIST`
 - `LOCAL_ENABLE_TOOLS`
+- `LOCAL_THINKING_MODE` (`enabled`, `disabled`, or `provider-default`; defaults to `enabled`)
 - `LOCAL_MAX_HISTORY_MESSAGES`
 - `LOCAL_MAX_COMPLETION_TOKENS`
 - `LOCAL_MODEL_CONTEXT_TOKENS`

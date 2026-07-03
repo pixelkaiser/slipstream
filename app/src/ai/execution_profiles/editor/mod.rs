@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, DEFAULT_PROFILE_INFERENCE_KEY};
+use ai::api_keys::{
+    local_thinking_mode_label, ApiKeyManager, ApiKeyManagerEvent, DEFAULT_PROFILE_INFERENCE_KEY,
+    LOCAL_THINKING_MODE_CHOICES,
+};
 use itertools::Itertools;
 use regex::Regex;
 use thousands::Separable;
@@ -225,6 +228,10 @@ pub enum ExecutionProfileEditorViewAction {
         model: String,
     },
     #[cfg(not(target_family = "wasm"))]
+    SetLocalThinkingMode {
+        mode: String,
+    },
+    #[cfg(not(target_family = "wasm"))]
     RestartLocalMultiAgent,
     #[cfg(not(target_family = "wasm"))]
     TestLocalMultiAgent,
@@ -316,6 +323,9 @@ pub struct ExecutionProfileEditorView {
     #[cfg(not(target_family = "wasm"))]
     local_agent_alias_dropdowns:
         HashMap<&'static str, ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>>,
+    #[cfg(not(target_family = "wasm"))]
+    local_agent_thinking_mode_dropdown:
+        ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
     #[cfg(not(target_family = "wasm"))]
     local_agent_max_completion_tokens_editor: ViewHandle<EditorView>,
     #[cfg(not(target_family = "wasm"))]
@@ -888,6 +898,13 @@ impl ExecutionProfileEditorView {
             .collect();
 
         #[cfg(not(target_family = "wasm"))]
+        let local_agent_thinking_mode_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_menu_width(MODEL_MENU_WIDTH, ctx);
+            dropdown
+        });
+
+        #[cfg(not(target_family = "wasm"))]
         let local_agent_restart_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("Restart", SecondaryTheme)
                 .with_icon(Icon::RefreshCw04)
@@ -1046,6 +1063,8 @@ impl ExecutionProfileEditorView {
             #[cfg(not(target_family = "wasm"))]
             local_agent_alias_dropdowns,
             #[cfg(not(target_family = "wasm"))]
+            local_agent_thinking_mode_dropdown,
+            #[cfg(not(target_family = "wasm"))]
             local_agent_max_completion_tokens_editor,
             #[cfg(not(target_family = "wasm"))]
             local_agent_context_tokens_editor,
@@ -1167,6 +1186,7 @@ impl ExecutionProfileEditorView {
                 #[cfg(not(target_family = "wasm"))]
                 {
                     me.refresh_local_agent_alias_dropdowns(ctx);
+                    me.refresh_local_agent_thinking_mode_dropdown(ctx);
                     me.update_local_agent_buttons(ctx);
                 }
                 me.sync_context_window_editor(ctx, false);
@@ -1189,6 +1209,7 @@ impl ExecutionProfileEditorView {
                         permissions.permissions_profile_for_id(ctx, me.profile_id);
                     me.refresh_model_dropdowns(&current_permissions, ctx);
                     me.refresh_local_agent_alias_dropdowns(ctx);
+                    me.refresh_local_agent_thinking_mode_dropdown(ctx);
                     me.update_local_agent_buttons(ctx);
                     ctx.notify();
                 }
@@ -1450,6 +1471,39 @@ impl ExecutionProfileEditorView {
         }
     }
 
+    #[cfg(not(target_family = "wasm"))]
+    fn refresh_local_agent_thinking_mode_dropdown(&self, ctx: &mut AppContext) {
+        let Some(profile_key) = self.inference_profile_key(ctx) else {
+            return;
+        };
+        let is_enabled = Self::local_inference_settings_enabled(ctx);
+        let selected = ApiKeyManager::as_ref(ctx).local_thinking_mode_for_profile(&profile_key);
+        self.local_agent_thinking_mode_dropdown
+            .update(ctx, |dropdown, ctx| {
+                if is_enabled {
+                    dropdown.set_enabled(ctx);
+                } else {
+                    dropdown.set_disabled(ctx);
+                }
+                let items = LOCAL_THINKING_MODE_CHOICES
+                    .iter()
+                    .map(|mode| {
+                        DropdownItem::new(
+                            local_thinking_mode_label(mode).to_string(),
+                            ExecutionProfileEditorViewAction::SetLocalThinkingMode {
+                                mode: (*mode).to_string(),
+                            },
+                        )
+                    })
+                    .collect();
+                dropdown.set_items(items, ctx);
+                dropdown.set_selected_by_action(
+                    ExecutionProfileEditorViewAction::SetLocalThinkingMode { mode: selected },
+                    ctx,
+                );
+            });
+    }
+
     fn can_use_custom_inference_controls(app: &AppContext) -> bool {
         FeatureFlag::CustomInferenceEndpoints.is_enabled()
             && AISettings::as_ref(app).is_any_ai_enabled(app)
@@ -1633,7 +1687,10 @@ impl ExecutionProfileEditorView {
             ctx,
         );
         #[cfg(not(target_family = "wasm"))]
-        self.refresh_local_agent_alias_dropdowns(ctx);
+        {
+            self.refresh_local_agent_alias_dropdowns(ctx);
+            self.refresh_local_agent_thinking_mode_dropdown(ctx);
+        }
 
         Self::update_profile_name_editor(&self.profile_name_editor, &current_permissions, ctx);
         self.sync_context_window_editor(ctx, false);
@@ -2695,6 +2752,7 @@ impl TypedActionView for ExecutionProfileEditorView {
                     );
                 });
                 self.refresh_local_agent_alias_dropdowns(ctx);
+                self.refresh_local_agent_thinking_mode_dropdown(ctx);
                 ctx.notify();
             }
             #[cfg(not(target_family = "wasm"))]
@@ -2723,6 +2781,16 @@ impl TypedActionView for ExecutionProfileEditorView {
                 // ApiKeyManagerEvent refreshes these dropdowns after the current action effect
                 // completes. Refreshing here re-enters the selected FilterableDropdown while it
                 // is closing and can panic with a circular view update.
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            ExecutionProfileEditorViewAction::SetLocalThinkingMode { mode } => {
+                let Some(profile_key) = self.inference_profile_key(ctx) else {
+                    return;
+                };
+                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.set_local_thinking_mode_for_profile(&profile_key, mode.clone(), ctx);
+                });
                 ctx.notify();
             }
             #[cfg(not(target_family = "wasm"))]

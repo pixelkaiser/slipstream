@@ -18,6 +18,7 @@ pub struct Config {
     pub local_model_aliases: Option<String>,
     pub local_model_list: String,
     pub local_enable_tools: bool,
+    pub local_thinking_mode: LocalThinkingMode,
     pub local_max_history_messages: usize,
     pub local_max_completion_tokens: u32,
     pub local_model_context_tokens: Option<String>,
@@ -53,6 +54,45 @@ impl LogLevel {
             Some(value) if value == "warn" => Self::Warn,
             Some(value) if value == "error" => Self::Error,
             _ => Self::Info,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalThinkingMode {
+    Enabled,
+    Disabled,
+    ProviderDefault,
+}
+
+impl LocalThinkingMode {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase) {
+            Some(value)
+                if matches!(
+                    value.as_str(),
+                    "disabled" | "disable" | "false" | "0" | "off" | "no"
+                ) =>
+            {
+                Self::Disabled
+            }
+            Some(value)
+                if matches!(
+                    value.as_str(),
+                    "provider-default" | "provider_default" | "default" | "omit" | "unset"
+                ) =>
+            {
+                Self::ProviderDefault
+            }
+            _ => Self::Enabled,
+        }
+    }
+
+    pub fn chat_template_enable_thinking(self, request_enable_thinking: bool) -> Option<bool> {
+        match self {
+            Self::Enabled => Some(request_enable_thinking),
+            Self::Disabled => Some(false),
+            Self::ProviderDefault => None,
         }
     }
 }
@@ -122,6 +162,9 @@ impl Config {
             local_enable_tools: std::env::var("LOCAL_ENABLE_TOOLS")
                 .map(|value| value.trim().to_ascii_lowercase() != "false")
                 .unwrap_or(true),
+            local_thinking_mode: LocalThinkingMode::parse(
+                std::env::var("LOCAL_THINKING_MODE").ok().as_deref(),
+            ),
             local_max_history_messages,
             local_max_completion_tokens,
             local_model_context_tokens: non_empty(std::env::var("LOCAL_MODEL_CONTEXT_TOKENS").ok())
@@ -260,5 +303,25 @@ mod tests {
             Ok("http://shell.example/v1")
         );
         assert_eq!(std::env::var("QUOTED").as_deref(), Ok("a\nb"));
+    }
+
+    #[test]
+    fn thinking_mode_maps_agent_and_autocomplete_requests() {
+        assert_eq!(
+            LocalThinkingMode::parse(None).chat_template_enable_thinking(true),
+            Some(true)
+        );
+        assert_eq!(
+            LocalThinkingMode::parse(None).chat_template_enable_thinking(false),
+            Some(false)
+        );
+        assert_eq!(
+            LocalThinkingMode::parse(Some("disabled")).chat_template_enable_thinking(true),
+            Some(false)
+        );
+        assert_eq!(
+            LocalThinkingMode::parse(Some("provider-default")).chat_template_enable_thinking(true),
+            None
+        );
     }
 }

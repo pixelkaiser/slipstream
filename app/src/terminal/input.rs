@@ -188,8 +188,8 @@ use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::predict::local_command_autocomplete::{
-    AutocompleteBlockContext, LocalCommandAutocompleteProviderSettings,
-    LocalCommandAutocompleteRequest, file_candidates_for_context, request_local_command_autocomplete,
+    file_candidates_for_context, request_local_command_autocomplete, AutocompleteBlockContext,
+    LocalCommandAutocompleteProviderSettings, LocalCommandAutocompleteRequest,
 };
 use crate::ai::predict::next_command_model::{
     is_command_valid, is_next_command_enabled, NextCommandModel, NextCommandModelEvent,
@@ -9363,13 +9363,13 @@ impl Input {
                         local_model_context_tokens: settings
                             .local_autocomplete_model_context_tokens
                             .or(settings.local_model_context_tokens),
+                        local_thinking_mode: Some(
+                            api_key_manager.local_thinking_mode_for_profile(&profile_key),
+                        ),
                     },
                 )
             } else {
-                (
-                    None,
-                    LocalCommandAutocompleteProviderSettings::default(),
-                )
+                (None, LocalCommandAutocompleteProviderSettings::default())
             }
         };
         #[cfg(target_family = "wasm")]

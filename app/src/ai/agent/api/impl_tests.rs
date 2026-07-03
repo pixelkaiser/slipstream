@@ -41,6 +41,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         local_model_aliases: None,
         local_max_completion_tokens: None,
         local_model_context_tokens: None,
+        local_thinking_mode: None,
         allow_use_of_warp_credits: false,
         autonomy_level: api::AutonomyLevel::Supervised,
         isolation_level: api::IsolationLevel::None,

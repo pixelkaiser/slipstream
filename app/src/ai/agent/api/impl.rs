@@ -144,6 +144,7 @@ pub async fn generate_multi_agent_output(
             params.local_model_aliases.as_deref(),
             params.local_max_completion_tokens,
             params.local_model_context_tokens.as_deref(),
+            params.local_thinking_mode.as_deref(),
         )
         .await;
     match response_stream {

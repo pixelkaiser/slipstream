@@ -223,6 +223,10 @@ fn local_settings_migration_populates_default_profile_once() {
     );
     assert_eq!(settings.local_autocomplete_max_completion_tokens, None);
     assert_eq!(settings.local_autocomplete_model_context_tokens, None);
+    assert_eq!(
+        normalize_local_thinking_mode(settings.local_thinking_mode),
+        "enabled"
+    );
     assert!(settings.local_ai_autocomplete_enabled);
 
     assert!(!keys.migrate_default_profile_local_settings_if_needed(
@@ -239,6 +243,23 @@ fn local_settings_migration_populates_default_profile_once() {
         Some("http://127.0.0.1:1234/v1")
     );
     assert!(settings.local_ai_autocomplete_enabled);
+}
+
+#[test]
+fn local_thinking_mode_normalizes_known_values() {
+    assert_eq!(normalize_local_thinking_mode(None), "enabled");
+    assert_eq!(
+        normalize_local_thinking_mode(Some("disabled".into())),
+        "disabled"
+    );
+    assert_eq!(
+        normalize_local_thinking_mode(Some("provider_default".into())),
+        "provider-default"
+    );
+    assert_eq!(
+        normalize_local_thinking_mode(Some("unexpected".into())),
+        "enabled"
+    );
 }
 
 // ── has_any_key ─────────────────────────────────────────────────
