@@ -1164,6 +1164,54 @@ fn test_resolve_open_action_opens_active_ambient_session_from_link() {
 }
 
 #[test]
+fn test_resolve_open_action_opens_blocked_active_ambient_session() {
+    App::test((), |mut app| async move {
+        add_entry_projection_test_models(&mut app);
+
+        let now = Utc::now();
+        let session_id = make_uuid(8207);
+        let mut task = create_test_task(&make_uuid(8208), "user-a", now);
+        task.state = AmbientAgentTaskState::Blocked;
+        task.session_link = Some(format!("https://example.com/session/{session_id}"));
+        task.is_sandbox_running = true;
+        task.status_message = Some(TaskStatusMessage {
+            message: "Waiting for your answer".to_string(),
+            error_code: None,
+        });
+        let task_id = task.task_id;
+
+        app.add_singleton_model(|_| {
+            let mut model = create_test_model();
+            model.tasks.insert(task_id, task);
+            model
+        });
+
+        app.update(|ctx| {
+            let entry = AgentConversationsModel::as_ref(ctx)
+                .get_entry_by_id(&AgentConversationEntryId::AmbientRun(task_id), ctx)
+                .expect("task entry should exist");
+            assert!(entry.capabilities.can_open);
+
+            let action = AgentConversationsModel::resolve_open_action(
+                AgentConversationNavigationSubject::Entry(AgentConversationEntryId::AmbientRun(
+                    task_id,
+                )),
+                None,
+                ctx,
+            );
+
+            assert!(matches!(
+                action,
+                Some(WorkspaceAction::OpenOrAttachAmbientAgentConversation {
+                    session_id: resolved_session_id,
+                    task_id: resolved_task_id,
+                }) if resolved_session_id.to_string() == session_id && resolved_task_id == task_id
+            ));
+        });
+    });
+}
+
+#[test]
 fn test_resolve_open_action_returns_none_for_active_unattachable_session() {
     App::test((), |mut app| async move {
         add_entry_projection_test_models(&mut app);
