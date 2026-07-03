@@ -51,6 +51,7 @@ Additional settings:
 LOCAL_MODEL_ALIASES='{"auto-efficient":"your-model-id","auto-coding":"your-model-id"}'
 LOCAL_MODEL_LIST=your-model-id
 LOCAL_ENABLE_TOOLS=true
+LOCAL_THINKING_MODE=enabled
 LOCAL_MAX_HISTORY_MESSAGES=80
 LOCAL_MODEL_CONTEXT_TOKENS=131072
 LOCAL_GRAPHQL_DB_PATH=/path/to/local-graphql.sqlite
@@ -60,6 +61,8 @@ HOST=127.0.0.1
 PORT=8787
 LOG_LEVEL=info
 ```
+
+`LOCAL_THINKING_MODE=enabled` sends `chat_template_kwargs.enable_thinking=true` for local agent requests and `false` for command autocomplete. Use `disabled` to send `false` for all requests, or `provider-default` to omit the field.
 
 Shell environment variables take precedence over values in `.env`.
 
@@ -124,6 +127,7 @@ For a README-only or documentation-only change, code tests are not required.
 - If model choices do not appear, verify that your provider serves `/v1/models` or set `OPENAI_MODEL` and `LOCAL_MODEL_LIST`.
 - If context usage looks wrong, set `LOCAL_MODEL_CONTEXT_TOKENS` to the provider's real context window.
 - If tool calls fail, confirm `LOCAL_ENABLE_TOOLS=true`.
+- If a provider rejects `chat_template_kwargs`, set `LOCAL_THINKING_MODE=provider-default`.
 - If the backend starts but provider calls fail, verify `OPENAI_BASE_URL`, `OPENAI_MODEL`, and the API key requirement for your provider.
 - If startup fails silently from the app, set `LOCAL_SERVICE_LOG_PATH` and inspect the backend log.
 

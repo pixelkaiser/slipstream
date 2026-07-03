@@ -1,4 +1,6 @@
-use ::ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
+use ::ai::api_keys::{
+    local_thinking_mode_label, ApiKeyManager, ApiKeyManagerEvent, LOCAL_THINKING_MODE_CHOICES,
+};
 #[cfg(not(target_family = "wasm"))]
 use ::ai::grok_subscription::oauth::{self, ManualCodeExchange};
 use chrono::{DateTime, Local};
@@ -3615,6 +3617,8 @@ pub enum AISettingsPageAction {
         alias: String,
         model: String,
     },
+    #[cfg(not(target_family = "wasm"))]
+    SetLocalThinkingMode(String),
     HyperlinkClick(HyperlinkUrl),
     ToggleCodebaseContext,
     ToggleShowInputHintText,
@@ -4112,6 +4116,14 @@ impl TypedActionView for AISettingsPageView {
                         })
                     }
                 }
+                ctx.notify();
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AISettingsPageAction::SetLocalThinkingMode(mode) => {
+                let profile_key = ApiKeysWidget::active_inference_profile_key(ctx);
+                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.set_local_thinking_mode_for_profile(&profile_key, mode.clone(), ctx);
+                });
                 ctx.notify();
             }
             AISettingsPageAction::HyperlinkClick(hyperlink) => {
@@ -8229,6 +8241,8 @@ struct ApiKeysWidget {
     local_agent_alias_dropdowns:
         HashMap<&'static str, ViewHandle<FilterableDropdown<AISettingsPageAction>>>,
     #[cfg(not(target_family = "wasm"))]
+    local_agent_thinking_mode_dropdown: ViewHandle<FilterableDropdown<AISettingsPageAction>>,
+    #[cfg(not(target_family = "wasm"))]
     local_agent_model_aliases_editor: ViewHandle<EditorView>,
     #[cfg(not(target_family = "wasm"))]
     local_agent_model_list_editor: ViewHandle<EditorView>,
@@ -9010,11 +9024,19 @@ impl ApiKeysWidget {
             })
             .collect();
         #[cfg(not(target_family = "wasm"))]
+        let local_agent_thinking_mode_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_menu_width(AI_SETTINGS_DROPDOWN_WIDTH, ctx);
+            dropdown
+        });
+        #[cfg(not(target_family = "wasm"))]
         Self::refresh_local_agent_model_dropdowns(
             &local_agent_default_model_dropdown,
             &local_agent_alias_dropdowns,
             ctx,
         );
+        #[cfg(not(target_family = "wasm"))]
+        Self::refresh_local_agent_thinking_mode_dropdown(&local_agent_thinking_mode_dropdown, ctx);
 
         #[cfg(not(target_family = "wasm"))]
         let local_agent_restart_button = ctx.add_typed_action_view(|_| {
@@ -9046,6 +9068,7 @@ impl ApiKeysWidget {
             let health_button = local_agent_health_button.clone();
             let default_model_dropdown = local_agent_default_model_dropdown.clone();
             let alias_dropdowns = local_agent_alias_dropdowns.clone();
+            let thinking_mode_dropdown = local_agent_thinking_mode_dropdown.clone();
             ctx.subscribe_to_model(&workspace_handle, move |_, workspace, event, ctx| {
                 if let UserWorkspacesEvent::TeamsChanged = event {
                     let _ = workspace;
@@ -9055,6 +9078,7 @@ impl ApiKeysWidget {
                         &alias_dropdowns,
                         ctx,
                     );
+                    Self::refresh_local_agent_thinking_mode_dropdown(&thinking_mode_dropdown, ctx);
                     ctx.notify();
                 }
             });
@@ -9063,6 +9087,7 @@ impl ApiKeysWidget {
             let health_button = local_agent_health_button.clone();
             let default_model_dropdown = local_agent_default_model_dropdown.clone();
             let alias_dropdowns = local_agent_alias_dropdowns.clone();
+            let thinking_mode_dropdown = local_agent_thinking_mode_dropdown.clone();
             ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, event, ctx| {
                 if let AISettingsChangedEvent::IsAnyAIEnabled { .. } = event {
                     Self::update_local_agent_buttons(&restart_button, &health_button, ctx);
@@ -9071,6 +9096,7 @@ impl ApiKeysWidget {
                         &alias_dropdowns,
                         ctx,
                     );
+                    Self::refresh_local_agent_thinking_mode_dropdown(&thinking_mode_dropdown, ctx);
                     ctx.notify();
                 }
             });
@@ -9081,6 +9107,7 @@ impl ApiKeysWidget {
             let health_button = local_agent_health_button.clone();
             let default_model_dropdown = local_agent_default_model_dropdown.clone();
             let alias_dropdowns = local_agent_alias_dropdowns.clone();
+            let thinking_mode_dropdown = local_agent_thinking_mode_dropdown.clone();
             ctx.subscribe_to_model(
                 &LocalMultiAgentManager::handle(ctx),
                 move |_, _, event, ctx| {
@@ -9096,6 +9123,10 @@ impl ApiKeysWidget {
                             &alias_dropdowns,
                             ctx,
                         );
+                        Self::refresh_local_agent_thinking_mode_dropdown(
+                            &thinking_mode_dropdown,
+                            ctx,
+                        );
                         ctx.notify();
                     }
                 },
@@ -9105,12 +9136,14 @@ impl ApiKeysWidget {
         {
             let default_model_dropdown = local_agent_default_model_dropdown.clone();
             let alias_dropdowns = local_agent_alias_dropdowns.clone();
+            let thinking_mode_dropdown = local_agent_thinking_mode_dropdown.clone();
             ctx.subscribe_to_model(&InputSettings::handle(ctx), move |_, _, _, ctx| {
                 Self::refresh_local_agent_model_dropdowns(
                     &default_model_dropdown,
                     &alias_dropdowns,
                     ctx,
                 );
+                Self::refresh_local_agent_thinking_mode_dropdown(&thinking_mode_dropdown, ctx);
                 ctx.notify();
             });
         }
@@ -9137,6 +9170,8 @@ impl ApiKeysWidget {
             let default_model_dropdown = local_agent_default_model_dropdown.clone();
             #[cfg(not(target_family = "wasm"))]
             let alias_dropdowns = local_agent_alias_dropdowns.clone();
+            #[cfg(not(target_family = "wasm"))]
+            let thinking_mode_dropdown = local_agent_thinking_mode_dropdown.clone();
             ctx.subscribe_to_model(&ApiKeyManager::handle(ctx), move |_, _, _, ctx| {
                 #[cfg(not(target_family = "wasm"))]
                 Self::sync_profile_inference_editors(
@@ -9164,6 +9199,8 @@ impl ApiKeysWidget {
                     &alias_dropdowns,
                     ctx,
                 );
+                #[cfg(not(target_family = "wasm"))]
+                Self::refresh_local_agent_thinking_mode_dropdown(&thinking_mode_dropdown, ctx);
                 ctx.notify();
             });
         }
@@ -9190,6 +9227,8 @@ impl ApiKeysWidget {
             let default_model_dropdown = local_agent_default_model_dropdown.clone();
             #[cfg(not(target_family = "wasm"))]
             let alias_dropdowns = local_agent_alias_dropdowns.clone();
+            #[cfg(not(target_family = "wasm"))]
+            let thinking_mode_dropdown = local_agent_thinking_mode_dropdown.clone();
             ctx.subscribe_to_model(
                 &AIExecutionProfilesModel::handle(ctx),
                 move |_, _, _, ctx| {
@@ -9219,6 +9258,8 @@ impl ApiKeysWidget {
                         &alias_dropdowns,
                         ctx,
                     );
+                    #[cfg(not(target_family = "wasm"))]
+                    Self::refresh_local_agent_thinking_mode_dropdown(&thinking_mode_dropdown, ctx);
                     ctx.notify();
                 },
             );
@@ -9238,6 +9279,8 @@ impl ApiKeysWidget {
             local_agent_default_model_dropdown,
             #[cfg(not(target_family = "wasm"))]
             local_agent_alias_dropdowns,
+            #[cfg(not(target_family = "wasm"))]
+            local_agent_thinking_mode_dropdown,
             #[cfg(not(target_family = "wasm"))]
             local_agent_model_aliases_editor,
             #[cfg(not(target_family = "wasm"))]
@@ -9417,6 +9460,35 @@ impl ApiKeysWidget {
                 }
             });
         }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn refresh_local_agent_thinking_mode_dropdown(
+        dropdown_handle: &ViewHandle<FilterableDropdown<AISettingsPageAction>>,
+        ctx: &mut AppContext,
+    ) {
+        let is_enabled = Self::local_agent_settings_enabled(ctx);
+        let profile_key = Self::active_inference_profile_key(ctx);
+        let selected = ApiKeyManager::as_ref(ctx).local_thinking_mode_for_profile(&profile_key);
+        dropdown_handle.update(ctx, |dropdown, ctx| {
+            if is_enabled {
+                dropdown.set_enabled(ctx);
+            } else {
+                dropdown.set_disabled(ctx);
+            }
+            let items = LOCAL_THINKING_MODE_CHOICES
+                .iter()
+                .map(|mode| {
+                    DropdownItem::new(
+                        local_thinking_mode_label(mode).to_string(),
+                        AISettingsPageAction::SetLocalThinkingMode((*mode).to_string()),
+                    )
+                })
+                .collect();
+            dropdown.set_items(items, ctx);
+            dropdown
+                .set_selected_by_action(AISettingsPageAction::SetLocalThinkingMode(selected), ctx);
+        });
     }
 
     fn render_api_key_input(
@@ -10079,6 +10151,13 @@ impl ApiKeysWidget {
                 ));
             }
         }
+        column.add_child(render_dropdown_input(
+            appearance,
+            "LOCAL_THINKING_MODE",
+            &self.local_agent_thinking_mode_dropdown,
+            is_enabled,
+            app,
+        ));
 
         if ChannelState::enable_debug_features() {
             column.add_child(render_group_label(appearance, "Runtime", is_enabled, app));

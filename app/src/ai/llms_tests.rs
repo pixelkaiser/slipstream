@@ -85,6 +85,31 @@ fn llm_info_deserializes_without_base_model_name() {
 }
 
 #[test]
+fn llm_provider_deserializes_backend_provider_aliases() {
+    assert_eq!(
+        serde_json::from_str::<LLMProvider>(r#""OPENAI""#).expect("OPENAI should deserialize"),
+        LLMProvider::OpenAI
+    );
+    assert_eq!(
+        serde_json::from_str::<LLMProvider>(r#""ANTHROPIC""#)
+            .expect("ANTHROPIC should deserialize"),
+        LLMProvider::Anthropic
+    );
+    assert_eq!(
+        serde_json::from_str::<LLMProvider>(r#""GOOGLE""#).expect("GOOGLE should deserialize"),
+        LLMProvider::Google
+    );
+    assert_eq!(
+        serde_json::from_str::<LLMProvider>(r#""XAI""#).expect("XAI should deserialize"),
+        LLMProvider::Xai
+    );
+    assert_eq!(
+        serde_json::from_str::<LLMProvider>(r#""UNKNOWN""#).expect("UNKNOWN should deserialize"),
+        LLMProvider::Unknown
+    );
+}
+
+#[test]
 fn llm_info_deserializes_host_configs_as_vec() {
     // Wire format from server: host_configs is a Vec
     let raw = r#"{
@@ -250,6 +275,7 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
         profile_local_models: HashMap::new(),
         last_local_multi_agent_config: None,
         last_local_multi_agent_discovered_models: Vec::new(),
+        last_has_grok_tokens: false,
     };
 
     assert_eq!(

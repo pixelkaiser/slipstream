@@ -43,12 +43,12 @@ use warp_core::errors::{register_error, AnyhowErrorExt, ErrorExt};
 use warp_core::telemetry::TelemetryEvent;
 use warp_managed_secrets::client::ManagedSecretsClient;
 use warp_server_client::auth::{AuthClientImpl, AuthEvent, EXPERIMENT_ID_HEADER};
+#[cfg(feature = "agent_mode_evals")]
+use warp_server_client::base_client::EVAL_USER_ID_HEADER;
 use warp_server_client::base_client::{
     AmbientHeaderPolicy, AuthenticatedGraphqlConfig, BaseClient, GraphqlRoutingConfig,
     AMBIENT_WORKLOAD_TOKEN_HEADER,
 };
-#[cfg(feature = "agent_mode_evals")]
-use warp_server_client::base_client::EVAL_USER_ID_HEADER;
 use warp_server_client::iap::{IapManager, IapState};
 use warp_server_client::network_logging::NetworkLogModel;
 use warpui::r#async::BoxFuture;
@@ -73,6 +73,7 @@ const OPENAI_BASE_URL_HEADER: &str = "X-Warp-OpenAI-Base-URL";
 const LOCAL_MODEL_ALIASES_HEADER: &str = "X-Warp-Local-Model-Aliases";
 const LOCAL_MAX_COMPLETION_TOKENS_HEADER: &str = "X-Warp-Local-Max-Completion-Tokens";
 const LOCAL_MODEL_CONTEXT_TOKENS_HEADER: &str = "X-Warp-Local-Model-Context-Tokens";
+const LOCAL_THINKING_MODE_HEADER: &str = "X-Warp-Local-Thinking-Mode";
 
 fn multi_agent_output_url(
     is_passive: bool,
@@ -1185,6 +1186,7 @@ impl ServerApi {
         local_model_aliases: Option<&str>,
         local_max_completion_tokens: Option<u32>,
         local_model_context_tokens: Option<&str>,
+        local_thinking_mode: Option<&str>,
     ) -> std::result::Result<AIOutputStream<warp_multi_agent_api::ResponseEvent>, Arc<AIApiError>>
     {
         let is_passive = request.input.as_ref().is_some_and(|input| {
@@ -1255,6 +1257,10 @@ impl ServerApi {
                     LOCAL_MODEL_CONTEXT_TOKENS_HEADER,
                     local_model_context_tokens,
                 );
+            }
+            if let Some(local_thinking_mode) = local_thinking_mode {
+                request_builder =
+                    request_builder.header(LOCAL_THINKING_MODE_HEADER, local_thinking_mode);
             }
         }
 

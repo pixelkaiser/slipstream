@@ -126,6 +126,7 @@ pub struct RequestParams {
     pub local_model_aliases: Option<String>,
     pub local_max_completion_tokens: Option<u32>,
     pub local_model_context_tokens: Option<String>,
+    pub local_thinking_mode: Option<String>,
     pub allow_use_of_warp_credits: bool,
     pub autonomy_level: warp_multi_agent_api::AutonomyLevel,
     pub isolation_level: warp_multi_agent_api::IsolationLevel,
@@ -323,9 +324,8 @@ impl RequestParams {
             crate::local_multi_agent::LocalMultiAgentManager::global_root_url()
                 .map(|url| url.to_string())
                 .or_else(|| {
-                    api_key_manager.local_multi_agent_server_root_url_for_profile(
-                        &inference_profile_key,
-                    )
+                    api_key_manager
+                        .local_multi_agent_server_root_url_for_profile(&inference_profile_key)
                 });
         #[cfg(target_family = "wasm")]
         let local_multi_agent_server_root_url =
@@ -338,6 +338,8 @@ impl RequestParams {
             api_key_manager.local_max_completion_tokens_for_profile(&inference_profile_key);
         let local_model_context_tokens =
             api_key_manager.local_model_context_tokens_for_profile(&inference_profile_key);
+        let local_thinking_mode =
+            Some(api_key_manager.local_thinking_mode_for_profile(&inference_profile_key));
         let allow_use_of_warp_credits = *AISettings::as_ref(app).can_use_warp_credits_for_fallback;
 
         let app_execution_mode = AppExecutionMode::as_ref(app);
@@ -388,9 +390,7 @@ impl RequestParams {
         // server-side, drop the override; otherwise clamp it to the model's
         // current `[min, max]` range. This closes the window between an
         // in-flight model metadata refresh and the next request.
-        let context_window_limit = active_profile
-            .data()
-            .context_window_limit_for_request(app);
+        let context_window_limit = active_profile.data().context_window_limit_for_request(app);
 
         Self {
             input: request_input.all_inputs().cloned().collect(),
@@ -419,6 +419,7 @@ impl RequestParams {
             local_model_aliases,
             local_max_completion_tokens,
             local_model_context_tokens,
+            local_thinking_mode,
             allow_use_of_warp_credits,
             autonomy_level,
             isolation_level,

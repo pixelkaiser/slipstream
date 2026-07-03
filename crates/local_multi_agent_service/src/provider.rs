@@ -16,7 +16,8 @@ use crate::{
         deterministic_autocomplete_command,
     },
     config::{
-        Config, DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MODEL, non_empty_str, trim_trailing_slash,
+        Config, DEFAULT_CONTEXT_WINDOW_TOKENS, DEFAULT_MODEL, LocalThinkingMode, non_empty_str,
+        trim_trailing_slash,
     },
     model::resolve_provider_model,
     request::{ContextImage, McpToolSummary},
@@ -73,9 +74,11 @@ pub struct ChatCompletionParams {
     pub model: Option<String>,
     pub max_tokens: Option<u32>,
     pub local_model_context_tokens: Option<String>,
+    pub local_thinking_mode: Option<String>,
     pub temperature: Option<f32>,
     pub mcp_tools: Vec<McpToolSummary>,
     pub enable_tools: bool,
+    pub enable_thinking: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +193,25 @@ impl ProviderRuntime {
             "max_tokens": params.max_tokens.unwrap_or(config.local_max_completion_tokens),
             "stream": true,
         });
+        let thinking_mode = params
+            .local_thinking_mode
+            .as_deref()
+            .map(|mode| LocalThinkingMode::parse(Some(mode)))
+            .unwrap_or(config.local_thinking_mode);
+        let request_body = if let Some(enable_thinking) =
+            thinking_mode.chat_template_enable_thinking(params.enable_thinking)
+        {
+            merge_json_object(
+                request_body,
+                json!({
+                    "chat_template_kwargs": {
+                        "enable_thinking": enable_thinking,
+                    },
+                }),
+            )
+        } else {
+            request_body
+        };
         let request_body = if let Some(tools) = tools.as_ref() {
             merge_json_object(
                 request_body,
@@ -341,6 +363,7 @@ impl ProviderRuntime {
         local_model_aliases: Option<String>,
         local_max_completion_tokens: Option<u32>,
         local_model_context_tokens: Option<String>,
+        local_thinking_mode: Option<String>,
     ) -> Result<LocalCommandAutocompleteResponse, LocalAgentError> {
         if let Some(command) = deterministic_autocomplete_command(request) {
             return Ok(LocalCommandAutocompleteResponse::from_command(command));
@@ -359,9 +382,11 @@ impl ProviderRuntime {
                         local_max_completion_tokens.unwrap_or(AUTOCOMPLETE_MAX_TOKENS),
                     ),
                     local_model_context_tokens,
+                    local_thinking_mode,
                     temperature: Some(0.0),
                     mcp_tools: Vec::new(),
                     enable_tools: false,
+                    enable_thinking: false,
                 },
                 |_| {},
             )

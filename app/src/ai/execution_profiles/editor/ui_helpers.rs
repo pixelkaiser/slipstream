@@ -678,6 +678,12 @@ pub fn render_local_inference_section(
                 ));
             }
         }
+        column.add_child(render_filterable_dropdown_row(
+            appearance,
+            "LOCAL_THINKING_MODE",
+            "Controls provider chat-template thinking for this profile's local agent requests.",
+            &view.local_agent_thinking_mode_dropdown,
+        ));
         column.add_child(render_profile_inference_input(
             appearance,
             "LOCAL_MODEL_CONTEXT_TOKENS",

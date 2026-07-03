@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
 use super::*;
-use crate::config::{Config, LogLevel};
+use crate::config::{Config, LocalThinkingMode, LogLevel};
 
 const MODEL: &str = "diffusiongemma-26B-A4B-it";
 const PUZZLE_PROMPT: &str = "Can you Crack a 4 digit Code? I will give you 5 Hints:\n\
@@ -70,6 +70,10 @@ async fn falls_back_to_reasoning_delta_when_stream_has_no_content() {
     assert_eq!(request_body["model"], MODEL);
     assert_eq!(request_body["stream"], true);
     assert_eq!(request_body["max_tokens"], 2048);
+    assert_eq!(
+        request_body["chat_template_kwargs"]["enable_thinking"],
+        true
+    );
     assert!(
         request_body["tools"]
             .as_array()
@@ -218,7 +222,7 @@ async fn command_autocomplete_uses_alias_without_tools() {
     config.local_model_aliases = Some(format!(r#"{{"auto-autocomplete":"{MODEL}"}}"#));
 
     let response = ProviderRuntime::new()
-        .command_autocomplete(&config, &request, None, None, None, None, None)
+        .command_autocomplete(&config, &request, None, None, None, None, None, None)
         .await
         .unwrap();
 
@@ -234,6 +238,10 @@ async fn command_autocomplete_uses_alias_without_tools() {
     assert_eq!(request_body["stream"], true);
     assert_eq!(request_body["max_tokens"], 256);
     assert_eq!(request_body["temperature"], 0.0);
+    assert_eq!(
+        request_body["chat_template_kwargs"]["enable_thinking"],
+        false
+    );
     assert!(request_body.get("tools").is_none());
     assert!(
         request_body["messages"]
@@ -269,6 +277,7 @@ async fn command_autocomplete_uses_request_alias_override() {
             Some(r#"{"auto-autocomplete":"request/model"}"#.to_string()),
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -302,6 +311,7 @@ async fn command_autocomplete_uses_request_token_overrides() {
             None,
             Some(64),
             Some(r#"{"default":4096}"#.to_string()),
+            None,
         )
         .await
         .unwrap();
@@ -338,6 +348,7 @@ eb48dced80cd   supabase/edge-runtime:v1.69.28   \"edge-runtime start\"    5 mont
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -345,6 +356,55 @@ eb48dced80cd   supabase/edge-runtime:v1.69.28   \"edge-runtime start\"    5 mont
     assert_eq!(response.most_likely_action, "docker logs -f eb48dced80cd");
     assert!(response.raw_output.is_empty());
     assert!(request_bodies.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn provider_default_thinking_mode_omits_chat_template_kwargs() {
+    let (base_url, request_bodies) = spawn_openai_compatible_server(vec![json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "Final answer." }
+        }]
+    })])
+    .await;
+
+    let mut config = test_config(base_url);
+    config.local_thinking_mode = LocalThinkingMode::ProviderDefault;
+
+    let response = ProviderRuntime::new()
+        .stream_chat_completion(&config, test_params(true), |_| {})
+        .await
+        .unwrap();
+
+    assert_eq!(response.content, "Final answer.");
+    let request_bodies = request_bodies.lock().unwrap();
+    assert!(request_bodies[0].get("chat_template_kwargs").is_none());
+}
+
+#[tokio::test]
+async fn request_thinking_mode_overrides_config_default() {
+    let (base_url, request_bodies) = spawn_openai_compatible_server(vec![json!({
+        "choices": [{
+            "index": 0,
+            "delta": { "content": "Final answer." }
+        }]
+    })])
+    .await;
+
+    let mut params = test_params(true);
+    params.local_thinking_mode = Some("disabled".to_string());
+
+    let response = ProviderRuntime::new()
+        .stream_chat_completion(&test_config(base_url), params, |_| {})
+        .await
+        .unwrap();
+
+    assert_eq!(response.content, "Final answer.");
+    let request_bodies = request_bodies.lock().unwrap();
+    assert_eq!(
+        request_bodies[0]["chat_template_kwargs"]["enable_thinking"],
+        false
+    );
 }
 
 async fn spawn_openai_compatible_server(chunks: Vec<Value>) -> (String, Arc<Mutex<Vec<Value>>>) {
@@ -402,6 +462,7 @@ fn test_config(base_url: String) -> Config {
         local_model_aliases: None,
         local_model_list: MODEL.to_owned(),
         local_enable_tools: true,
+        local_thinking_mode: LocalThinkingMode::Enabled,
         local_max_history_messages: 80,
         local_max_completion_tokens: 2048,
         local_model_context_tokens: None,
@@ -423,8 +484,10 @@ fn test_params(enable_tools: bool) -> ChatCompletionParams {
         model: Some(MODEL.to_owned()),
         max_tokens: None,
         local_model_context_tokens: None,
+        local_thinking_mode: None,
         temperature: None,
         mcp_tools: Vec::new(),
         enable_tools,
+        enable_thinking: true,
     }
 }

@@ -36,6 +36,7 @@ const OPENAI_BASE_URL_HEADER: &str = "x-warp-openai-base-url";
 const LOCAL_MODEL_ALIASES_HEADER: &str = "x-warp-local-model-aliases";
 const LOCAL_MAX_COMPLETION_TOKENS_HEADER: &str = "x-warp-local-max-completion-tokens";
 const LOCAL_MODEL_CONTEXT_TOKENS_HEADER: &str = "x-warp-local-model-context-tokens";
+const LOCAL_THINKING_MODE_HEADER: &str = "x-warp-local-thinking-mode";
 
 #[derive(Clone)]
 struct AppState {
@@ -214,6 +215,7 @@ async fn local_command_autocomplete(
             header_value(&headers, LOCAL_MODEL_ALIASES_HEADER),
             positive_u32_header(&headers, LOCAL_MAX_COMPLETION_TOKENS_HEADER),
             header_value(&headers, LOCAL_MODEL_CONTEXT_TOKENS_HEADER),
+            header_value(&headers, LOCAL_THINKING_MODE_HEADER),
         )
         .await
     {
@@ -346,6 +348,7 @@ async fn handle_multi_agent(
         positive_u32_header(&headers, LOCAL_MAX_COMPLETION_TOKENS_HEADER);
     let request_local_model_context_tokens =
         header_value(&headers, LOCAL_MODEL_CONTEXT_TOKENS_HEADER);
+    let request_local_thinking_mode = header_value(&headers, LOCAL_THINKING_MODE_HEADER);
     let (tx, rx) = mpsc::unbounded_channel::<String>();
     let task_state = state.clone();
     tokio::spawn(async move {
@@ -357,6 +360,7 @@ async fn handle_multi_agent(
             request_local_model_aliases,
             request_local_max_completion_tokens,
             request_local_model_context_tokens,
+            request_local_thinking_mode,
             passive_suggestions,
         )
         .await;
@@ -385,6 +389,7 @@ async fn process_multi_agent(
     request_local_model_aliases: Option<String>,
     request_local_max_completion_tokens: Option<u32>,
     request_local_model_context_tokens: Option<String>,
+    request_local_thinking_mode: Option<String>,
     passive_suggestions: bool,
 ) {
     state
@@ -410,6 +415,7 @@ async fn process_multi_agent(
                 "hasLocalModelAliasesHeader": request_local_model_aliases.is_some(),
                 "hasLocalMaxCompletionTokensHeader": request_local_max_completion_tokens.is_some(),
                 "hasLocalModelContextTokensHeader": request_local_model_context_tokens.is_some(),
+                "hasLocalThinkingModeHeader": request_local_thinking_mode.is_some(),
             }),
         )
         .await;
@@ -453,9 +459,11 @@ async fn process_multi_agent(
                     model: warp_request.model.clone(),
                     max_tokens: request_local_max_completion_tokens,
                     local_model_context_tokens: request_local_model_context_tokens,
+                    local_thinking_mode: request_local_thinking_mode,
                     temperature: None,
                     mcp_tools: warp_request.mcp_tools.clone(),
                     enable_tools: !warp_request.is_summarization_request,
+                    enable_thinking: true,
                 },
                 |chunk| {
                     if warp_request.is_summarization_request {
