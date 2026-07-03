@@ -284,7 +284,7 @@ impl AmbientAgentTask {
 
     pub fn active_execution_session_id(&self) -> Option<&str> {
         let execution = self.active_run_execution();
-        if self.state == AmbientAgentTaskState::InProgress && execution.is_active() {
+        if self.has_active_live_execution_state() && execution.is_active() {
             execution.session_id
         } else {
             None
@@ -293,12 +293,13 @@ impl AmbientAgentTask {
 
     /// Returns the canonical live-session state for this task from the client's perspective.
     ///
-    /// This separates task liveness from attachability: an in-progress task can have an active
-    /// execution without a usable shared-session id, and callers should not treat that as a
-    /// completed transcript/follow-up state.
+    /// This separates task liveness from attachability: a task can have an active execution
+    /// without a usable shared-session id, and callers should not treat that as a completed
+    /// transcript/follow-up state. `Blocked` tasks can still be live when the agent is waiting
+    /// for user input inside a running sandbox.
     pub fn active_live_session_state(&self) -> AmbientAgentLiveSessionState {
         let execution = self.active_run_execution();
-        if self.state != AmbientAgentTaskState::InProgress || !execution.is_active() {
+        if !self.has_active_live_execution_state() || !execution.is_active() {
             return AmbientAgentLiveSessionState::Inactive;
         }
 
@@ -317,7 +318,14 @@ impl AmbientAgentTask {
     }
 
     pub fn has_active_execution(&self) -> bool {
-        self.state == AmbientAgentTaskState::InProgress && self.active_run_execution().is_active()
+        self.has_active_live_execution_state() && self.active_run_execution().is_active()
+    }
+
+    fn has_active_live_execution_state(&self) -> bool {
+        matches!(
+            self.state,
+            AmbientAgentTaskState::InProgress | AmbientAgentTaskState::Blocked
+        )
     }
 
     pub fn is_terminal_run_state(&self) -> bool {
