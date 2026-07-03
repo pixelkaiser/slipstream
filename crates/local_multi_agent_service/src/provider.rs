@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -609,7 +609,7 @@ pub fn messages_from_stored_conversation(
     messages: &[Value],
     max_messages: usize,
 ) -> Vec<ProviderChatMessage> {
-    messages
+    let messages = messages
         .iter()
         .filter_map(|value| {
             let mut message = serde_json::from_value::<ProviderChatMessage>(value.clone()).ok()?;
@@ -637,14 +637,16 @@ pub fn messages_from_stored_conversation(
                 "system" | "user" | "assistant" | "tool"
             )
         })
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .take(max_messages)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect()
+        .collect::<Vec<_>>();
+    trim_provider_messages(messages, max_messages)
+}
+
+pub fn trim_provider_messages(
+    messages: Vec<ProviderChatMessage>,
+    max_messages: usize,
+) -> Vec<ProviderChatMessage> {
+    let groups = provider_message_groups(messages, true);
+    trim_provider_message_groups(groups, max_messages)
 }
 
 pub fn provider_messages_to_json(messages: &[ProviderChatMessage]) -> Vec<Value> {
@@ -889,6 +891,7 @@ fn build_provider_messages(
         }
     }
 
+    non_system_messages = provider_request_messages(non_system_messages);
     let system_content = system_contents
         .into_iter()
         .flatten()
@@ -902,6 +905,95 @@ fn build_provider_messages(
             .chain(non_system_messages)
             .collect()
     }
+}
+
+fn provider_request_messages(messages: Vec<ProviderChatMessage>) -> Vec<ProviderChatMessage> {
+    provider_message_groups(messages, false)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+fn provider_message_groups(
+    messages: Vec<ProviderChatMessage>,
+    allow_incomplete_tail_tool_call: bool,
+) -> Vec<Vec<ProviderChatMessage>> {
+    let mut groups = Vec::new();
+    let mut index = 0;
+    while index < messages.len() {
+        let message = &messages[index];
+        if message.role == "tool" {
+            index += 1;
+            continue;
+        }
+
+        let Some(tool_calls) = non_empty_tool_calls(message) else {
+            groups.push(vec![message.clone()]);
+            index += 1;
+            continue;
+        };
+
+        let expected_tool_call_ids = tool_calls
+            .iter()
+            .map(|tool_call| tool_call.id.as_str())
+            .collect::<HashSet<_>>();
+        let mut seen_tool_call_ids = HashSet::new();
+        let mut tool_results = Vec::new();
+        let mut next_index = index + 1;
+        while next_index < messages.len() && messages[next_index].role == "tool" {
+            if let Some(tool_call_id) = messages[next_index].tool_call_id.as_deref()
+                && expected_tool_call_ids.contains(tool_call_id)
+                && seen_tool_call_ids.insert(tool_call_id.to_owned())
+            {
+                tool_results.push(messages[next_index].clone());
+            }
+            next_index += 1;
+        }
+
+        if seen_tool_call_ids.len() == expected_tool_call_ids.len()
+            || (allow_incomplete_tail_tool_call && next_index == messages.len())
+        {
+            let mut group = Vec::with_capacity(1 + tool_results.len());
+            group.push(message.clone());
+            group.extend(tool_results);
+            groups.push(group);
+        }
+        index = next_index;
+    }
+    groups
+}
+
+fn non_empty_tool_calls(message: &ProviderChatMessage) -> Option<&[ProviderToolCallEnvelope]> {
+    if message.role != "assistant" {
+        return None;
+    }
+    message
+        .tool_calls
+        .as_deref()
+        .filter(|tool_calls| !tool_calls.is_empty())
+}
+
+fn trim_provider_message_groups(
+    groups: Vec<Vec<ProviderChatMessage>>,
+    max_messages: usize,
+) -> Vec<ProviderChatMessage> {
+    if max_messages == 0 {
+        return Vec::new();
+    }
+
+    let mut selected_groups = Vec::new();
+    let mut selected_message_count = 0;
+    for group in groups.into_iter().rev() {
+        let group_len = group.len();
+        if selected_message_count + group_len <= max_messages || selected_groups.is_empty() {
+            selected_message_count += group_len;
+            selected_groups.push(group);
+        } else {
+            break;
+        }
+    }
+    selected_groups.reverse();
+    selected_groups.into_iter().flatten().collect()
 }
 
 fn provider_system_content(content: Option<&Value>) -> Option<String> {
@@ -1750,6 +1842,21 @@ fn estimate_context_window_usage(
 mod tests {
     use super::*;
 
+    fn test_tool_call(id: &str) -> ProviderToolCall {
+        ProviderToolCall {
+            id: id.to_owned(),
+            name: "grep".to_owned(),
+            arguments_text: r#"{"query":"needle"}"#.to_owned(),
+        }
+    }
+
+    fn message_roles(messages: &[ProviderChatMessage]) -> Vec<&str> {
+        messages
+            .iter()
+            .map(|message| message.role.as_str())
+            .collect()
+    }
+
     #[test]
     fn merges_system_messages() {
         let messages = build_provider_messages(
@@ -1765,6 +1872,101 @@ mod tests {
         assert_eq!(
             messages[0].content,
             Some(Value::String("tools\n\ncustom\n\nhistory".to_owned()))
+        );
+    }
+
+    #[test]
+    fn provider_request_messages_drop_orphan_tool_results() {
+        let messages = build_provider_messages(
+            [None],
+            vec![
+                tool_result_message("call_1".to_owned(), "result".to_owned()),
+                user_text_message("continue"),
+            ],
+        );
+
+        assert_eq!(message_roles(&messages), vec!["user"]);
+        assert_eq!(
+            messages[0].content,
+            Some(Value::String("continue".to_owned()))
+        );
+    }
+
+    #[test]
+    fn provider_request_messages_drop_incomplete_tool_call_groups() {
+        let messages = build_provider_messages(
+            [None],
+            vec![
+                user_text_message("before"),
+                assistant_message(String::new(), vec![test_tool_call("call_1")]),
+                user_text_message("after"),
+            ],
+        );
+
+        assert_eq!(message_roles(&messages), vec!["user", "user"]);
+    }
+
+    #[test]
+    fn provider_request_messages_keep_complete_tool_call_groups() {
+        let messages = build_provider_messages(
+            [None],
+            vec![
+                assistant_message(String::new(), vec![test_tool_call("call_1")]),
+                tool_result_message("call_1".to_owned(), "result".to_owned()),
+                user_text_message("continue"),
+            ],
+        );
+
+        assert_eq!(message_roles(&messages), vec!["assistant", "tool", "user"]);
+    }
+
+    #[test]
+    fn stored_conversation_trims_without_orphaning_tool_results() {
+        let stored = provider_messages_to_json(&[
+            user_text_message("old"),
+            assistant_message(String::new(), vec![test_tool_call("call_1")]),
+            tool_result_message("call_1".to_owned(), "result".to_owned()),
+            user_text_message("new"),
+        ]);
+
+        let messages = messages_from_stored_conversation(&stored, 2);
+
+        assert_eq!(message_roles(&messages), vec!["user"]);
+        assert_eq!(messages[0].content, Some(Value::String("new".to_owned())));
+    }
+
+    #[test]
+    fn stored_conversation_keeps_tool_call_group_when_it_fits() {
+        let stored = provider_messages_to_json(&[
+            user_text_message("old"),
+            assistant_message(String::new(), vec![test_tool_call("call_1")]),
+            tool_result_message("call_1".to_owned(), "result".to_owned()),
+            user_text_message("new"),
+        ]);
+
+        let messages = messages_from_stored_conversation(&stored, 3);
+
+        assert_eq!(message_roles(&messages), vec!["assistant", "tool", "user"]);
+    }
+
+    #[test]
+    fn trimmed_conversation_keeps_trailing_pending_tool_call() {
+        let messages = trim_provider_messages(
+            vec![
+                user_text_message("old"),
+                assistant_message(String::new(), vec![test_tool_call("call_1")]),
+            ],
+            1,
+        );
+
+        assert_eq!(message_roles(&messages), vec!["assistant"]);
+        assert_eq!(
+            messages[0]
+                .tool_calls
+                .as_ref()
+                .and_then(|tool_calls| tool_calls.first())
+                .map(|tool_call| tool_call.id.as_str()),
+            Some("call_1")
         );
     }
 
