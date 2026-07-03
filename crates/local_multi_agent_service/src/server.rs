@@ -23,7 +23,8 @@ use crate::{
     provider::{
         ChatCompletionParams, FinishReason, LocalAgentError, ProviderChatMessage, ProviderResponse,
         ProviderRuntime, assistant_message, content_with_images, messages_from_stored_conversation,
-        provider_messages_to_json, system_message, tool_result_message, user_text_message,
+        provider_messages_to_json, system_message, tool_result_message, trim_provider_messages,
+        user_text_message,
     },
     request::{SuggestPlanStatus, WarpRequestSummary, WarpToolResult, decode_warp_request},
     response,
@@ -766,9 +767,7 @@ async fn persist_conversation_state(
 }
 
 fn trim_conversation_state(state: &mut ConversationState, max_messages: usize) {
-    if state.messages.len() > max_messages {
-        state.messages.drain(0..state.messages.len() - max_messages);
-    }
+    state.messages = trim_provider_messages(std::mem::take(&mut state.messages), max_messages);
 }
 
 async fn load_conversation_state(
