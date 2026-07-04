@@ -262,10 +262,13 @@ pub fn stream_finished_llm_unavailable() -> api::ResponseEvent {
     )
 }
 
-pub fn stream_finished_invalid_api_key(model_name: Option<&str>) -> api::ResponseEvent {
+pub fn stream_finished_invalid_api_key(
+    provider: api::LlmProvider,
+    model_name: Option<&str>,
+) -> api::ResponseEvent {
     stream_finished(api::response_event::stream_finished::Reason::InvalidApiKey(
         api::response_event::stream_finished::InvalidApiKey {
-            provider: api::LlmProvider::Openai as i32,
+            provider: provider as i32,
             model_name: model_name.unwrap_or("").to_owned(),
         },
     ))

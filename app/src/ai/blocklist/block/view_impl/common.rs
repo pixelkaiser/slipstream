@@ -3182,6 +3182,7 @@ fn render_invalid_api_key_error(
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
+    let is_xai = provider.eq_ignore_ascii_case("xai");
 
     let alert_icon = ConstrainedBox::new(
         Icon::AlertTriangle
@@ -3192,29 +3193,34 @@ fn render_invalid_api_key_error(
     .with_height(icon_size(app))
     .finish();
 
-    let alert_text = Text::new(
-        "Provided API key is not valid",
-        appearance.ui_font_family(),
-        14.,
-    )
-    .with_color(error_color(appearance.theme()))
-    .with_selectable(false)
-    .finish();
+    let alert_label = if is_xai {
+        "xAI credentials are not valid"
+    } else {
+        "Provided API key is not valid"
+    };
+    let alert_text = Text::new(alert_label, appearance.ui_font_family(), 14.)
+        .with_color(error_color(appearance.theme()))
+        .with_selectable(false)
+        .finish();
 
-    let detail_text = Text::new(
+    let detail_label = if is_xai {
+        format!(
+            "Failed to authenticate with xAI when using {model_name}. \
+                     Reconnect SuperGrok or configure an xAI API key."
+        )
+    } else {
         format!(
             "Failed to authenticate with {provider} when using {model_name}. \
                      Double-check that your API key is correct."
-        ),
-        appearance.ui_font_family(),
-        14.,
-    )
-    .with_color(blended_colors::text_sub(
-        appearance.theme(),
-        appearance.theme().surface_1(),
-    ))
-    .with_selectable(false)
-    .finish();
+        )
+    };
+    let detail_text = Text::new(detail_label, appearance.ui_font_family(), 14.)
+        .with_color(blended_colors::text_sub(
+            appearance.theme(),
+            appearance.theme().surface_1(),
+        ))
+        .with_selectable(false)
+        .finish();
 
     let settings_button = appearance
         .ui_builder()
@@ -3234,12 +3240,20 @@ fn render_invalid_api_key_error(
             background: Some(internal_colors::fg_overlay_3(theme).into()),
             ..Default::default()
         })
-        .with_text_label("Edit API Keys".to_string())
+        .with_text_label(if is_xai {
+            "Manage xAI".to_string()
+        } else {
+            "Edit API Keys".to_string()
+        })
         .with_cursor(Some(Cursor::PointingHand))
         .build()
         .on_click(move |ctx, _, _| {
             ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
-                search_query: "api keys".to_string(),
+                search_query: if is_xai {
+                    "supergrok".to_string()
+                } else {
+                    "api keys".to_string()
+                },
                 section: Some(SettingsSection::WarpAgent),
             });
         })

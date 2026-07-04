@@ -337,7 +337,8 @@ async fn handle_multi_agent(
             );
         }
     };
-    let warp_request = decode_warp_request(request);
+    let warp_request =
+        with_request_bearer_token(decode_warp_request(request), bearer_token(&headers));
     let request_openai_base_url = headers
         .get(OPENAI_BASE_URL_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -824,7 +825,7 @@ async fn load_conversation_state(
 fn stream_finished_for_error(error: &LocalAgentError) -> api::ResponseEvent {
     match error.finish_reason {
         FinishReason::InvalidApiKey => {
-            response::stream_finished_invalid_api_key(error.model_name.as_deref())
+            response::stream_finished_invalid_api_key(error.provider, error.model_name.as_deref())
         }
         FinishReason::LlmUnavailable => response::stream_finished_llm_unavailable(),
         FinishReason::ContextWindowExceeded => response::stream_finished_context_window_exceeded(),
@@ -860,6 +861,16 @@ fn bearer_token(headers: &HeaderMap) -> Option<String> {
         .and_then(|value| value.strip_prefix("Bearer "))
         .and_then(non_empty_str)
         .map(str::to_owned)
+}
+
+fn with_request_bearer_token(
+    mut request: WarpRequestSummary,
+    bearer_token: Option<String>,
+) -> WarpRequestSummary {
+    if let Some(bearer_token) = bearer_token {
+        request.openai_api_key = Some(bearer_token);
+    }
+    request
 }
 
 fn status_for_local_agent_error(error: &LocalAgentError) -> StatusCode {
@@ -994,4 +1005,44 @@ fn escape_html(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request_summary(openai_api_key: Option<&str>) -> WarpRequestSummary {
+        WarpRequestSummary {
+            conversation_id: "conversation".to_owned(),
+            request_id: "request".to_owned(),
+            root_task_id: "task".to_owned(),
+            should_create_root_task: true,
+            prompt: "hello".to_owned(),
+            is_summarization_request: false,
+            summarization_prompt: None,
+            context_text: None,
+            context_images: Vec::new(),
+            tool_results: Vec::new(),
+            mcp_tools: Vec::new(),
+            openai_api_key: openai_api_key.map(str::to_owned),
+            model: Some("grok-4.20-0309-reasoning".to_owned()),
+        }
+    }
+
+    #[test]
+    fn request_bearer_token_overrides_settings_api_key() {
+        let request = with_request_bearer_token(
+            request_summary(Some("settings-key")),
+            Some("header-key".to_owned()),
+        );
+
+        assert_eq!(request.openai_api_key.as_deref(), Some("header-key"));
+    }
+
+    #[test]
+    fn request_bearer_token_leaves_settings_api_key_when_absent() {
+        let request = with_request_bearer_token(request_summary(Some("settings-key")), None);
+
+        assert_eq!(request.openai_api_key.as_deref(), Some("settings-key"));
+    }
 }

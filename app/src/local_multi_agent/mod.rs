@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use ::ai::api_keys::GrokTokens;
 use anyhow::{anyhow, bail, Context, Result};
 use async_process::{Child, Stdio};
 use command::r#async::Command;
@@ -36,6 +37,7 @@ const RESTART_DEBOUNCE: Duration = Duration::from_millis(500);
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_LOCAL_MAX_COMPLETION_TOKENS: u32 = 2048;
+pub const XAI_LOCAL_MODEL_ID_PREFIX: &str = "xai:";
 
 pub const LOCAL_MODEL_ALIAS_IDS: [&str; 5] = [
     "auto",
@@ -334,6 +336,22 @@ impl LocalMultiAgentConfig {
     }
 }
 
+pub fn xai_local_model_id(provider_model_id: &str) -> Option<String> {
+    let provider_model_id = non_empty_str(provider_model_id)?;
+    Some(format!("{XAI_LOCAL_MODEL_ID_PREFIX}{provider_model_id}"))
+}
+
+pub fn is_xai_local_model_id(model_id: &str) -> bool {
+    provider_model_id_for_xai_local_model(model_id).is_some()
+}
+
+pub fn provider_model_id_for_xai_local_model(model_id: &str) -> Option<&str> {
+    model_id
+        .trim()
+        .strip_prefix(XAI_LOCAL_MODEL_ID_PREFIX)
+        .and_then(non_empty_str)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum LocalMultiAgentConfigError {
     #[error("Host is required.")]
@@ -418,9 +436,11 @@ pub struct LocalMultiAgentManager {
     status: LocalMultiAgentStatus,
     test_status: LocalMultiAgentTestStatus,
     discovered_models: Vec<String>,
+    xai_discovered_models: Vec<String>,
     child: Option<Child>,
     restart_debounce: Option<AbortHandle>,
     openai_api_key: Option<String>,
+    grok_tokens: Option<GrokTokens>,
 }
 
 impl LocalMultiAgentManager {
@@ -443,9 +463,11 @@ impl LocalMultiAgentManager {
             status,
             test_status: LocalMultiAgentTestStatus::NotRun,
             discovered_models: Vec::new(),
+            xai_discovered_models: Vec::new(),
             child: None,
             restart_debounce: None,
             openai_api_key: None,
+            grok_tokens: None,
         };
         if no_cloud_mode_enabled() {
             manager.schedule_restart(ctx);
@@ -480,13 +502,24 @@ impl LocalMultiAgentManager {
     pub fn update_provider_config(
         &mut self,
         openai_api_key: Option<String>,
+        grok_tokens: Option<GrokTokens>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if self.openai_api_key == openai_api_key {
+        let openai_key_changed = self.openai_api_key != openai_api_key;
+        let grok_tokens_changed = self.grok_tokens != grok_tokens;
+        if !openai_key_changed && !grok_tokens_changed {
             return;
         }
         self.openai_api_key = openai_api_key;
-        self.schedule_restart(ctx);
+        self.grok_tokens = grok_tokens;
+        if grok_tokens_changed {
+            self.refresh_xai_models(ctx);
+        }
+        if openai_key_changed
+            || ::ai::api_keys::is_xai_openai_base_url(self.config.provider_base_url())
+        {
+            self.schedule_restart(ctx);
+        }
     }
 
     pub fn set_config(
@@ -512,6 +545,7 @@ impl LocalMultiAgentManager {
         ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
         self.refresh_llm_preferences(ctx);
         self.schedule_restart(ctx);
+        self.refresh_xai_models(ctx);
         Ok(())
     }
 
@@ -592,29 +626,43 @@ impl LocalMultiAgentManager {
 
         let provider_base_url = self.config.provider_base_url().to_string();
         let openai_api_key = self.openai_api_key.clone();
+        let grok_tokens = self.grok_tokens.clone();
         let service_config = self.config.clone();
-        let service_openai_api_key = openai_api_key.clone();
         self.test_status = LocalMultiAgentTestStatus::Testing;
         ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
 
         let _ = ctx.spawn(
             async move {
+                let provider_credentials = resolve_provider_credentials_for_local_use(
+                    &provider_base_url,
+                    openai_api_key,
+                    grok_tokens,
+                )
+                .await?;
                 let start_result = match health_check(root_url.clone()).await {
                     Ok(()) => None,
                     Err(error) => {
                         log::info!(
                             "Local multi-agent service was not healthy during test; attempting restart: {error:#}"
                         );
-                        Some(start_service(service_config, service_openai_api_key).await?)
+                        Some(start_service(service_config, provider_credentials.api_key.clone()).await?)
                     }
                 };
-                let models =
-                    fetch_provider_models(&provider_base_url, openai_api_key.as_deref()).await?;
-                Ok::<_, anyhow::Error>((start_result, models))
+                let models = fetch_provider_models(
+                    &provider_base_url,
+                    provider_credentials.api_key.as_deref(),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>((
+                    start_result,
+                    models,
+                    provider_credentials.refreshed_grok_tokens,
+                ))
             },
             |manager, result, ctx| {
                 match result {
-                    Ok((start_result, models)) => {
+                    Ok((start_result, models, refreshed_grok_tokens)) => {
+                        manager.store_refreshed_grok_tokens(refreshed_grok_tokens, ctx);
                         if let Some(start_result) = start_result {
                             manager.apply_start_result(start_result, ctx);
                             ctx.emit(LocalMultiAgentManagerEvent::StatusChanged);
@@ -678,29 +726,45 @@ impl LocalMultiAgentManager {
             .and_then(non_empty_str)
             .unwrap_or(DEFAULT_OPENAI_BASE_URL)
             .to_string();
+        let grok_tokens = ::ai::api_keys::ApiKeyManager::as_ref(ctx)
+            .grok_tokens()
+            .cloned();
         let service_config = self.config.clone();
-        let service_openai_api_key = openai_api_key.clone();
         self.test_status = LocalMultiAgentTestStatus::Testing;
         ctx.emit(LocalMultiAgentManagerEvent::TestStatusChanged);
 
         let _ = ctx.spawn(
             async move {
+                let provider_credentials = resolve_provider_credentials_for_local_use(
+                    &provider_base_url,
+                    openai_api_key,
+                    grok_tokens,
+                )
+                .await?;
                 let start_result = match health_check(root_url.clone()).await {
                     Ok(()) => None,
                     Err(error) => {
                         log::info!(
                             "Local multi-agent service was not healthy during profile test; attempting restart: {error:#}"
                         );
-                        Some(start_service(service_config, service_openai_api_key).await?)
+                        Some(start_service(service_config, provider_credentials.api_key.clone()).await?)
                     }
                 };
-                let models =
-                    fetch_provider_models(&provider_base_url, openai_api_key.as_deref()).await?;
-                Ok::<_, anyhow::Error>((start_result, models))
+                let models = fetch_provider_models(
+                    &provider_base_url,
+                    provider_credentials.api_key.as_deref(),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>((
+                    start_result,
+                    models,
+                    provider_credentials.refreshed_grok_tokens,
+                ))
             },
             move |manager, result, ctx| {
                 match result {
-                    Ok((start_result, models)) => {
+                    Ok((start_result, models, refreshed_grok_tokens)) => {
+                        manager.store_refreshed_grok_tokens(refreshed_grok_tokens, ctx);
                         if let Some(start_result) = start_result {
                             manager.apply_start_result(start_result, ctx);
                             ctx.emit(LocalMultiAgentManagerEvent::StatusChanged);
@@ -789,14 +853,26 @@ impl LocalMultiAgentManager {
         self.stop_child();
         let config = self.config.clone();
         let openai_api_key = self.openai_api_key.clone();
+        let grok_tokens = self.grok_tokens.clone();
         self.status = LocalMultiAgentStatus::Starting;
         ctx.emit(LocalMultiAgentManagerEvent::StatusChanged);
 
         let _ = ctx.spawn(
-            async move { start_service(config, openai_api_key).await },
+            async move {
+                let provider_base_url = config.provider_base_url().to_string();
+                let provider_credentials = resolve_provider_credentials_for_local_use(
+                    &provider_base_url,
+                    openai_api_key,
+                    grok_tokens,
+                )
+                .await?;
+                let start_result = start_service(config, provider_credentials.api_key).await?;
+                Ok::<_, anyhow::Error>((start_result, provider_credentials.refreshed_grok_tokens))
+            },
             |manager, result, ctx| {
                 match result {
-                    Ok(start_result) => {
+                    Ok((start_result, refreshed_grok_tokens)) => {
+                        manager.store_refreshed_grok_tokens(refreshed_grok_tokens, ctx);
                         manager.apply_start_result(start_result, ctx);
                     }
                     Err(error) => {
@@ -833,8 +909,71 @@ impl LocalMultiAgentManager {
     fn refresh_llm_preferences(&self, ctx: &mut ModelContext<Self>) {
         let config = self.config.clone();
         let discovered_models = self.discovered_models.clone();
+        let xai_discovered_models = self.xai_discovered_models.clone();
         LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-            prefs.update_local_multi_agent_models(&config, &discovered_models, ctx);
+            prefs.update_local_multi_agent_models(
+                &config,
+                &discovered_models,
+                &xai_discovered_models,
+                ctx,
+            );
+        });
+    }
+
+    fn refresh_xai_models(&mut self, ctx: &mut ModelContext<Self>) {
+        let Some(grok_tokens) = self.grok_tokens.clone() else {
+            if !self.xai_discovered_models.is_empty() {
+                self.xai_discovered_models.clear();
+                self.refresh_llm_preferences(ctx);
+            }
+            return;
+        };
+
+        let _ = ctx.spawn(
+            async move {
+                let provider_credentials = resolve_provider_credentials_for_local_use(
+                    ::ai::api_keys::XAI_OPENAI_BASE_URL,
+                    None,
+                    Some(grok_tokens),
+                )
+                .await?;
+                let models = fetch_provider_models(
+                    ::ai::api_keys::XAI_OPENAI_BASE_URL,
+                    provider_credentials.api_key.as_deref(),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>((models, provider_credentials.refreshed_grok_tokens))
+            },
+            |manager, result, ctx| match result {
+                Ok((models, refreshed_grok_tokens)) => {
+                    manager.store_refreshed_grok_tokens(refreshed_grok_tokens, ctx);
+                    if manager.xai_discovered_models != models {
+                        manager.xai_discovered_models = models;
+                        manager.refresh_llm_preferences(ctx);
+                    }
+                }
+                Err(error) => {
+                    log::warn!("Failed to refresh local xAI model list: {error:#}");
+                    if !manager.xai_discovered_models.is_empty() {
+                        manager.xai_discovered_models.clear();
+                        manager.refresh_llm_preferences(ctx);
+                    }
+                }
+            },
+        );
+    }
+
+    fn store_refreshed_grok_tokens(
+        &mut self,
+        tokens: Option<GrokTokens>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(tokens) = tokens else {
+            return;
+        };
+        self.grok_tokens = Some(tokens.clone());
+        ::ai::api_keys::ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+            manager.set_grok_tokens(Some(tokens), ctx);
         });
     }
 
@@ -868,6 +1007,69 @@ struct StartServiceResult {
     root_url: Url,
     pid: Option<u32>,
     config_hash: String,
+}
+
+#[derive(Debug)]
+struct ResolvedProviderCredentials {
+    api_key: Option<String>,
+    refreshed_grok_tokens: Option<GrokTokens>,
+}
+
+async fn resolve_provider_credentials_for_local_use(
+    provider_base_url: &str,
+    openai_api_key: Option<String>,
+    grok_tokens: Option<GrokTokens>,
+) -> Result<ResolvedProviderCredentials> {
+    let openai_api_key = openai_api_key.and_then(non_empty);
+    if !::ai::api_keys::is_xai_openai_base_url(provider_base_url) {
+        return Ok(ResolvedProviderCredentials {
+            api_key: openai_api_key,
+            refreshed_grok_tokens: None,
+        });
+    }
+
+    if let Some(tokens) = grok_tokens {
+        let refreshed_grok_tokens = refresh_grok_tokens_for_local_use_if_needed(&tokens).await?;
+        let active_tokens = refreshed_grok_tokens.as_ref().unwrap_or(&tokens);
+        if let Some(access_token) = active_tokens.access_token_for_request() {
+            return Ok(ResolvedProviderCredentials {
+                api_key: Some(access_token.to_string()),
+                refreshed_grok_tokens,
+            });
+        }
+    }
+
+    if openai_api_key.is_some() {
+        return Ok(ResolvedProviderCredentials {
+            api_key: openai_api_key,
+            refreshed_grok_tokens: None,
+        });
+    }
+
+    bail!(
+        "Connect your SuperGrok subscription or configure an xAI API key to use local xAI inference."
+    )
+}
+
+async fn refresh_grok_tokens_for_local_use_if_needed(
+    tokens: &GrokTokens,
+) -> Result<Option<GrokTokens>> {
+    const GROK_REFRESH_LEAD_TIME: Duration = Duration::from_secs(5 * 60);
+
+    if !tokens.needs_refresh(GROK_REFRESH_LEAD_TIME) {
+        return Ok(None);
+    }
+    let Some(refresh_token) = tokens.refresh_token.as_deref().and_then(non_empty_str) else {
+        return Ok(None);
+    };
+
+    let response = ::ai::grok_subscription::oauth::refresh_access_token(refresh_token)
+        .await
+        .context("Failed to refresh xAI OAuth token for local inference")?;
+    Ok(Some(::ai::grok_subscription::grok_tokens_from_response(
+        response,
+        Some(tokens),
+    )))
 }
 
 async fn start_service(
@@ -1271,6 +1473,7 @@ pub fn local_no_cloud_root_url() -> Option<Url> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::SystemTime;
 
     #[test]
     fn default_config_matches_schema() {
@@ -1417,6 +1620,85 @@ mod tests {
         for alias in LOCAL_MODEL_ALIAS_IDS {
             assert_eq!(aliases.get(alias).map(String::as_str), Some("model-a"));
         }
+    }
+
+    #[test]
+    fn xai_local_model_ids_are_provider_scoped() {
+        let model_id = xai_local_model_id("grok-4").unwrap();
+
+        assert_eq!(model_id, "xai:grok-4");
+        assert!(is_xai_local_model_id(&model_id));
+        assert_eq!(
+            provider_model_id_for_xai_local_model(&model_id),
+            Some("grok-4")
+        );
+        assert!(!is_xai_local_model_id("grok-4"));
+    }
+
+    fn test_grok_tokens(access_token: &str) -> GrokTokens {
+        GrokTokens {
+            access_token: access_token.to_owned(),
+            refresh_token: Some("refresh".to_owned()),
+            expires_at: Some(SystemTime::now() + Duration::from_secs(3600)),
+            connected_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn xai_local_credentials_prefer_connected_grok_token() {
+        let credentials = resolve_provider_credentials_for_local_use(
+            ::ai::api_keys::XAI_OPENAI_BASE_URL,
+            Some("openai-key".to_owned()),
+            Some(test_grok_tokens("grok-token")),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(credentials.api_key.as_deref(), Some("grok-token"));
+        assert!(credentials.refreshed_grok_tokens.is_none());
+    }
+
+    #[tokio::test]
+    async fn xai_local_credentials_fall_back_to_api_key_without_grok_token() {
+        let credentials = resolve_provider_credentials_for_local_use(
+            ::ai::api_keys::XAI_OPENAI_BASE_URL,
+            Some("xai-api-key".to_owned()),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(credentials.api_key.as_deref(), Some("xai-api-key"));
+        assert!(credentials.refreshed_grok_tokens.is_none());
+    }
+
+    #[tokio::test]
+    async fn xai_local_credentials_error_without_connected_or_configured_key() {
+        let error = resolve_provider_credentials_for_local_use(
+            ::ai::api_keys::XAI_OPENAI_BASE_URL,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("SuperGrok"));
+        assert!(message.contains("xAI API key"));
+    }
+
+    #[tokio::test]
+    async fn non_xai_local_credentials_use_openai_key() {
+        let credentials = resolve_provider_credentials_for_local_use(
+            "https://api.openai.com/v1",
+            Some("openai-key".to_owned()),
+            Some(test_grok_tokens("grok-token")),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(credentials.api_key.as_deref(), Some("openai-key"));
+        assert!(credentials.refreshed_grok_tokens.is_none());
     }
 
     #[test]

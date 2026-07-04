@@ -622,6 +622,8 @@ pub struct LLMPreferences {
     last_local_multi_agent_config: Option<LocalMultiAgentConfig>,
     #[cfg(not(target_family = "wasm"))]
     last_local_multi_agent_discovered_models: Vec<String>,
+    #[cfg(not(target_family = "wasm"))]
+    last_local_multi_agent_xai_models: Vec<String>,
     last_has_grok_tokens: bool,
 }
 
@@ -705,6 +707,8 @@ impl LLMPreferences {
             last_local_multi_agent_config: None,
             #[cfg(not(target_family = "wasm"))]
             last_local_multi_agent_discovered_models: Vec::new(),
+            #[cfg(not(target_family = "wasm"))]
+            last_local_multi_agent_xai_models: Vec::new(),
             last_has_grok_tokens,
         };
 
@@ -2013,11 +2017,13 @@ impl LLMPreferences {
         &mut self,
         config: &LocalMultiAgentConfig,
         discovered_models: &[String],
+        xai_discovered_models: &[String],
         ctx: &mut ModelContext<Self>,
     ) {
         let previous_profile_models = self.profile_local_models.clone();
         self.last_local_multi_agent_config = Some(config.clone());
         self.last_local_multi_agent_discovered_models = discovered_models.to_vec();
+        self.last_local_multi_agent_xai_models = xai_discovered_models.to_vec();
         self.rebuild_profile_local_models(ctx);
 
         if !no_cloud_mode_enabled() {
@@ -2027,8 +2033,11 @@ impl LLMPreferences {
             return;
         }
 
-        let Some(update) = models_by_feature_for_local_multi_agent(config, discovered_models)
-        else {
+        let Some(update) = models_by_feature_for_local_multi_agent(
+            config,
+            discovered_models,
+            xai_discovered_models,
+        ) else {
             if self.profile_local_models != previous_profile_models {
                 ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
             }
@@ -2055,9 +2064,12 @@ impl LLMPreferences {
 
         let keys = ApiKeyManager::as_ref(app).keys();
         let discovered_models = &self.last_local_multi_agent_discovered_models;
+        let xai_models = &self.last_local_multi_agent_xai_models;
         let mut profile_models = HashMap::new();
 
-        if let Some(models) = models_by_feature_for_local_multi_agent(config, discovered_models) {
+        if let Some(models) =
+            models_by_feature_for_local_multi_agent(config, discovered_models, xai_models)
+        {
             profile_models.insert(DEFAULT_PROFILE_INFERENCE_KEY.to_string(), models);
         }
 
@@ -2094,9 +2106,11 @@ impl LLMPreferences {
                 &[]
             };
 
-            if let Some(models) =
-                models_by_feature_for_local_multi_agent(&profile_config, profile_discovered_models)
-            {
+            if let Some(models) = models_by_feature_for_local_multi_agent(
+                &profile_config,
+                profile_discovered_models,
+                xai_models,
+            ) {
                 profile_models.insert(profile_key.clone(), models);
             }
         }
@@ -2370,16 +2384,33 @@ fn custom_llm_info_from(endpoint: &CustomEndpoint, model: &CustomEndpointModel) 
 fn models_by_feature_for_local_multi_agent(
     config: &LocalMultiAgentConfig,
     discovered_models: &[String],
+    xai_discovered_models: &[String],
 ) -> Option<ModelsByFeature> {
-    let choices = config.model_choices(discovered_models);
+    let local_choices = config.model_choices(discovered_models);
+    let xai_choices = xai_discovered_models
+        .iter()
+        .filter_map(|model| crate::local_multi_agent::xai_local_model_id(model))
+        .collect::<Vec<_>>();
+    let choices = local_choices
+        .iter()
+        .cloned()
+        .map(local_multi_agent_llm_info)
+        .chain(
+            xai_choices
+                .iter()
+                .cloned()
+                .map(xai_local_multi_agent_llm_info),
+        )
+        .collect::<Vec<_>>();
     let default_id = config
         .openai_model
         .as_ref()
-        .filter(|model| choices.iter().any(|choice| choice == *model))
-        .or_else(|| choices.first())?
+        .filter(|model| local_choices.iter().any(|choice| choice == *model))
+        .cloned()
+        .or_else(|| local_choices.first().cloned())
+        .or_else(|| xai_choices.first().cloned())?
         .clone()
         .into();
-    let choices = choices.into_iter().map(local_multi_agent_llm_info);
     let available = AvailableLLMs::new(default_id, choices, None).ok()?;
 
     Some(ModelsByFeature {
@@ -2406,6 +2437,31 @@ fn local_multi_agent_llm_info(model: String) -> LLMInfo {
         vision_supported: true,
         spec: None,
         provider: LLMProvider::Unknown,
+        host_configs: HashMap::new(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn xai_local_multi_agent_llm_info(model: String) -> LLMInfo {
+    let provider_model = crate::local_multi_agent::provider_model_id_for_xai_local_model(&model)
+        .unwrap_or(model.as_str())
+        .to_owned();
+    LLMInfo {
+        display_name: provider_model.clone(),
+        base_model_name: provider_model,
+        id: model.into(),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: Some("xAI".to_owned()),
+        disable_reason: None,
+        vision_supported: true,
+        spec: None,
+        provider: LLMProvider::Xai,
         host_configs: HashMap::new(),
         discount_percentage: None,
         context_window: LLMContextWindow::default(),

@@ -407,6 +407,50 @@ async fn request_thinking_mode_overrides_config_default() {
     );
 }
 
+#[tokio::test]
+async fn missing_xai_key_mentions_supergrok_or_api_key() {
+    let mut config = test_config("https://api.x.ai/v1".to_owned());
+    config.openai_api_key = None;
+
+    let error = ProviderRuntime::new()
+        .stream_chat_completion(&config, test_params(true), |_| {})
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.finish_reason, FinishReason::InvalidApiKey);
+    assert!(error.message.contains("SuperGrok"));
+    assert!(error.message.contains("xAI API key"));
+}
+
+#[tokio::test]
+async fn xai_request_does_not_fall_back_to_configured_local_provider_key() {
+    let mut config = test_config("https://api.x.ai/v1".to_owned());
+    config.openai_api_key = Some("local-provider-key".to_owned());
+
+    let error = ProviderRuntime::new()
+        .stream_chat_completion(&config, test_params(true), |_| {})
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.finish_reason, FinishReason::InvalidApiKey);
+    assert_eq!(error.provider, warp_multi_agent_api::LlmProvider::Xai);
+    assert!(error.message.contains("SuperGrok"));
+}
+
+#[test]
+fn xai_provider_auth_errors_are_attributed_to_xai() {
+    let error = classify_provider_error(
+        401,
+        r#"{"error":{"message":"Incorrect API key"}}"#,
+        "grok-4",
+        "https://api.x.ai/v1",
+    );
+
+    assert_eq!(error.finish_reason, FinishReason::InvalidApiKey);
+    assert_eq!(error.provider, warp_multi_agent_api::LlmProvider::Xai);
+    assert_eq!(error.model_name.as_deref(), Some("grok-4"));
+}
+
 async fn spawn_openai_compatible_server(chunks: Vec<Value>) -> (String, Arc<Mutex<Vec<Value>>>) {
     let request_bodies = Arc::new(Mutex::new(Vec::new()));
     let app = Router::new()

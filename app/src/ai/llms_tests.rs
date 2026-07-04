@@ -296,6 +296,7 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
         profile_local_models: HashMap::new(),
         last_local_multi_agent_config: None,
         last_local_multi_agent_discovered_models: Vec::new(),
+        last_local_multi_agent_xai_models: Vec::new(),
         last_has_grok_tokens: false,
     };
 
@@ -315,6 +316,36 @@ fn custom_endpoint_usage_display_label_resolves_alias_name_and_generic_fallback(
         preferences.custom_endpoint_usage_display_label("unknown"),
         CUSTOM_ENDPOINT_USAGE_FALLBACK_LABEL
     );
+}
+
+#[test]
+fn local_multi_agent_models_include_xai_as_additional_provider() {
+    let config = LocalMultiAgentConfig {
+        openai_model: Some("local-default".to_owned()),
+        local_model_list: "local-default,local-secondary".to_owned(),
+        ..Default::default()
+    };
+
+    let models = models_by_feature_for_local_multi_agent(
+        &config,
+        &["local-discovered".to_owned()],
+        &["grok-4".to_owned()],
+    )
+    .unwrap();
+
+    assert_eq!(models.agent_mode.default_id, LLMId::from("local-default"));
+    let local = models
+        .agent_mode
+        .info_for_id(&LLMId::from("local-default"))
+        .unwrap();
+    assert_eq!(local.provider, LLMProvider::Unknown);
+
+    let xai = models
+        .agent_mode
+        .info_for_id(&LLMId::from("xai:grok-4"))
+        .unwrap();
+    assert_eq!(xai.display_name, "grok-4");
+    assert_eq!(xai.provider, LLMProvider::Xai);
 }
 
 #[test]
@@ -760,6 +791,7 @@ fn local_multi_agent_models_populate_agent_model_choices() {
     let models = models_by_feature_for_local_multi_agent(
         &config,
         &["model-a".to_string(), "model-b".to_string()],
+        &[],
     )
     .expect("local models should build LLM choices");
 
@@ -822,6 +854,7 @@ fn profile_local_models_do_not_include_global_discovered_models() {
             preferences.update_local_multi_agent_models(
                 &config,
                 &["global-discovered-model".to_string()],
+                &[],
                 ctx,
             );
         });
@@ -900,6 +933,7 @@ fn local_multi_agent_models_preserve_server_models_in_cloud_mode() {
             preferences.update_local_multi_agent_models(
                 &config,
                 &["local-discovered-model".to_string()],
+                &[],
                 ctx,
             );
         });
