@@ -194,6 +194,27 @@ fn model(name: &str, alias: Option<&str>, config_key: &str) -> CustomEndpointMod
     }
 }
 
+fn llm_info(id: &str, display_name: &str, provider: LLMProvider) -> LLMInfo {
+    LLMInfo {
+        display_name: display_name.to_string(),
+        base_model_name: display_name.to_string(),
+        id: LLMId::from(id),
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 1,
+            credit_multiplier: None,
+        },
+        description: None,
+        disable_reason: None,
+        vision_supported: false,
+        spec: None,
+        provider,
+        host_configs: HashMap::new(),
+        discount_percentage: None,
+        context_window: LLMContextWindow::default(),
+    }
+}
+
 #[test]
 fn custom_llm_infos_built_from_endpoints() {
     let keys = ai::api_keys::ApiKeys {
@@ -757,4 +778,160 @@ fn local_multi_agent_models_populate_agent_model_choices() {
         models.cli_agent.as_ref().map(|models| &models.choices),
         Some(&models.agent_mode.choices)
     );
+}
+
+#[test]
+#[serial_test::serial]
+fn profile_local_models_do_not_include_global_discovered_models() {
+    let previous = std::env::var_os("WARP_NO_CLOUD");
+    std::env::set_var("WARP_NO_CLOUD", "1");
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+        app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let profile_key = "local-profile-test";
+        ApiKeyManager::handle(&app).update(&mut app, |api_key_manager, ctx| {
+            api_key_manager.set_local_model_settings_for_profile(
+                profile_key,
+                "{}".to_string(),
+                "profile-only-model".to_string(),
+                ctx,
+            );
+        });
+
+        let mut config = LocalMultiAgentConfig::default();
+        config.openai_model = Some("global-default-model".to_string());
+        config.local_model_aliases = "{}".to_string();
+        config.local_model_list = "global-listed-model".to_string();
+
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_local_multi_agent_models(
+                &config,
+                &["global-discovered-model".to_string()],
+                ctx,
+            );
+        });
+
+        llm_preferences.read(&app, |preferences, ctx| {
+            let profile_choices = preferences
+                .get_base_llm_choices_for_profile_key(ctx, profile_key)
+                .into_iter()
+                .map(|llm| llm.id.to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(profile_choices, vec!["profile-only-model".to_string()]);
+
+            let default_choices = preferences
+                .get_base_llm_choices_for_profile_key(ctx, DEFAULT_PROFILE_INFERENCE_KEY)
+                .into_iter()
+                .map(|llm| llm.id.to_string())
+                .collect::<Vec<_>>();
+            assert!(default_choices.contains(&"global-discovered-model".to_string()));
+        });
+    });
+
+    restore_env_var("WARP_NO_CLOUD", previous);
+}
+
+#[test]
+#[serial_test::serial]
+fn local_multi_agent_models_preserve_server_models_in_cloud_mode() {
+    let previous = std::env::var_os("WARP_NO_CLOUD");
+    std::env::set_var("WARP_NO_CLOUD", "0");
+
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+        app.add_singleton_model(AuthManager::new_for_test);
+        app.add_singleton_model(|_| NetworkStatus::new());
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        app.add_singleton_model(CloudModel::mock);
+        app.add_singleton_model(TeamTesterStatus::mock);
+        app.add_singleton_model(SyncQueue::mock);
+        app.add_singleton_model(UpdateManager::mock);
+        app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+        app.add_singleton_model(|ctx| {
+            AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+        });
+        let llm_preferences = app.add_singleton_model(LLMPreferences::new);
+
+        let grok = llm_info("grok-4", "Grok 4", LLMProvider::Xai);
+        let server_agent_models =
+            AvailableLLMs::new(LLMId::from("grok-4"), vec![grok.clone()], None)
+                .expect("server agent models should build");
+        let server_coding_models =
+            AvailableLLMs::new(LLMId::from("grok-4"), vec![grok.clone()], None)
+                .expect("server coding models should build");
+        let server_cli_models = AvailableLLMs::new(LLMId::from("grok-4"), vec![grok], None)
+            .expect("server cli models should build");
+
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_feature_model_choices(
+                Ok(ModelsByFeature {
+                    agent_mode: server_agent_models,
+                    coding: server_coding_models,
+                    cli_agent: Some(server_cli_models),
+                    computer_use: None,
+                }),
+                ctx,
+            );
+        });
+
+        let mut config = LocalMultiAgentConfig::default();
+        config.openai_model = Some("local-default-model".to_string());
+        config.local_model_aliases = "{}".to_string();
+        config.local_model_list = "local-listed-model".to_string();
+
+        llm_preferences.update(&mut app, |preferences, ctx| {
+            preferences.update_local_multi_agent_models(
+                &config,
+                &["local-discovered-model".to_string()],
+                ctx,
+            );
+        });
+
+        llm_preferences.read(&app, |preferences, ctx| {
+            let server_catalog_ids = preferences
+                .models_by_feature
+                .agent_mode
+                .choices
+                .iter()
+                .map(|llm| llm.id.to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(server_catalog_ids, vec!["grok-4".to_string()]);
+
+            let default_choices = preferences
+                .get_base_llm_choices_for_profile_key(ctx, DEFAULT_PROFILE_INFERENCE_KEY)
+                .into_iter()
+                .map(|llm| llm.id.to_string())
+                .collect::<Vec<_>>();
+            assert!(default_choices.contains(&"grok-4".to_string()));
+            assert!(default_choices.contains(&"local-discovered-model".to_string()));
+            assert!(default_choices.contains(&"local-listed-model".to_string()));
+
+            assert!(preferences
+                .agent_mode_info_for_profile_key(
+                    &LLMId::from("grok-4"),
+                    DEFAULT_PROFILE_INFERENCE_KEY,
+                    ctx,
+                )
+                .is_some());
+        });
+    });
+
+    restore_env_var("WARP_NO_CLOUD", previous);
 }

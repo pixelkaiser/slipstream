@@ -847,15 +847,23 @@ impl LLMPreferences {
         app: &AppContext,
     ) -> Option<&'a LLMInfo> {
         #[cfg(not(target_family = "wasm"))]
-        if let Some(models) = self.local_models_for_profile_key(profile_key) {
-            return models
-                .agent_mode
-                .info_for_id(id)
-                .or_else(|| self.custom_llm_info_for_profile_key_if_enabled(id, profile_key, app))
-                .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id));
-        }
+        let local_info = self
+            .local_models_for_profile_key(profile_key)
+            .and_then(|models| models.agent_mode.info_for_id(id));
+        #[cfg(target_family = "wasm")]
+        let local_info: Option<&LLMInfo> = None;
 
-        Self::server_info_for_id_router_gated(&self.models_by_feature.agent_mode, id)
+        local_info
+            .or_else(|| {
+                self.should_include_server_models_for_profile(profile_key)
+                    .then(|| {
+                        Self::server_info_for_id_router_gated(
+                            &self.models_by_feature.agent_mode,
+                            id,
+                        )
+                    })
+                    .flatten()
+            })
             .or_else(|| self.custom_llm_info_for_profile_key_if_enabled(id, profile_key, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
     }
@@ -875,9 +883,13 @@ impl LLMPreferences {
 
         local_info
             .or_else(|| {
-                self.models_by_feature
-                    .agent_mode
-                    .usable_info_for_id(id, app)
+                self.should_include_server_models_for_profile(profile_key)
+                    .then(|| {
+                        self.models_by_feature
+                            .agent_mode
+                            .usable_info_for_id(id, app)
+                    })
+                    .flatten()
             })
             .or_else(|| self.custom_llm_info_for_profile_key_if_enabled(id, profile_key, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
@@ -964,15 +976,20 @@ impl LLMPreferences {
         app: &AppContext,
     ) -> Option<&'a LLMInfo> {
         #[cfg(not(target_family = "wasm"))]
-        if let Some(models) = self.local_models_for_profile_key(profile_key) {
-            return models
-                .coding
-                .info_for_id(id)
-                .or_else(|| self.custom_llm_info_for_profile_key_if_enabled(id, profile_key, app))
-                .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id));
-        }
+        let local_info = self
+            .local_models_for_profile_key(profile_key)
+            .and_then(|models| models.coding.info_for_id(id));
+        #[cfg(target_family = "wasm")]
+        let local_info: Option<&LLMInfo> = None;
 
-        Self::server_info_for_id_router_gated(&self.models_by_feature.coding, id)
+        local_info
+            .or_else(|| {
+                self.should_include_server_models_for_profile(profile_key)
+                    .then(|| {
+                        Self::server_info_for_id_router_gated(&self.models_by_feature.coding, id)
+                    })
+                    .flatten()
+            })
             .or_else(|| self.custom_llm_info_for_profile_key_if_enabled(id, profile_key, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
     }
@@ -991,7 +1008,11 @@ impl LLMPreferences {
         let local_info: Option<&LLMInfo> = None;
 
         local_info
-            .or_else(|| self.models_by_feature.coding.usable_info_for_id(id, app))
+            .or_else(|| {
+                self.should_include_server_models_for_profile(profile_key)
+                    .then(|| self.models_by_feature.coding.usable_info_for_id(id, app))
+                    .flatten()
+            })
             .or_else(|| self.custom_llm_info_for_profile_key_if_enabled(id, profile_key, app))
             .or_else(|| self.custom_router_llm_info_for_id_if_enabled(id))
     }
@@ -1036,6 +1057,42 @@ impl LLMPreferences {
         Some(info)
     }
 
+    fn server_model_choices<'a>(
+        available: &'a AvailableLLMs,
+        routers_enabled: bool,
+    ) -> impl Iterator<Item = &'a LLMInfo> {
+        available
+            .choices
+            .iter()
+            .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
+            .filter(move |llm| {
+                routers_enabled || !custom_model_routers::is_cloud_custom_router_id(llm.id.as_str())
+            })
+    }
+
+    fn push_unique_llms<'a>(
+        choices: &mut Vec<&'a LLMInfo>,
+        llms: impl IntoIterator<Item = &'a LLMInfo>,
+    ) {
+        for llm in llms {
+            if !choices.iter().any(|existing| existing.id == llm.id) {
+                choices.push(llm);
+            }
+        }
+    }
+
+    fn should_include_server_models_for_profile(&self, profile_key: &str) -> bool {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            !no_cloud_mode_enabled() || self.local_models_for_profile_key(profile_key).is_none()
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = profile_key;
+            true
+        }
+    }
+
     /// Returns the set of LLMs available for Agent Mode use.
     pub fn get_base_llm_choices_for_agent_mode(
         &self,
@@ -1075,27 +1132,38 @@ impl LLMPreferences {
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         #[cfg(not(target_family = "wasm"))]
         if let Some(models) = self.local_models_for_profile_key(profile_key) {
-            return models
-                .agent_mode
-                .choices
-                .iter()
-                .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
-                .chain(self.custom_llm_choices_for_profile_key(app, profile_key))
-                .chain(self.custom_router_choices())
-                .collect();
+            let mut choices = Vec::new();
+            Self::push_unique_llms(
+                &mut choices,
+                models.agent_mode.choices.iter().filter(|llm| {
+                    !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled))
+                }),
+            );
+            if self.should_include_server_models_for_profile(profile_key) {
+                Self::push_unique_llms(
+                    &mut choices,
+                    Self::server_model_choices(&self.models_by_feature.agent_mode, routers_enabled),
+                );
+            }
+            Self::push_unique_llms(
+                &mut choices,
+                self.custom_llm_choices_for_profile_key(app, profile_key),
+            );
+            Self::push_unique_llms(&mut choices, self.custom_router_choices());
+            return choices;
         }
 
-        self.models_by_feature
-            .agent_mode
-            .choices
-            .iter()
-            .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
-            .filter(move |llm| {
-                routers_enabled || !custom_model_routers::is_cloud_custom_router_id(llm.id.as_str())
-            })
-            .chain(self.custom_llm_choices_for_profile_key(app, profile_key))
-            .chain(self.custom_router_choices())
-            .collect()
+        let mut choices = Vec::new();
+        Self::push_unique_llms(
+            &mut choices,
+            Self::server_model_choices(&self.models_by_feature.agent_mode, routers_enabled),
+        );
+        Self::push_unique_llms(
+            &mut choices,
+            self.custom_llm_choices_for_profile_key(app, profile_key),
+        );
+        Self::push_unique_llms(&mut choices, self.custom_router_choices());
+        choices
     }
 
     /// Returns the set of LLMs available for coding.
@@ -1142,27 +1210,38 @@ impl LLMPreferences {
         let routers_enabled = FeatureFlag::CustomModelRouters.is_enabled();
         #[cfg(not(target_family = "wasm"))]
         if let Some(models) = self.local_models_for_profile_key(profile_key) {
-            return models
-                .coding
-                .choices
-                .iter()
-                .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
-                .chain(self.custom_llm_choices_for_profile_key(app, profile_key))
-                .chain(self.custom_router_choices())
-                .collect();
+            let mut choices = Vec::new();
+            Self::push_unique_llms(
+                &mut choices,
+                models.coding.choices.iter().filter(|llm| {
+                    !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled))
+                }),
+            );
+            if self.should_include_server_models_for_profile(profile_key) {
+                Self::push_unique_llms(
+                    &mut choices,
+                    Self::server_model_choices(&self.models_by_feature.coding, routers_enabled),
+                );
+            }
+            Self::push_unique_llms(
+                &mut choices,
+                self.custom_llm_choices_for_profile_key(app, profile_key),
+            );
+            Self::push_unique_llms(&mut choices, self.custom_router_choices());
+            return choices;
         }
 
-        self.models_by_feature
-            .coding
-            .choices
-            .iter()
-            .filter(|llm| !matches!(llm.disable_reason, Some(DisableReason::AdminDisabled)))
-            .filter(move |llm| {
-                routers_enabled || !custom_model_routers::is_cloud_custom_router_id(llm.id.as_str())
-            })
-            .chain(self.custom_llm_choices_for_profile_key(app, profile_key))
-            .chain(self.custom_router_choices())
-            .collect()
+        let mut choices = Vec::new();
+        Self::push_unique_llms(
+            &mut choices,
+            Self::server_model_choices(&self.models_by_feature.coding, routers_enabled),
+        );
+        Self::push_unique_llms(
+            &mut choices,
+            self.custom_llm_choices_for_profile_key(app, profile_key),
+        );
+        Self::push_unique_llms(&mut choices, self.custom_router_choices());
+        choices
     }
 
     pub fn get_cli_agent_llm_choices_for_profile_key(
@@ -1173,18 +1252,25 @@ impl LLMPreferences {
         #[cfg(not(target_family = "wasm"))]
         if let Some(models) = self.local_models_for_profile_key(profile_key) {
             let available = models.cli_agent.as_ref().unwrap_or(&models.agent_mode);
-            return available
-                .choices
-                .iter()
-                .chain(self.custom_llm_choices_for_profile_key(app, profile_key))
-                .collect();
+            let mut choices = Vec::new();
+            Self::push_unique_llms(&mut choices, available.choices.iter());
+            if self.should_include_server_models_for_profile(profile_key) {
+                Self::push_unique_llms(&mut choices, self.get_cli_agent_available().choices.iter());
+            }
+            Self::push_unique_llms(
+                &mut choices,
+                self.custom_llm_choices_for_profile_key(app, profile_key),
+            );
+            return choices;
         }
 
-        self.get_cli_agent_available()
-            .choices
-            .iter()
-            .chain(self.custom_llm_choices_for_profile_key(app, profile_key))
-            .collect()
+        let mut choices = Vec::new();
+        Self::push_unique_llms(&mut choices, self.get_cli_agent_available().choices.iter());
+        Self::push_unique_llms(
+            &mut choices,
+            self.custom_llm_choices_for_profile_key(app, profile_key),
+        );
+        choices
     }
 
     /// Returns the `LLMInfo` for the CLI agent model.
@@ -1218,15 +1304,24 @@ impl LLMPreferences {
         app: &AppContext,
     ) -> Option<&'a LLMInfo> {
         #[cfg(not(target_family = "wasm"))]
-        if let Some(models) = self.local_models_for_profile_key(profile_key) {
-            let available = models.cli_agent.as_ref().unwrap_or(&models.agent_mode);
-            return available
-                .info_for_id(id)
-                .or_else(|| self.custom_llm_info_for_profile_key_if_enabled(id, profile_key, app));
-        }
+        let local_info = self
+            .local_models_for_profile_key(profile_key)
+            .and_then(|models| {
+                models
+                    .cli_agent
+                    .as_ref()
+                    .unwrap_or(&models.agent_mode)
+                    .info_for_id(id)
+            });
+        #[cfg(target_family = "wasm")]
+        let local_info: Option<&LLMInfo> = None;
 
-        self.get_cli_agent_available()
-            .info_for_id(id)
+        local_info
+            .or_else(|| {
+                self.should_include_server_models_for_profile(profile_key)
+                    .then(|| self.get_cli_agent_available().info_for_id(id))
+                    .flatten()
+            })
             .or_else(|| self.custom_llm_info_for_profile_key_if_enabled(id, profile_key, app))
     }
 
@@ -1250,7 +1345,11 @@ impl LLMPreferences {
         let local_info: Option<&LLMInfo> = None;
 
         local_info
-            .or_else(|| self.get_cli_agent_available().usable_info_for_id(id, app))
+            .or_else(|| {
+                self.should_include_server_models_for_profile(profile_key)
+                    .then(|| self.get_cli_agent_available().usable_info_for_id(id, app))
+                    .flatten()
+            })
             .or_else(|| self.custom_llm_info_for_profile_key_if_enabled(id, profile_key, app))
     }
 
@@ -1921,6 +2020,13 @@ impl LLMPreferences {
         self.last_local_multi_agent_discovered_models = discovered_models.to_vec();
         self.rebuild_profile_local_models(ctx);
 
+        if !no_cloud_mode_enabled() {
+            if self.profile_local_models != previous_profile_models {
+                ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
+            }
+            return;
+        }
+
         let Some(update) = models_by_feature_for_local_multi_agent(config, discovered_models)
         else {
             if self.profile_local_models != previous_profile_models {
@@ -1957,6 +2063,12 @@ impl LLMPreferences {
 
         for (profile_key, settings) in &keys.profile_inference_settings {
             let mut profile_config = config.clone();
+            let is_default_profile = profile_key == DEFAULT_PROFILE_INFERENCE_KEY;
+            if !is_default_profile {
+                profile_config.openai_model = None;
+                profile_config.local_model_aliases.clear();
+                profile_config.local_model_list.clear();
+            }
             let has_profile_model_list = !settings.local_model_list.trim().is_empty();
             let has_profile_aliases = !settings.local_model_aliases.trim().is_empty();
             let has_profile_provider = settings.openai_base_url.is_some()
@@ -1976,9 +2088,14 @@ impl LLMPreferences {
             if has_profile_aliases {
                 profile_config.local_model_aliases = settings.local_model_aliases.clone();
             }
+            let profile_discovered_models = if is_default_profile {
+                discovered_models.as_slice()
+            } else {
+                &[]
+            };
 
             if let Some(models) =
-                models_by_feature_for_local_multi_agent(&profile_config, discovered_models)
+                models_by_feature_for_local_multi_agent(&profile_config, profile_discovered_models)
             {
                 profile_models.insert(profile_key.clone(), models);
             }

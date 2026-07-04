@@ -191,6 +191,7 @@ impl RequestParams {
             local_model_aliases: None,
             local_max_completion_tokens: None,
             local_model_context_tokens: None,
+            local_thinking_mode: None,
             local_multi_agent_server_root_url: None,
             openai_base_url: None,
             allow_use_of_warp_credits: false,
