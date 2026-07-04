@@ -608,6 +608,24 @@ fn api_keys_for_request_omits_grok_token_when_byo_disabled() {
 }
 
 #[test]
+fn api_keys_for_request_can_omit_grok_token_for_local_route() {
+    let mgr = make_manager_with_grok(
+        ApiKeys::default(),
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+
+    assert!(mgr
+        .api_keys_for_request_with_grok_oauth(
+            DEFAULT_PROFILE_INFERENCE_KEY,
+            true,
+            false,
+            None,
+            false,
+        )
+        .is_none());
+}
+
+#[test]
 fn api_keys_for_request_includes_expired_grok_token() {
     // Expired tokens are still sent in requests; the server rejects truly
     // invalid ones and the background refresh replaces them.
@@ -680,6 +698,63 @@ fn manager_has_any_key_true_for_connected_grok_without_pasted_key() {
 fn manager_has_any_key_false_for_blank_grok_and_no_keys() {
     let mgr = make_manager_with_grok(ApiKeys::default(), Some(grok_tokens("   ", None)));
     assert!(!mgr.has_any_key());
+}
+
+#[test]
+fn local_provider_key_for_xai_prefers_connected_grok_token() {
+    let mgr = make_manager_with_grok(
+        ApiKeys {
+            openai: Some("openai-key".into()),
+            ..Default::default()
+        },
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+
+    assert_eq!(
+        mgr.local_provider_api_key_for_profile(
+            DEFAULT_PROFILE_INFERENCE_KEY,
+            Some(XAI_OPENAI_BASE_URL)
+        )
+        .as_deref(),
+        Some("grok-abc")
+    );
+}
+
+#[test]
+fn local_provider_key_for_xai_uses_configured_key_without_grok_token() {
+    let mgr = make_manager(ApiKeys {
+        openai: Some("xai-api-key".into()),
+        ..Default::default()
+    });
+
+    assert_eq!(
+        mgr.local_provider_api_key_for_profile(
+            DEFAULT_PROFILE_INFERENCE_KEY,
+            Some(XAI_OPENAI_BASE_URL)
+        )
+        .as_deref(),
+        Some("xai-api-key")
+    );
+}
+
+#[test]
+fn local_provider_key_for_non_xai_uses_configured_openai_key() {
+    let mgr = make_manager_with_grok(
+        ApiKeys {
+            openai: Some("openai-key".into()),
+            ..Default::default()
+        },
+        Some(grok_tokens("grok-abc", Some(3600))),
+    );
+
+    assert_eq!(
+        mgr.local_provider_api_key_for_profile(
+            DEFAULT_PROFILE_INFERENCE_KEY,
+            Some("https://api.openai.com/v1")
+        )
+        .as_deref(),
+        Some("openai-key")
+    );
 }
 
 // ── geap credentials ────────────────────────────────────────────

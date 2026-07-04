@@ -701,7 +701,8 @@ impl LoginSlideView {
         });
 
         LocalMultiAgentManager::handle(ctx).update(ctx, |manager, ctx| {
-            manager.update_provider_config(api_key, ctx);
+            let grok_tokens = ApiKeyManager::as_ref(ctx).grok_tokens().cloned();
+            manager.update_provider_config(api_key, grok_tokens, ctx);
             let mut config = manager.config().clone();
             config.openai_base_url = Some(base_url);
             manager

@@ -38,6 +38,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         custom_model_routers: None,
         openai_base_url: None,
         local_multi_agent_server_root_url: None,
+        local_provider_api_key: None,
         local_model_aliases: None,
         local_max_completion_tokens: None,
         local_model_context_tokens: None,

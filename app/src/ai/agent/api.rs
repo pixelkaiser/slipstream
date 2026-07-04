@@ -123,6 +123,7 @@ pub struct RequestParams {
     pub custom_model_routers: Option<warp_multi_agent_api::request::settings::CustomModelRouters>,
     pub openai_base_url: Option<String>,
     pub local_multi_agent_server_root_url: Option<String>,
+    pub local_provider_api_key: Option<String>,
     pub local_model_aliases: Option<String>,
     pub local_max_completion_tokens: Option<u32>,
     pub local_model_context_tokens: Option<String>,
@@ -163,6 +164,13 @@ pub struct ConversationData {
     pub existing_suggestions: Option<Suggestions>,
 }
 
+#[cfg(not(target_family = "wasm"))]
+fn local_request_model_id(model_id: &LLMId) -> LLMId {
+    crate::local_multi_agent::provider_model_id_for_xai_local_model(model_id.as_str())
+        .unwrap_or_else(|| model_id.as_str())
+        .into()
+}
+
 impl RequestParams {
     #[cfg(test)]
     pub fn new_for_test() -> Self {
@@ -193,6 +201,7 @@ impl RequestParams {
             local_model_context_tokens: None,
             local_thinking_mode: None,
             local_multi_agent_server_root_url: None,
+            local_provider_api_key: None,
             openai_base_url: None,
             allow_use_of_warp_credits: false,
             autonomy_level: Default::default(),
@@ -295,14 +304,57 @@ impl RequestParams {
         let inference_profile_key = active_profile.inference_profile_key();
         let is_byo_enabled = user_workspaces.is_byo_api_key_enabled(app);
         #[cfg(not(target_family = "wasm"))]
+        let local_multi_agent_server_root_url =
+            crate::local_multi_agent::LocalMultiAgentManager::global_root_url()
+                .map(|url| url.to_string())
+                .or_else(|| {
+                    api_key_manager
+                        .local_multi_agent_server_root_url_for_profile(&inference_profile_key)
+                });
+        #[cfg(target_family = "wasm")]
+        let local_multi_agent_server_root_url =
+            api_key_manager.local_multi_agent_server_root_url_for_profile(&inference_profile_key);
+        let profile_openai_base_url =
+            api_key_manager.openai_base_url_for_profile(&inference_profile_key);
+        let is_local_multi_agent_request = local_multi_agent_server_root_url.is_some();
+        #[cfg(not(target_family = "wasm"))]
+        let is_local_xai_model =
+            crate::local_multi_agent::is_xai_local_model_id(request_input.model_id.as_str());
+        #[cfg(target_family = "wasm")]
+        let is_local_xai_model = false;
+        let openai_base_url = if is_local_multi_agent_request && is_local_xai_model {
+            Some(::ai::api_keys::XAI_OPENAI_BASE_URL.to_string())
+        } else {
+            profile_openai_base_url
+        };
+        #[cfg(not(target_family = "wasm"))]
+        let local_provider_api_key = is_local_multi_agent_request
+            .then(|| {
+                if is_local_xai_model {
+                    api_key_manager
+                        .grok_tokens()
+                        .and_then(::ai::api_keys::GrokTokens::access_token_for_request)
+                        .map(str::to_owned)
+                } else {
+                    api_key_manager.local_provider_api_key_for_profile(
+                        &inference_profile_key,
+                        openai_base_url.as_deref(),
+                    )
+                }
+            })
+            .flatten();
+        #[cfg(target_family = "wasm")]
+        let local_provider_api_key: Option<String> = None;
+        #[cfg(not(target_family = "wasm"))]
         let geap_binding = crate::ai::geap_credentials::current_geap_policy(app).mint_binding();
         #[cfg(target_family = "wasm")]
         let geap_binding: Option<::ai::api_keys::GeapMintBinding> = None;
-        let api_keys = api_key_manager.api_keys_for_request(
+        let api_keys = api_key_manager.api_keys_for_request_with_grok_oauth(
             &inference_profile_key,
             is_byo_enabled,
             user_workspaces.is_aws_bedrock_credentials_enabled(app),
             geap_binding,
+            !is_local_multi_agent_request,
         );
         let is_custom_inference_enabled = user_workspaces.is_custom_inference_enabled(app);
         let custom_model_providers = FeatureFlag::CustomInferenceEndpoints
@@ -320,18 +372,6 @@ impl RequestParams {
                 &request_input.coding_model_id,
             )
         });
-        #[cfg(not(target_family = "wasm"))]
-        let local_multi_agent_server_root_url =
-            crate::local_multi_agent::LocalMultiAgentManager::global_root_url()
-                .map(|url| url.to_string())
-                .or_else(|| {
-                    api_key_manager
-                        .local_multi_agent_server_root_url_for_profile(&inference_profile_key)
-                });
-        #[cfg(target_family = "wasm")]
-        let local_multi_agent_server_root_url =
-            api_key_manager.local_multi_agent_server_root_url_for_profile(&inference_profile_key);
-        let openai_base_url = api_key_manager.openai_base_url_for_profile(&inference_profile_key);
         let local_model_aliases = non_empty_string(
             api_key_manager.local_model_aliases_for_profile(&inference_profile_key),
         );
@@ -392,6 +432,34 @@ impl RequestParams {
         // current `[min, max]` range. This closes the window between an
         // in-flight model metadata refresh and the next request.
         let context_window_limit = active_profile.data().context_window_limit_for_request(app);
+        #[cfg(not(target_family = "wasm"))]
+        let model = local_request_model_id(&request_input.model_id);
+        #[cfg(target_family = "wasm")]
+        let model = request_input.model_id.clone();
+        #[cfg(not(target_family = "wasm"))]
+        let coding_model = if is_local_xai_model {
+            model.clone()
+        } else {
+            local_request_model_id(&request_input.coding_model_id)
+        };
+        #[cfg(target_family = "wasm")]
+        let coding_model = request_input.coding_model_id.clone();
+        #[cfg(not(target_family = "wasm"))]
+        let cli_agent_model = if is_local_xai_model {
+            model.clone()
+        } else {
+            local_request_model_id(&request_input.cli_agent_model_id)
+        };
+        #[cfg(target_family = "wasm")]
+        let cli_agent_model = request_input.cli_agent_model_id.clone();
+        #[cfg(not(target_family = "wasm"))]
+        let computer_use_model = if is_local_xai_model {
+            model.clone()
+        } else {
+            local_request_model_id(&request_input.computer_use_model_id)
+        };
+        #[cfg(target_family = "wasm")]
+        let computer_use_model = request_input.computer_use_model_id.clone();
 
         Self {
             input: request_input.all_inputs().cloned().collect(),
@@ -403,10 +471,10 @@ impl RequestParams {
             context_window_limit,
             metadata,
             session_context,
-            model: request_input.model_id.clone(),
-            coding_model: request_input.coding_model_id.clone(),
-            cli_agent_model: request_input.cli_agent_model_id.clone(),
-            computer_use_model: request_input.computer_use_model_id.clone(),
+            model,
+            coding_model,
+            cli_agent_model,
+            computer_use_model,
             is_memory_enabled,
             warp_drive_context_enabled,
             mcp_context,
@@ -417,6 +485,7 @@ impl RequestParams {
             custom_model_routers,
             openai_base_url,
             local_multi_agent_server_root_url,
+            local_provider_api_key,
             local_model_aliases,
             local_max_completion_tokens,
             local_model_context_tokens,

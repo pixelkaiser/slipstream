@@ -141,6 +141,7 @@ pub async fn generate_multi_agent_output(
             &request,
             params.local_multi_agent_server_root_url.as_deref(),
             params.openai_base_url.as_deref(),
+            params.local_provider_api_key.as_deref(),
             params.local_model_aliases.as_deref(),
             params.local_max_completion_tokens,
             params.local_model_context_tokens.as_deref(),

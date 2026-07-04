@@ -1183,6 +1183,7 @@ impl ServerApi {
         request: &warp_multi_agent_api::Request,
         server_root_url_override: Option<&str>,
         openai_base_url: Option<&str>,
+        local_provider_api_key: Option<&str>,
         local_model_aliases: Option<&str>,
         local_max_completion_tokens: Option<u32>,
         local_model_context_tokens: Option<&str>,
@@ -1239,6 +1240,9 @@ impl ServerApi {
         }
 
         if server_root_url_override.is_some() {
+            if let Some(local_provider_api_key) = local_provider_api_key {
+                request_builder = request_builder.bearer_auth(local_provider_api_key);
+            }
             if let Some(openai_base_url) = openai_base_url {
                 request_builder = request_builder.header(OPENAI_BASE_URL_HEADER, openai_base_url);
             }

@@ -29,6 +29,7 @@ pub const LOCAL_THINKING_MODE_CHOICES: [&str; 3] = [
 /// Kept separate from [`SECURE_STORAGE_KEY`] because these are OAuth tokens with
 /// a refresh lifecycle, not a user-pasted static key.
 const GROK_SECURE_STORAGE_KEY: &str = "GrokOAuthTokens";
+pub const XAI_OPENAI_BASE_URL: &str = "https://api.x.ai/v1";
 
 /// Emitted when user-provided API keys are updated in-memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,6 +315,15 @@ impl GrokTokens {
             None => false,
         }
     }
+}
+
+pub fn is_xai_openai_base_url(base_url: &str) -> bool {
+    let Ok(url) = Url::parse(base_url.trim()) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.host_str() == Some("api.x.ai")
+        && url.path().trim_end_matches('/') == "/v1"
 }
 
 fn normalize_absolute_http_url(url: Option<String>) -> Option<String> {
@@ -1093,6 +1103,23 @@ impl ApiKeyManager {
         include_aws_bedrock_credentials: bool,
         geap_binding: Option<GeapMintBinding>,
     ) -> Option<api::request::settings::ApiKeys> {
+        self.api_keys_for_request_with_grok_oauth(
+            profile_key,
+            include_byo_keys,
+            include_aws_bedrock_credentials,
+            geap_binding,
+            true,
+        )
+    }
+
+    pub fn api_keys_for_request_with_grok_oauth(
+        &self,
+        profile_key: &str,
+        include_byo_keys: bool,
+        include_aws_bedrock_credentials: bool,
+        geap_binding: Option<GeapMintBinding>,
+        include_grok_oauth: bool,
+    ) -> Option<api::request::settings::ApiKeys> {
         let profile_settings = self.keys.profile_settings(profile_key);
         let anthropic = include_byo_keys
             .then(|| profile_settings.anthropic.clone())
@@ -1116,7 +1143,7 @@ impl ApiKeyManager {
         // policy gate: when BYO keys are disabled (e.g. by workspace policy),
         // the token must not be sent. Possibly-expired tokens ARE sent — the
         // server is the authority on validity.
-        let grok_oauth_access_token = include_byo_keys
+        let grok_oauth_access_token = (include_byo_keys && include_grok_oauth)
             .then(|| {
                 self.grok_tokens
                     .as_ref()
@@ -1190,6 +1217,23 @@ impl ApiKeyManager {
 
     pub fn openai_key_for_profile(&self, profile_key: &str) -> Option<String> {
         self.keys.profile_settings(profile_key).openai
+    }
+
+    pub fn local_provider_api_key_for_profile(
+        &self,
+        profile_key: &str,
+        provider_base_url: Option<&str>,
+    ) -> Option<String> {
+        let profile_settings = self.keys.profile_settings(profile_key);
+        if provider_base_url.is_some_and(is_xai_openai_base_url) {
+            self.grok_tokens
+                .as_ref()
+                .and_then(GrokTokens::access_token_for_request)
+                .map(str::to_owned)
+                .or(profile_settings.openai)
+        } else {
+            profile_settings.openai
+        }
     }
 
     pub fn openai_base_url_for_profile(&self, profile_key: &str) -> Option<String> {

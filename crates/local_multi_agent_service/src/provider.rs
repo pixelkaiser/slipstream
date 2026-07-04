@@ -8,6 +8,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
+use warp_multi_agent_api as api;
 
 use crate::{
     autocomplete::{
@@ -96,6 +97,7 @@ pub struct LocalAgentError {
     pub message: String,
     pub finish_reason: FinishReason,
     pub model_name: Option<String>,
+    pub provider: api::LlmProvider,
 }
 
 impl LocalAgentError {
@@ -108,7 +110,13 @@ impl LocalAgentError {
             message: message.into(),
             finish_reason,
             model_name,
+            provider: api::LlmProvider::Openai,
         }
+    }
+
+    pub fn with_provider(mut self, provider: api::LlmProvider) -> Self {
+        self.provider = provider;
+        self
     }
 
     pub fn internal(message: impl Into<String>) -> Self {
@@ -143,20 +151,32 @@ impl ProviderRuntime {
         params: ChatCompletionParams,
         mut on_content_chunk: impl FnMut(String) + Send,
     ) -> Result<ProviderResponse, LocalAgentError> {
+        let base_url = config.provider_base_url(params.base_url.as_deref());
+        let is_xai_request = is_xai_openai_base_url(&base_url);
         let api_key = params
             .api_key
             .as_deref()
             .and_then(non_empty_str)
-            .or(config.openai_api_key.as_deref().and_then(non_empty_str))
+            .or_else(|| {
+                (!is_xai_request)
+                    .then(|| config.openai_api_key.as_deref().and_then(non_empty_str))
+                    .flatten()
+            })
             .map(str::to_owned)
             .ok_or_else(|| {
+                let message = if is_xai_request {
+                    "Connect your SuperGrok subscription or configure an xAI API key to use local xAI inference."
+                } else {
+                    "OPENAI_API_KEY is not set and the Warp request did not include an OpenAI key."
+                };
+                let provider = provider_for_base_url(&base_url);
                 LocalAgentError::new(
-                    "OPENAI_API_KEY is not set and the Warp request did not include an OpenAI key.",
+                    message,
                     FinishReason::InvalidApiKey,
                     params.model.clone(),
                 )
+                .with_provider(provider)
             })?;
-        let base_url = config.provider_base_url(params.base_url.as_deref());
         let model = resolve_provider_model(
             config.openai_model.as_deref(),
             params.model.as_deref(),
@@ -242,7 +262,7 @@ impl ProviderRuntime {
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            return Err(classify_provider_error(status, &body, &model));
+            return Err(classify_provider_error(status, &body, &model, &base_url));
         }
 
         let mut stream = response.bytes_stream();
@@ -1574,9 +1594,23 @@ fn extract_streaming_tool_calls(
     }
 }
 
-fn classify_provider_error(status: u16, body: &str, model: &str) -> LocalAgentError {
+fn provider_for_base_url(base_url: &str) -> api::LlmProvider {
+    if is_xai_openai_base_url(base_url) {
+        api::LlmProvider::Xai
+    } else {
+        api::LlmProvider::Openai
+    }
+}
+
+fn classify_provider_error(
+    status: u16,
+    body: &str,
+    model: &str,
+    base_url: &str,
+) -> LocalAgentError {
     let lower = body.to_ascii_lowercase();
     let message = format!("OpenAI-compatible endpoint returned {status}: {body}");
+    let provider = provider_for_base_url(base_url);
     if status == 401
         || status == 403
         || lower.contains("invalid api key")
@@ -1584,10 +1618,12 @@ fn classify_provider_error(status: u16, body: &str, model: &str) -> LocalAgentEr
         || lower.contains("incorrect api key")
         || lower.contains("unauthorized")
     {
-        return LocalAgentError::new(message, FinishReason::InvalidApiKey, Some(model.to_owned()));
+        return LocalAgentError::new(message, FinishReason::InvalidApiKey, Some(model.to_owned()))
+            .with_provider(provider);
     }
     if status == 429 {
-        return LocalAgentError::new(message, FinishReason::QuotaLimit, Some(model.to_owned()));
+        return LocalAgentError::new(message, FinishReason::QuotaLimit, Some(model.to_owned()))
+            .with_provider(provider);
     }
     if status == 413
         || lower.contains("context window")
@@ -1602,7 +1638,8 @@ fn classify_provider_error(status: u16, body: &str, model: &str) -> LocalAgentEr
             message,
             FinishReason::ContextWindowExceeded,
             Some(model.to_owned()),
-        );
+        )
+        .with_provider(provider);
     }
     if matches!(status, 408 | 500 | 502 | 503 | 504) {
         return LocalAgentError::new(
@@ -1612,6 +1649,7 @@ fn classify_provider_error(status: u16, body: &str, model: &str) -> LocalAgentEr
         );
     }
     LocalAgentError::new(message, FinishReason::InternalError, Some(model.to_owned()))
+        .with_provider(provider)
 }
 
 fn configured_context_window_tokens(raw: Option<&str>, model: &str) -> Option<u32> {
@@ -1861,6 +1899,10 @@ fn estimate_context_window_usage(
         assistant_content.len() + provider_tool_call_content_length(assistant_tool_calls);
     let estimated_tokens = (message_chars + tools_chars + assistant_chars).div_ceil(4) as f32;
     Some((estimated_tokens / context_window_tokens as f32).min(1.0))
+}
+
+fn is_xai_openai_base_url(base_url: &str) -> bool {
+    base_url.trim().trim_end_matches('/') == "https://api.x.ai/v1"
 }
 
 #[cfg(test)]
