@@ -707,8 +707,6 @@ impl LocalMultiAgentManager {
                         }
 
                         let model_count = models.len();
-                        manager.discovered_models = models.clone();
-
                         let profile_settings = ::ai::api_keys::ApiKeyManager::as_ref(ctx)
                             .keys()
                             .profile_settings(&profile_key);
