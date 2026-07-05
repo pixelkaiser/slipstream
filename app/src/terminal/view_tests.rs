@@ -105,6 +105,13 @@ fn has_pending_user_query_block(view: &TerminalView) -> bool {
 }
 
 #[test]
+fn expanded_running_ai_command_does_not_hide_active_agent_view_input() {
+    assert!(!should_hide_input_for_active_ai_block(false, true, true));
+    assert!(should_hide_input_for_active_ai_block(false, true, false));
+    assert!(should_hide_input_for_active_ai_block(true, true, true));
+}
+
+#[test]
 fn focus_reporting_writes_focus_events_in_normal_screen() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

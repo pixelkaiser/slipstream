@@ -8315,8 +8315,18 @@ impl TerminalView {
         let active_ai_block = self.active_ai_block(app);
         if active_ai_block.is_some_and(|ai_block| {
             let ai_block = ai_block.as_ref(app);
-            ai_block.is_blocked_on_user_confirmation(app)
-                || ai_block.has_expanded_running_commands(app)
+            let is_active_agent_view_ai_block = self
+                .agent_view_controller
+                .as_ref(app)
+                .agent_view_state()
+                .active_conversation_id()
+                .is_some_and(|id| id == ai_block.conversation_id());
+
+            should_hide_input_for_active_ai_block(
+                ai_block.is_blocked_on_user_confirmation(app),
+                ai_block.has_expanded_running_commands(app),
+                is_active_agent_view_ai_block,
+            )
         }) {
             return false;
         }
@@ -28788,6 +28798,15 @@ fn maybe_wrap_terminal_element_in_scrollable(
         }
         (false, false) => element.finish(),
     }
+}
+
+fn should_hide_input_for_active_ai_block(
+    is_blocked_on_user_confirmation: bool,
+    has_expanded_running_commands: bool,
+    is_active_agent_view_ai_block: bool,
+) -> bool {
+    is_blocked_on_user_confirmation
+        || (has_expanded_running_commands && !is_active_agent_view_ai_block)
 }
 
 /// Returns `true` when the Rich Input chip is present in the user's CLI agent
