@@ -78,6 +78,7 @@ pub struct ChatCompletionParams {
     pub local_thinking_mode: Option<String>,
     pub temperature: Option<f32>,
     pub mcp_tools: Vec<McpToolSummary>,
+    pub cli_agent_command_id: Option<String>,
     pub enable_tools: bool,
     pub enable_thinking: bool,
 }
@@ -196,12 +197,16 @@ impl ProviderRuntime {
                 params.local_model_context_tokens.as_deref(),
             )
             .await;
-        let tools = (params.enable_tools && config.local_enable_tools).then(local_tool_schemas);
+        let tools = (params.enable_tools && config.local_enable_tools)
+            .then(|| local_tool_schemas(params.cli_agent_command_id.as_deref()));
         let messages = build_provider_messages(
             [
-                tools
-                    .as_ref()
-                    .map(|_| local_tool_use_system_prompt(&params.mcp_tools)),
+                tools.as_ref().map(|_| {
+                    local_tool_use_system_prompt(
+                        &params.mcp_tools,
+                        params.cli_agent_command_id.as_deref(),
+                    )
+                }),
                 config.local_multi_agent_system_prompt.clone(),
             ],
             params.messages,
@@ -405,6 +410,7 @@ impl ProviderRuntime {
                     local_thinking_mode,
                     temperature: Some(0.0),
                     mcp_tools: Vec::new(),
+                    cli_agent_command_id: None,
                     enable_tools: false,
                     enable_thinking: false,
                 },
@@ -701,8 +707,31 @@ pub fn provider_messages_to_json(messages: &[ProviderChatMessage]) -> Vec<Value>
         .collect()
 }
 
-fn local_tool_schemas() -> Vec<Value> {
-    vec![
+fn local_tool_schemas(cli_agent_command_id: Option<&str>) -> Vec<Value> {
+    let mut schemas = Vec::new();
+    if let Some(command_id) = cli_agent_command_id {
+        schemas.push(json!({
+            "type": "function",
+            "function": {
+                "name": "read_shell_command_output",
+                "description": format!(
+                    "Read the current output snapshot for the running CLI command. For this request, use command_id {command_id}."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "command_id": {
+                            "type": "string",
+                            "description": format!("The running command id. Use {command_id}.")
+                        }
+                    },
+                    "required": ["command_id"]
+                }
+            }
+        }));
+    }
+    schemas.extend([
         json!({
             "type": "function",
             "function": {
@@ -892,10 +921,14 @@ fn local_tool_schemas() -> Vec<Value> {
                 }
             }
         }),
-    ]
+    ]);
+    schemas
 }
 
-fn local_tool_use_system_prompt(mcp_tools: &[McpToolSummary]) -> String {
+fn local_tool_use_system_prompt(
+    mcp_tools: &[McpToolSummary],
+    cli_agent_command_id: Option<&str>,
+) -> String {
     let mut tool_names = mcp_tools
         .iter()
         .map(|tool| tool.name.as_str())
@@ -910,14 +943,25 @@ fn local_tool_use_system_prompt(mcp_tools: &[McpToolSummary]) -> String {
             tool_names.join(", ")
         )
     };
+    let cli_tool_text = cli_agent_command_id
+        .map(|command_id| {
+            format!(
+                "For CLI-agent questions about the running command, first call read_shell_command_output with command_id {command_id} unless the user is asking for something unrelated to the terminal output."
+            )
+        })
+        .unwrap_or_default();
     [
         "Use only the OpenAI function tools explicitly provided in this request.",
+        &cli_tool_text,
         "To call any MCP tool, always use the provided call_mcp_tool function.",
         "Do not emit provider tool calls named after MCP tools directly, such as list_issues or search_docs.",
         "For call_mcp_tool, set name to the exact MCP tool name from the request context and pass the MCP tool arguments in args.",
         "If the MCP context includes a server_id for the desired tool, include that server_id. This is required when multiple MCP servers expose the same tool name.",
         &mcp_tool_text,
     ]
+    .into_iter()
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>()
     .join("\n")
 }
 

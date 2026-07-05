@@ -10,7 +10,10 @@ pub struct WarpRequestSummary {
     pub conversation_id: String,
     pub request_id: String,
     pub root_task_id: String,
+    pub response_task_id: String,
     pub should_create_root_task: bool,
+    pub cli_agent: Option<CliAgentRequestSummary>,
+    pub pending_cli_parent_tool_call_id: Option<String>,
     pub prompt: String,
     pub is_summarization_request: bool,
     pub summarization_prompt: Option<String>,
@@ -20,6 +23,12 @@ pub struct WarpRequestSummary {
     pub mcp_tools: Vec<McpToolSummary>,
     pub openai_api_key: Option<String>,
     pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CliAgentRequestSummary {
+    pub subtask_id: String,
+    pub command_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,13 +113,23 @@ pub fn decode_warp_request(request: api::Request) -> WarpRequestSummary {
         .map(str::to_owned)
         .unwrap_or_else(random_uuid);
     let request_id = random_uuid();
-    let decoded_root_task_id = request
-        .task_context
-        .as_ref()
-        .and_then(|context| context.tasks.first())
-        .and_then(|task| non_empty(&task.id))
-        .map(str::to_owned);
+    let decoded_root_task_id = decode_root_task_id(request.task_context.as_ref());
     let root_task_id = decoded_root_task_id.clone().unwrap_or_else(random_uuid);
+    let cli_agent = decode_cli_agent_command_id(request.input.as_ref()).map(|command_id| {
+        let subtask_id = decode_cli_agent_subtask_id(request.task_context.as_ref(), &root_task_id)
+            .unwrap_or_else(random_uuid);
+        CliAgentRequestSummary {
+            subtask_id,
+            command_id,
+        }
+    });
+    let response_task_id = cli_agent
+        .as_ref()
+        .map(|cli_agent| cli_agent.subtask_id.clone())
+        .or_else(|| decode_active_subtask_id(request.task_context.as_ref(), &root_task_id))
+        .unwrap_or_else(|| root_task_id.clone());
+    let pending_cli_parent_tool_call_id =
+        decode_pending_cli_parent_tool_call_id(request.task_context.as_ref(), &response_task_id);
     let tool_results = decode_tool_results(request.input.as_ref());
     let (attached_context_text, context_images) = decode_attached_context(
         request
@@ -137,7 +156,10 @@ pub fn decode_warp_request(request: api::Request) -> WarpRequestSummary {
         conversation_id,
         request_id,
         root_task_id,
+        response_task_id,
         should_create_root_task: decoded_root_task_id.is_none(),
+        cli_agent,
+        pending_cli_parent_tool_call_id,
         prompt,
         is_summarization_request,
         summarization_prompt,
@@ -147,6 +169,120 @@ pub fn decode_warp_request(request: api::Request) -> WarpRequestSummary {
         mcp_tools,
         openai_api_key,
         model,
+    }
+}
+
+fn decode_root_task_id(context: Option<&api::request::TaskContext>) -> Option<String> {
+    context
+        .and_then(|context| {
+            context
+                .tasks
+                .iter()
+                .find(|task| {
+                    task.dependencies
+                        .as_ref()
+                        .is_none_or(|dependencies| dependencies.parent_task_id.is_empty())
+                })
+                .or_else(|| context.tasks.first())
+        })
+        .and_then(|task| non_empty(&task.id))
+        .map(str::to_owned)
+}
+
+fn decode_cli_agent_subtask_id(
+    context: Option<&api::request::TaskContext>,
+    root_task_id: &str,
+) -> Option<String> {
+    context
+        .into_iter()
+        .flat_map(|context| context.tasks.iter())
+        .find(|task| {
+            task.dependencies
+                .as_ref()
+                .is_some_and(|dependencies| dependencies.parent_task_id == root_task_id)
+        })
+        .or_else(|| {
+            context
+                .into_iter()
+                .flat_map(|context| context.tasks.iter())
+                .find(|task| task.dependencies.is_some())
+        })
+        .and_then(|task| non_empty(&task.id))
+        .map(str::to_owned)
+}
+
+fn decode_active_subtask_id(
+    context: Option<&api::request::TaskContext>,
+    root_task_id: &str,
+) -> Option<String> {
+    let mut child_task_ids = context?
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.dependencies
+                .as_ref()
+                .is_some_and(|dependencies| dependencies.parent_task_id == root_task_id)
+        })
+        .filter_map(|task| non_empty(&task.id).map(str::to_owned))
+        .collect::<Vec<_>>();
+    child_task_ids.sort();
+    child_task_ids.dedup();
+    (child_task_ids.len() == 1).then(|| child_task_ids.remove(0))
+}
+
+fn decode_pending_cli_parent_tool_call_id(
+    context: Option<&api::request::TaskContext>,
+    response_task_id: &str,
+) -> Option<String> {
+    let mut pending_tool_call_ids = Vec::<String>::new();
+    for task in context?.tasks.iter() {
+        for message in &task.messages {
+            match message.message.as_ref() {
+                Some(api::message::Message::ToolCall(tool_call)) => {
+                    let Some(api::message::tool_call::Tool::Subagent(subagent)) =
+                        tool_call.tool.as_ref()
+                    else {
+                        continue;
+                    };
+                    if subagent.task_id == response_task_id
+                        && matches!(
+                            subagent.metadata.as_ref(),
+                            Some(api::message::tool_call::subagent::Metadata::Cli(_))
+                        )
+                        && non_empty(&tool_call.tool_call_id).is_some()
+                    {
+                        pending_tool_call_ids.push(tool_call.tool_call_id.clone());
+                    }
+                }
+                Some(api::message::Message::ToolCallResult(result)) => {
+                    pending_tool_call_ids
+                        .retain(|tool_call_id| tool_call_id != result.tool_call_id.as_str());
+                }
+                _ => {}
+            }
+        }
+    }
+    pending_tool_call_ids.pop()
+}
+
+fn decode_cli_agent_command_id(input: Option<&api::request::Input>) -> Option<String> {
+    let input = input?;
+    use api::request::input::Type;
+    match input.r#type.as_ref()? {
+        Type::UserInputs(user_inputs) => user_inputs.inputs.iter().find_map(|user_input| {
+            use api::request::input::user_inputs::user_input::Input;
+            let query = match user_input.input.as_ref()? {
+                Input::CliAgentUserQuery(query) => query,
+                _ => return None,
+            };
+            query
+                .running_command
+                .as_ref()
+                .and_then(|command| command.snapshot.as_ref())
+                .and_then(|snapshot| non_empty(&snapshot.command_id))
+                .map(str::to_owned)
+        }),
+        _ => None,
     }
 }
 
@@ -1383,5 +1519,222 @@ mod tests {
         assert_eq!(decoded.conversation_id, "conversation");
         assert_eq!(decoded.prompt, "hello");
         assert!(decoded.should_create_root_task);
+    }
+
+    #[test]
+    fn decodes_cli_agent_user_query_context() {
+        let request = api::Request {
+            input: Some(request::Input {
+                r#type: Some(request::input::Type::UserInputs(
+                    request::input::UserInputs {
+                        inputs: vec![request::input::user_inputs::UserInput {
+                            input: Some(
+                                request::input::user_inputs::user_input::Input::CliAgentUserQuery(
+                                    request::input::CliAgentUserQuery {
+                                        user_query: Some(request::input::UserQuery {
+                                            query: "what do you see?".to_owned(),
+                                            ..Default::default()
+                                        }),
+                                        running_command: Some(api::RunningShellCommand {
+                                            command: "btop".to_owned(),
+                                            snapshot: Some(api::LongRunningShellCommandSnapshot {
+                                                command_id: "block-id".to_owned(),
+                                                ..Default::default()
+                                            }),
+                                        }),
+                                        ..Default::default()
+                                    },
+                                ),
+                            ),
+                        }],
+                    },
+                )),
+                ..Default::default()
+            }),
+            metadata: Some(request::Metadata {
+                conversation_id: "conversation".to_owned(),
+                ..Default::default()
+            }),
+            task_context: Some(request::TaskContext {
+                tasks: vec![
+                    api::Task {
+                        id: "root-task".to_owned(),
+                        ..Default::default()
+                    },
+                    api::Task {
+                        id: "cli-subtask".to_owned(),
+                        dependencies: Some(api::task::Dependencies {
+                            parent_task_id: "root-task".to_owned(),
+                        }),
+                        ..Default::default()
+                    },
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let decoded = decode_warp_request(request);
+
+        assert_eq!(decoded.conversation_id, "conversation");
+        assert_eq!(decoded.root_task_id, "root-task");
+        assert_eq!(decoded.response_task_id, "cli-subtask");
+        assert!(!decoded.should_create_root_task);
+        assert_eq!(decoded.prompt, "what do you see?");
+        assert_eq!(
+            decoded.cli_agent,
+            Some(CliAgentRequestSummary {
+                subtask_id: "cli-subtask".to_owned(),
+                command_id: "block-id".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn decodes_cli_tool_result_follow_up_target_from_active_subtask() {
+        let request = api::Request {
+            input: Some(request::Input {
+                r#type: Some(request::input::Type::ToolCallResult(
+                    request::input::ToolCallResult {
+                        tool_call_id: "read-output-call".to_owned(),
+                        result: Some(
+                            request::input::tool_call_result::Result::ReadShellCommandOutput(
+                                api::ReadShellCommandOutputResult {
+                                    command: "btop".to_owned(),
+                                    result: Some(
+                                        api::read_shell_command_output_result::Result::LongRunningCommandSnapshot(
+                                            api::LongRunningShellCommandSnapshot {
+                                                command_id: "block-id".to_owned(),
+                                                output: "cpu 42%".to_owned(),
+                                                ..Default::default()
+                                            },
+                                        ),
+                                    ),
+                                },
+                            ),
+                        ),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            }),
+            metadata: Some(request::Metadata {
+                conversation_id: "conversation".to_owned(),
+                ..Default::default()
+            }),
+            task_context: Some(request::TaskContext {
+                tasks: vec![
+                    api::Task {
+                        id: "root-task".to_owned(),
+                        messages: vec![api::Message {
+                            message: Some(api::message::Message::ToolCall(
+                                api::message::ToolCall {
+                                    tool_call_id: "cli-parent-call".to_owned(),
+                                    tool: Some(api::message::tool_call::Tool::Subagent(
+                                        api::message::tool_call::Subagent {
+                                            task_id: "cli-subtask".to_owned(),
+                                            metadata: Some(
+                                                api::message::tool_call::subagent::Metadata::Cli(
+                                                    api::message::tool_call::subagent::CliSubagent {
+                                                        command_id: "block-id".to_owned(),
+                                                    },
+                                                ),
+                                            ),
+                                            ..Default::default()
+                                        },
+                                    )),
+                                },
+                            )),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    api::Task {
+                        id: "cli-subtask".to_owned(),
+                        dependencies: Some(api::task::Dependencies {
+                            parent_task_id: "root-task".to_owned(),
+                        }),
+                        ..Default::default()
+                    },
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let decoded = decode_warp_request(request);
+
+        assert_eq!(decoded.root_task_id, "root-task");
+        assert_eq!(decoded.response_task_id, "cli-subtask");
+        assert_eq!(
+            decoded.pending_cli_parent_tool_call_id.as_deref(),
+            Some("cli-parent-call")
+        );
+        assert!(decoded.cli_agent.is_none());
+        assert_eq!(decoded.tool_results.len(), 1);
+    }
+
+    #[test]
+    fn decodes_no_pending_cli_parent_after_subagent_result() {
+        let request = api::Request {
+            task_context: Some(request::TaskContext {
+                tasks: vec![
+                    api::Task {
+                        id: "root-task".to_owned(),
+                        messages: vec![
+                            api::Message {
+                                message: Some(api::message::Message::ToolCall(
+                                    api::message::ToolCall {
+                                        tool_call_id: "cli-parent-call".to_owned(),
+                                        tool: Some(api::message::tool_call::Tool::Subagent(
+                                            api::message::tool_call::Subagent {
+                                                task_id: "cli-subtask".to_owned(),
+                                                metadata: Some(
+                                                    api::message::tool_call::subagent::Metadata::Cli(
+                                                        api::message::tool_call::subagent::CliSubagent {
+                                                            command_id: "block-id".to_owned(),
+                                                        },
+                                                    ),
+                                                ),
+                                                ..Default::default()
+                                            },
+                                        )),
+                                    },
+                                )),
+                                ..Default::default()
+                            },
+                            api::Message {
+                                message: Some(api::message::Message::ToolCallResult(
+                                    api::message::ToolCallResult {
+                                        tool_call_id: "cli-parent-call".to_owned(),
+                                        result: Some(
+                                            api::message::tool_call_result::Result::Subagent(
+                                                api::message::tool_call_result::SubagentResult {
+                                                    payload: String::new(),
+                                                },
+                                            ),
+                                        ),
+                                        ..Default::default()
+                                    },
+                                )),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    api::Task {
+                        id: "cli-subtask".to_owned(),
+                        dependencies: Some(api::task::Dependencies {
+                            parent_task_id: "root-task".to_owned(),
+                        }),
+                        ..Default::default()
+                    },
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let decoded = decode_warp_request(request);
+
+        assert_eq!(decoded.response_task_id, "cli-subtask");
+        assert!(decoded.pending_cli_parent_tool_call_id.is_none());
     }
 }

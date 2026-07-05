@@ -25,8 +25,8 @@ use crate::ai::agent::{
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::agent_view::{
-    AgentViewEntryBlock, AgentViewEntryOrigin, AgentViewState, EnterAgentBlockAction,
-    ExitAgentViewError,
+    AgentViewDisplayMode, AgentViewEntryBlock, AgentViewEntryOrigin, AgentViewState,
+    EnterAgentBlockAction, ExitAgentViewError,
 };
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
 use crate::ai::blocklist::{
@@ -5185,9 +5185,144 @@ fn test_scroll_position_doesnt_change_when_block_finished() {
 }
 
 #[test]
+fn set_input_mode_agent_replaces_fullscreen_agent_view_for_long_running_command() {
+    App::test((), |mut app| async move {
+        initialize_app_for_terminal_view(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
+        app.add_singleton_model(|_| ToastStack);
+        FeatureFlag::AgentMode.set_enabled(true);
+        FeatureFlag::AgentView.set_enabled(true);
+
+        let terminal = add_window_with_terminal(&mut app, None);
+
+        let (inline_conversation_id, block_id) = terminal.update(&mut app, |view, ctx| {
+            {
+                let mut model = view.model.lock();
+                model.init_shell(InitShellValue {
+                    session_id: 0.into(),
+                    shell: "zsh".to_owned(),
+                    ..Default::default()
+                });
+                model.bootstrapped(BootstrappedValue {
+                    shell: "zsh".to_owned(),
+                    ..Default::default()
+                });
+                model.finish_block();
+            }
+
+            let stale_conversation_id =
+                BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                    let conversation_id = history_model.start_new_conversation(
+                        view.view_id,
+                        false,
+                        false,
+                        false,
+                        ctx,
+                    );
+                    let response_stream_id = ResponseStreamId::new_for_test();
+                    let exchange = exchange_with_inputs(vec![agent_jump_user_query("stale")]);
+                    history_model
+                        .conversation_mut(&conversation_id)
+                        .expect("conversation should exist")
+                        .append_reassigned_exchange(
+                            &response_stream_id,
+                            exchange,
+                            view.view_id,
+                            ctx,
+                        )
+                        .expect("exchange should append");
+                    conversation_id
+                });
+            view.agent_view_controller().update(ctx, |controller, ctx| {
+                controller
+                    .try_enter_agent_view(
+                        Some(stale_conversation_id),
+                        AgentViewEntryOrigin::Input {
+                            was_prompt_autodetected: false,
+                        },
+                        ctx,
+                    )
+                    .expect("should enter fullscreen agent view");
+            });
+            assert_eq!(
+                view.agent_view_controller()
+                    .as_ref(ctx)
+                    .agent_view_state()
+                    .display_mode(),
+                Some(AgentViewDisplayMode::FullScreen)
+            );
+
+            {
+                let mut model = view.model.lock();
+                model.simulate_long_running_block("btop", "running");
+                let active_block = model.block_list().active_block();
+                assert!(
+                    active_block.is_eligible_to_tag_in_agent(),
+                    "active={}, in_band={}, bootstrapped={:?}, env_var={}, handoff={}",
+                    active_block.is_active_and_long_running(),
+                    active_block.is_in_band_command_block(),
+                    active_block.bootstrap_stage(),
+                    active_block.env_var_metadata().is_some(),
+                    active_block.is_eligible_for_agent_handoff()
+                );
+                assert!(!active_block.is_eligible_for_agent_handoff());
+            }
+
+            view.handle_action(&TerminalAction::SetInputModeAgent, ctx);
+
+            let inline_conversation_id =
+                match view.agent_view_controller().as_ref(ctx).agent_view_state() {
+                AgentViewState::Active {
+                    conversation_id,
+                    origin,
+                    display_mode,
+                    ..
+                } => {
+                    assert_eq!(*origin, AgentViewEntryOrigin::LongRunningCommand);
+                    assert_eq!(*display_mode, AgentViewDisplayMode::Inline);
+                    assert_ne!(*conversation_id, stale_conversation_id);
+                    *conversation_id
+                }
+                state => panic!("expected active inline agent view, got {state:?}"),
+            };
+
+            let model = view.model.lock();
+            let block_id = model.block_list().active_block().id().clone();
+            let active_block = model.block_list().active_block();
+            assert!(active_block.is_agent_tagged_in());
+            assert!(view.is_input_box_visible(&model, ctx));
+            drop(model);
+
+            view.input.update(ctx, |input, ctx| {
+                input.replace_buffer_content("what do you see?", ctx);
+                input.input_enter(ctx);
+            });
+
+            (inline_conversation_id, block_id)
+        });
+
+        terminal.read(&app, |view, _ctx| {
+            let model = view.model.lock();
+            let active_block = model.block_list().active_block();
+            assert!(active_block.is_agent_monitoring());
+            assert_eq!(active_block.ai_conversation_id(), Some(inline_conversation_id));
+            assert!(active_block.cli_subagent_task_id().is_some());
+            assert!(view.cli_subagent_views.contains_key(&block_id));
+        });
+    })
+}
+
+#[test]
 fn inline_agent_view_exits_when_tagged_in_long_running_command_is_tagged_out() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
         FeatureFlag::AgentView.set_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
