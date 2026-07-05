@@ -1502,6 +1502,10 @@ fn root_cloud_mode_pane_sets_root_cloud_mode_context_key() {
 fn set_input_mode_agent_does_not_enter_local_agent_from_root_cloud_mode_pane() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
         FeatureFlag::AgentView.set_enabled(true);
         FeatureFlag::CloudMode.set_enabled(true);
 
@@ -5501,6 +5505,10 @@ fn inline_agent_view_exits_when_tagged_in_long_running_command_is_tagged_out() {
 fn ctrl_c_after_stop_takeover_cancels_conversation() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
         FeatureFlag::AgentView.set_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
@@ -5561,6 +5569,10 @@ fn ctrl_c_after_stop_takeover_cancels_conversation() {
 fn ctrl_c_after_transfer_takeover_does_not_cancel_conversation() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
         FeatureFlag::AgentView.set_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
@@ -5726,6 +5738,10 @@ fn completed_user_controlled_lrc_skips_resume_when_suppressed() {
 fn inline_agent_view_persists_across_transfer_takeover_for_monitored_long_running_command() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
         FeatureFlag::AgentView.set_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
@@ -5808,6 +5824,10 @@ fn inline_agent_view_persists_across_transfer_takeover_for_monitored_long_runnin
 fn use_agent_footer_renders_for_transfer_handoff_even_when_user_command_footer_setting_disabled() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
         FeatureFlag::AgentView.set_enabled(true);
         AISettings::handle(&app).update(&mut app, |settings, ctx| {
             let _ = settings
