@@ -680,7 +680,7 @@ fn parse_run_shell_command(
     tool_call: &ProviderToolCall,
     args: &Value,
 ) -> Option<ParsedWarpToolCall> {
-    let command = value_string(value_at(args, &["command"]))?.to_owned();
+    let command = normalize_shell_command(value_string(value_at(args, &["command"]))?)?.to_owned();
     let is_read_only = value_bool(value_at(args, &["is_read_only"]));
     Some(ParsedWarpToolCall {
         tool_call_id: tool_call.id.clone(),
@@ -693,6 +693,21 @@ fn parse_run_shell_command(
             wait_until_complete: value_bool(value_at(args, &["wait_until_complete"])),
         },
     })
+}
+
+fn normalize_shell_command(command: &str) -> Option<&str> {
+    let command = strip_unmatched_trailing_markdown_backtick(command).trim();
+    (!command.is_empty()).then_some(command)
+}
+
+fn strip_unmatched_trailing_markdown_backtick(command: &str) -> &str {
+    let Some(stripped) = command.strip_suffix('`') else {
+        return command;
+    };
+    if stripped.is_empty() || stripped.ends_with('\\') || stripped.contains('`') {
+        return command;
+    }
+    stripped
 }
 
 fn parse_read_shell_command_output(
@@ -1133,6 +1148,35 @@ mod tests {
                 command_id: "block-id".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn parses_run_shell_command_without_trailing_markdown_backtick() {
+        let call = ProviderToolCall {
+            id: "call".to_owned(),
+            name: "run_shell_command".to_owned(),
+            arguments_text: r#"{"command":"make test`"}"#.to_owned(),
+        };
+
+        let parsed = parse_tool_call(&call, &[]).unwrap().unwrap();
+
+        assert_eq!(parsed.tool_call_id, "call");
+        assert_eq!(
+            parsed.tool,
+            WarpToolCall::RunShellCommand {
+                command: "make test".to_owned(),
+                is_read_only: None,
+                is_risky: None,
+                uses_pager: None,
+                wait_until_complete: None,
+            }
+        );
+    }
+
+    #[test]
+    fn keeps_shell_backticks_in_run_shell_command() {
+        assert_eq!(normalize_shell_command("echo `date`"), Some("echo `date`"));
+        assert_eq!(normalize_shell_command(r"echo \`"), Some(r"echo \`"));
     }
 
     #[test]
