@@ -151,6 +151,102 @@ async fn suppresses_harmony_thought_channel_content() {
 }
 
 #[tokio::test]
+async fn strips_harmony_channel_end_marker_before_public_content() {
+    let (base_url, _request_bodies) = spawn_openai_compatible_server(vec![
+        json!({
+            "choices": [{
+                "index": 0,
+                "delta": { "content": "<chan" }
+            }]
+        }),
+        json!({
+            "choices": [{
+                "index": 0,
+                "delta": { "content": "nel|>Public answer." }
+            }]
+        }),
+    ])
+    .await;
+
+    let streamed_chunks = Arc::new(Mutex::new(Vec::new()));
+    let response = ProviderRuntime::new()
+        .stream_chat_completion(&test_config(base_url), test_params(false), {
+            let streamed_chunks = streamed_chunks.clone();
+            move |chunk| streamed_chunks.lock().unwrap().push(chunk)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.content, "Public answer.");
+    assert_eq!(streamed_chunks.lock().unwrap().join(""), "Public answer.");
+    assert!(!response.suppressed_internal_content);
+}
+
+#[tokio::test]
+async fn closes_harmony_thought_channel_before_public_content() {
+    let (base_url, _request_bodies) = spawn_openai_compatible_server(vec![
+        json!({
+            "choices": [{
+                "index": 0,
+                "delta": { "content": "<|channel>thought\ninternal scratchpad" }
+            }]
+        }),
+        json!({
+            "choices": [{
+                "index": 0,
+                "delta": { "content": "<channel|>\nPublic answer." }
+            }]
+        }),
+    ])
+    .await;
+
+    let streamed_chunks = Arc::new(Mutex::new(Vec::new()));
+    let response = ProviderRuntime::new()
+        .stream_chat_completion(&test_config(base_url), test_params(false), {
+            let streamed_chunks = streamed_chunks.clone();
+            move |chunk| streamed_chunks.lock().unwrap().push(chunk)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.content, "Public answer.");
+    assert_eq!(streamed_chunks.lock().unwrap().join(""), "Public answer.");
+    assert!(response.suppressed_internal_content);
+}
+
+#[tokio::test]
+async fn suppresses_harmony_brain_channel_content() {
+    let (base_url, _request_bodies) = spawn_openai_compatible_server(vec![
+        json!({
+            "choices": [{
+                "index": 0,
+                "delta": { "content": "<|channel>brain\ninternal scratchpad" }
+            }]
+        }),
+        json!({
+            "choices": [{
+                "index": 0,
+                "delta": { "content": "<channel|>\nPublic answer." }
+            }]
+        }),
+    ])
+    .await;
+
+    let streamed_chunks = Arc::new(Mutex::new(Vec::new()));
+    let response = ProviderRuntime::new()
+        .stream_chat_completion(&test_config(base_url), test_params(false), {
+            let streamed_chunks = streamed_chunks.clone();
+            move |chunk| streamed_chunks.lock().unwrap().push(chunk)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(response.content, "Public answer.");
+    assert_eq!(streamed_chunks.lock().unwrap().join(""), "Public answer.");
+    assert!(response.suppressed_internal_content);
+}
+
+#[tokio::test]
 async fn parses_embedded_harmony_tool_call_content() {
     let (base_url, _request_bodies) = spawn_openai_compatible_server(vec![json!({
         "choices": [{

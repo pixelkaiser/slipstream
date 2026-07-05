@@ -1173,11 +1173,24 @@ const HARMONY_CHANNEL_MARKERS: &[HarmonyChannelMarker] = &[
         mode: HarmonyChannelMode::Internal,
     },
     HarmonyChannelMarker {
+        token: "<|channel>brain",
+        mode: HarmonyChannelMode::Internal,
+    },
+    HarmonyChannelMarker {
+        token: "<channel>brain",
+        mode: HarmonyChannelMode::Internal,
+    },
+    HarmonyChannelMarker {
         token: "<|channel>final",
         mode: HarmonyChannelMode::Public,
     },
     HarmonyChannelMarker {
         token: "<channel>final",
+        mode: HarmonyChannelMode::Public,
+    },
+    // Gemma-style end-of-channel token emitted before public content.
+    HarmonyChannelMarker {
+        token: "<channel|>",
         mode: HarmonyChannelMode::Public,
     },
 ];
