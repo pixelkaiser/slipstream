@@ -29,6 +29,9 @@ pub enum WarpToolCall {
         uses_pager: Option<bool>,
         wait_until_complete: Option<bool>,
     },
+    ReadShellCommandOutput {
+        command_id: String,
+    },
     ReadFiles {
         files: Vec<ReadFilesToolCallFile>,
     },
@@ -143,6 +146,90 @@ pub fn create_task(task_id: &str, description: &str) -> api::ResponseEvent {
             },
         )),
     }])
+}
+
+pub fn create_subtask(
+    task_id: &str,
+    parent_task_id: &str,
+    description: &str,
+) -> api::ResponseEvent {
+    client_actions(vec![api::ClientAction {
+        action: Some(api::client_action::Action::CreateTask(
+            api::client_action::CreateTask {
+                task: Some(api::Task {
+                    id: task_id.to_owned(),
+                    description: description.to_owned(),
+                    dependencies: Some(api::task::Dependencies {
+                        parent_task_id: parent_task_id.to_owned(),
+                    }),
+                    ..Default::default()
+                }),
+            },
+        )),
+    }])
+}
+
+pub fn add_cli_subagent_tool_call(
+    message_id: &str,
+    tool_call_id: &str,
+    parent_task_id: &str,
+    request_id: &str,
+    subtask_id: &str,
+    command_id: &str,
+) -> api::ResponseEvent {
+    add_messages_to_task(
+        parent_task_id,
+        vec![api::Message {
+            id: message_id.to_owned(),
+            task_id: parent_task_id.to_owned(),
+            request_id: request_id.to_owned(),
+            timestamp: Some(timestamp_now()),
+            message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                tool_call_id: tool_call_id.to_owned(),
+                tool: Some(api::message::tool_call::Tool::Subagent(
+                    api::message::tool_call::Subagent {
+                        task_id: subtask_id.to_owned(),
+                        payload: String::new(),
+                        metadata: Some(api::message::tool_call::subagent::Metadata::Cli(
+                            api::message::tool_call::subagent::CliSubagent {
+                                command_id: command_id.to_owned(),
+                            },
+                        )),
+                    },
+                )),
+            })),
+            ..Default::default()
+        }],
+    )
+}
+
+pub fn add_subagent_result(
+    message_id: &str,
+    parent_task_id: &str,
+    request_id: &str,
+    tool_call_id: &str,
+) -> api::ResponseEvent {
+    add_messages_to_task(
+        parent_task_id,
+        vec![api::Message {
+            id: message_id.to_owned(),
+            task_id: parent_task_id.to_owned(),
+            request_id: request_id.to_owned(),
+            timestamp: Some(timestamp_now()),
+            message: Some(api::message::Message::ToolCallResult(
+                api::message::ToolCallResult {
+                    tool_call_id: tool_call_id.to_owned(),
+                    result: Some(api::message::tool_call_result::Result::Subagent(
+                        api::message::tool_call_result::SubagentResult {
+                            payload: String::new(),
+                        },
+                    )),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }],
+    )
 }
 
 pub fn add_agent_output(
@@ -289,6 +376,7 @@ pub fn parse_tool_call(
     let args = parse_tool_arguments(&tool_call.arguments_text)?;
     let parsed = match tool_call.name.as_str() {
         "read_files" => parse_read_files(tool_call, &args),
+        "read_shell_command_output" => parse_read_shell_command_output(tool_call, &args),
         "run_shell_command" => parse_run_shell_command(tool_call, &args),
         "grep" => parse_grep(tool_call, &args),
         "search_codebase" => parse_search_codebase(tool_call, &args),
@@ -369,6 +457,12 @@ fn encode_tool_call(tool: WarpToolCall) -> api::message::tool_call::Tool {
                     tool_call::run_shell_command::WaitUntilCompleteValue::WaitUntilComplete(value)
                 }),
                 ..Default::default()
+            })
+        }
+        WarpToolCall::ReadShellCommandOutput { command_id } => {
+            tool_call::Tool::ReadShellCommandOutput(tool_call::ReadShellCommandOutput {
+                command_id,
+                delay: None,
             })
         }
         WarpToolCall::ReadFiles { files } => tool_call::Tool::ReadFiles(tool_call::ReadFiles {
@@ -598,6 +692,23 @@ fn parse_run_shell_command(
             uses_pager: value_bool(value_at(args, &["uses_pager"])),
             wait_until_complete: value_bool(value_at(args, &["wait_until_complete"])),
         },
+    })
+}
+
+fn parse_read_shell_command_output(
+    tool_call: &ProviderToolCall,
+    args: &Value,
+) -> Option<ParsedWarpToolCall> {
+    let command_id = value_string(
+        value_at(args, &["command_id"])
+            .or_else(|| value_at(args, &["commandId"]))
+            .or_else(|| value_at(args, &["block_id"]))
+            .or_else(|| value_at(args, &["blockId"])),
+    )?
+    .to_owned();
+    Some(ParsedWarpToolCall {
+        tool_call_id: tool_call.id.clone(),
+        tool: WarpToolCall::ReadShellCommandOutput { command_id },
     })
 }
 
@@ -1002,6 +1113,102 @@ mod tests {
                     "query": "2026 FIFA World Cup opening match results schedule June 13 2026",
                 })),
             }
+        );
+    }
+
+    #[test]
+    fn parses_read_shell_command_output_tool_call() {
+        let call = ProviderToolCall {
+            id: "call".to_owned(),
+            name: "read_shell_command_output".to_owned(),
+            arguments_text: r#"{"command_id":"block-id"}"#.to_owned(),
+        };
+
+        let parsed = parse_tool_call(&call, &[]).unwrap().unwrap();
+
+        assert_eq!(parsed.tool_call_id, "call");
+        assert_eq!(
+            parsed.tool,
+            WarpToolCall::ReadShellCommandOutput {
+                command_id: "block-id".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn cli_subagent_tool_call_targets_running_command() {
+        let event = add_cli_subagent_tool_call(
+            "message",
+            "tool-call",
+            "root-task",
+            "request",
+            "cli-task",
+            "block-id",
+        );
+
+        let api::response_event::Type::ClientActions(actions) = event.r#type.unwrap() else {
+            panic!("expected client actions");
+        };
+        let Some(api::client_action::Action::AddMessagesToTask(add)) = actions
+            .actions
+            .into_iter()
+            .next()
+            .and_then(|action| action.action)
+        else {
+            panic!("expected AddMessagesToTask");
+        };
+        assert_eq!(add.task_id, "root-task");
+
+        let message = add.messages.into_iter().next().expect("message exists");
+        let Some(api::message::Message::ToolCall(tool_call)) = message.message else {
+            panic!("expected tool call");
+        };
+        let Some(api::message::tool_call::Tool::Subagent(subagent)) = tool_call.tool else {
+            panic!("expected subagent tool call");
+        };
+
+        assert_eq!(tool_call.tool_call_id, "tool-call");
+        assert_eq!(subagent.task_id, "cli-task");
+        assert_eq!(
+            subagent.metadata,
+            Some(api::message::tool_call::subagent::Metadata::Cli(
+                api::message::tool_call::subagent::CliSubagent {
+                    command_id: "block-id".to_owned(),
+                },
+            ))
+        );
+    }
+
+    #[test]
+    fn subagent_result_closes_matching_tool_call() {
+        let event = add_subagent_result("message", "root-task", "request", "tool-call");
+
+        let api::response_event::Type::ClientActions(actions) = event.r#type.unwrap() else {
+            panic!("expected client actions");
+        };
+        let Some(api::client_action::Action::AddMessagesToTask(add)) = actions
+            .actions
+            .into_iter()
+            .next()
+            .and_then(|action| action.action)
+        else {
+            panic!("expected AddMessagesToTask");
+        };
+        assert_eq!(add.task_id, "root-task");
+
+        let message = add.messages.into_iter().next().expect("message exists");
+        let Some(api::message::Message::ToolCallResult(result)) = message.message else {
+            panic!("expected tool call result");
+        };
+
+        assert_eq!(result.tool_call_id, "tool-call");
+        assert_eq!(
+            result.result,
+            Some(api::message::tool_call_result::Result::Subagent(
+                api::message::tool_call_result::SubagentResult {
+                    payload: String::new(),
+                },
+            ))
         );
     }
 }

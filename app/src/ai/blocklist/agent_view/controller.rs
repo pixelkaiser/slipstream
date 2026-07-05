@@ -768,8 +768,15 @@ impl AgentViewController {
         origin: AgentViewEntryOrigin,
         ctx: &mut ModelContext<Self>,
     ) -> Result<AIConversationId, EnterAgentViewError> {
-        if self.agent_view_state.is_active() {
-            return Err(EnterAgentViewError::AlreadyInAgentView);
+        if let AgentViewState::Active {
+            conversation_id: active_id,
+            display_mode: AgentViewDisplayMode::Inline,
+            ..
+        } = &self.agent_view_state
+        {
+            if conversation_id.map_or(true, |id| id == *active_id) {
+                return Ok(*active_id);
+            }
         }
         self.enter_agent_view_internal(conversation_id, origin, AgentViewDisplayMode::Inline, ctx)
     }
@@ -785,9 +792,12 @@ impl AgentViewController {
         match &self.agent_view_state {
             AgentViewState::Active {
                 conversation_id: active_id,
+                display_mode: active_display_mode,
                 ..
             } => {
-                if conversation_id.is_some_and(|id| id == *active_id) {
+                if conversation_id.is_some_and(|id| id == *active_id)
+                    && *active_display_mode == display_mode
+                {
                     return Ok(*active_id);
                 } else {
                     self.exit_agent_view_internal(
@@ -900,8 +910,12 @@ impl AgentViewController {
     ) {
         self.clear_new_conversation_keybinding_confirmation(ctx);
         // Check if exiting agent view is allowed.
-        if self.can_exit_agent_view().is_err() {
-            return;
+        if let Err(error) = self.can_exit_agent_view() {
+            let is_replacing_fullscreen_lrc_view = is_exit_before_new_entrance
+                && matches!(error, ExitAgentViewError::LongRunningCommand);
+            if !is_replacing_fullscreen_lrc_view {
+                return;
+            }
         }
 
         let AgentViewState::Active {

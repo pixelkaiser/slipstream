@@ -406,7 +406,11 @@ async fn process_multi_agent(
                 "conversationId": warp_request.conversation_id,
                 "requestId": warp_request.request_id,
                 "taskId": warp_request.root_task_id,
+                "responseTaskId": warp_request.response_task_id,
                 "shouldCreateRootTask": warp_request.should_create_root_task,
+                "cliSubtaskId": warp_request.cli_agent.as_ref().map(|cli_agent| cli_agent.subtask_id.as_str()),
+                "cliCommandId": warp_request.cli_agent.as_ref().map(|cli_agent| cli_agent.command_id.as_str()),
+                "pendingCliParentToolCallId": warp_request.pending_cli_parent_tool_call_id,
                 "promptChars": warp_request.prompt.len(),
                 "contextChars": warp_request.context_text.as_deref().map(str::len).unwrap_or_default(),
                 "contextImageCount": warp_request.context_images.len(),
@@ -438,6 +442,38 @@ async fn process_multi_agent(
                 response::create_task(&warp_request.root_task_id, &warp_request.prompt),
             );
         }
+        let cli_subagent_tool_call_id = warp_request
+            .cli_agent
+            .as_ref()
+            .map(|_| uuid::Uuid::new_v4().to_string());
+        let pending_cli_parent_tool_call_id = cli_subagent_tool_call_id
+            .as_deref()
+            .or(warp_request.pending_cli_parent_tool_call_id.as_deref());
+        if let (Some(cli_agent), Some(tool_call_id)) = (
+            warp_request.cli_agent.as_ref(),
+            cli_subagent_tool_call_id.as_deref(),
+        ) {
+            send_event(
+                &tx,
+                response::add_cli_subagent_tool_call(
+                    &uuid::Uuid::new_v4().to_string(),
+                    tool_call_id,
+                    &warp_request.root_task_id,
+                    &warp_request.request_id,
+                    &cli_agent.subtask_id,
+                    &cli_agent.command_id,
+                ),
+            );
+            send_event(
+                &tx,
+                response::create_subtask(
+                    &cli_agent.subtask_id,
+                    &warp_request.root_task_id,
+                    &warp_request.prompt,
+                ),
+            );
+        }
+        let response_task_id = warp_request.response_task_id.as_str();
 
         let prepared = prepare_provider_messages(&state, &warp_request).await?;
         let assistant_message_id = uuid::Uuid::new_v4().to_string();
@@ -463,6 +499,10 @@ async fn process_multi_agent(
                     local_thinking_mode: request_local_thinking_mode,
                     temperature: None,
                     mcp_tools: warp_request.mcp_tools.clone(),
+                    cli_agent_command_id: warp_request
+                        .cli_agent
+                        .as_ref()
+                        .map(|cli_agent| cli_agent.command_id.clone()),
                     enable_tools: !warp_request.is_summarization_request,
                     enable_thinking: true,
                 },
@@ -475,14 +515,14 @@ async fn process_multi_agent(
                     let event = if first {
                         response::add_agent_output(
                             &assistant_message_id,
-                            &warp_request.root_task_id,
+                            response_task_id,
                             &warp_request.request_id,
                             &chunk,
                         )
                     } else {
                         response::append_agent_output(
                             &assistant_message_id,
-                            &warp_request.root_task_id,
+                            response_task_id,
                             &warp_request.request_id,
                             &chunk,
                         )
@@ -546,7 +586,7 @@ async fn process_multi_agent(
                 &tx,
                 response::add_agent_output(
                     &assistant_message_id,
-                    &warp_request.root_task_id,
+                    response_task_id,
                     &warp_request.request_id,
                     &provider_response.content,
                 ),
@@ -566,9 +606,22 @@ async fn process_multi_agent(
                 &tx,
                 response::add_tool_call(
                     &uuid::Uuid::new_v4().to_string(),
-                    &warp_request.root_task_id,
+                    response_task_id,
                     &warp_request.request_id,
                     parsed,
+                ),
+            );
+        }
+        if provider_response.tool_calls.is_empty()
+            && let Some(tool_call_id) = pending_cli_parent_tool_call_id
+        {
+            send_event(
+                &tx,
+                response::add_subagent_result(
+                    &uuid::Uuid::new_v4().to_string(),
+                    &warp_request.root_task_id,
+                    &warp_request.request_id,
+                    tool_call_id,
                 ),
             );
         }
@@ -1016,7 +1069,10 @@ mod tests {
             conversation_id: "conversation".to_owned(),
             request_id: "request".to_owned(),
             root_task_id: "task".to_owned(),
+            response_task_id: "task".to_owned(),
             should_create_root_task: true,
+            cli_agent: None,
+            pending_cli_parent_tool_call_id: None,
             prompt: "hello".to_owned(),
             is_summarization_request: false,
             summarization_prompt: None,

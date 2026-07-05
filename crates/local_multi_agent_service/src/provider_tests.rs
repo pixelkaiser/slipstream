@@ -531,6 +531,7 @@ fn test_params(enable_tools: bool) -> ChatCompletionParams {
         local_thinking_mode: None,
         temperature: None,
         mcp_tools: Vec::new(),
+        cli_agent_command_id: None,
         enable_tools,
         enable_thinking: true,
     }
