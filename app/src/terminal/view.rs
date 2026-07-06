@@ -62,8 +62,8 @@ use std::hash::Hash;
 use std::ops::{Deref as _, Range};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -192,9 +192,7 @@ use super::model::secrets::RichContentSecretTooltipInfo;
 use super::model::selection::ExpandedSelectionRange;
 use super::model::session::SessionBootstrappedEvent;
 use super::settings::AltScreenPaddingMode;
-use super::ssh::util::{
-    InteractiveSshCommand, SshWarpifyCommand, parse_interactive_ssh_command,
-};
+use super::ssh::util::{parse_interactive_ssh_command, InteractiveSshCommand, SshWarpifyCommand};
 use super::warpify::success_block::{WarpifySuccessBlock, WarpifySuccessBlockEvent};
 use super::warpify::trigger_state::{SshBlockState, WarpifyState};
 use super::warpify::WarpificationSource;
@@ -278,7 +276,7 @@ use crate::ai::predict::prompt_suggestions::{
     is_accept_prompt_suggestion_bound_to_cmd_enter,
     is_accept_prompt_suggestion_bound_to_ctrl_enter,
 };
-use crate::ai_assistant::{AskAIType, ASK_AI_ASSISTANT_TEXT};
+use crate::ai_assistant::{ask_ai_assistant_text, AskAIType};
 use crate::antivirus::AntivirusInfo;
 use crate::appearance::{Appearance, AppearanceEvent};
 use crate::auth::auth_manager::AuthManager;
@@ -397,6 +395,7 @@ use crate::terminal::cli_agent_sessions::{
 };
 use crate::terminal::color::List;
 use crate::terminal::command_corrections_denylist::COMMAND_CORRECTIONS_PREFERRED_DENYLIST;
+use crate::terminal::cursor_trail::CursorTrailStateHandle;
 use crate::terminal::event::{
     AfterBlockCompletedEvent, BlockLatencyData, BlockType, BootstrappedEvent,
     RemoteServerSetupState, TerminalMode, UserBlockCompleted,
@@ -404,7 +403,6 @@ use crate::terminal::event::{
 use crate::terminal::find::{BlockGridMatch, BlockListMatch, TerminalFindModel};
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::grid_size_util::grid_cell_dimensions;
-use crate::terminal::cursor_trail::CursorTrailStateHandle;
 use crate::terminal::input::decorations::InputBackgroundJobOptions;
 use crate::terminal::input::inline_menu::InlineMenuPositioner;
 #[cfg(not(target_family = "wasm"))]
@@ -780,16 +778,16 @@ impl NotificationsTrigger {
     pub fn discovery_banner_copy(&self) -> &'static str {
         match self {
             NotificationsTrigger::LongRunningCommand(..) => {
-                "Warp can notify you when long-running commands finish."
+                "The app can notify you when long-running commands finish."
             }
             NotificationsTrigger::AgentTaskCompleted(..) => {
-                "Warp can notify you when an agent finishes responding."
+                "The app can notify you when an agent finishes responding."
             }
             NotificationsTrigger::NeedsAttention => {
-                "Warp can notify you when a command or agent needs your attention."
+                "The app can notify you when a command or agent needs your attention."
             }
             NotificationsTrigger::PasswordPrompt => {
-                "Warp can notify you when you're prompted to enter a password."
+                "The app can notify you when you're prompted to enter a password."
             }
         }
     }
@@ -3922,7 +3920,7 @@ impl TerminalView {
         let incompatible_configuration_banner = ctx.add_typed_action_view(|_| {
             Banner::new(BannerTextContent::formatted_text(vec![
                 FormattedTextFragment::plain_text(
-                    "Your shell configuration is incompatible with Warp...  ",
+                    "Your shell configuration is incompatible with this app...  ",
                 ),
                 FormattedTextFragment::hyperlink("More info", KNOWN_ISSUES_URL),
             ]))
@@ -9545,12 +9543,13 @@ impl TerminalView {
         let active_session_id = self.active_block_session_id();
         let mut repair_socket_path = None;
         if let Some(session_id) = active_session_id {
-            let (disabled_remote_execution, socket_path) = self.sessions.update(ctx, |sessions, _| {
-                (
-                    sessions.disable_remote_command_execution_for_session(session_id),
-                    sessions.legacy_ssh_socket_path_for_session(session_id),
-                )
-            });
+            let (disabled_remote_execution, socket_path) =
+                self.sessions.update(ctx, |sessions, _| {
+                    (
+                        sessions.disable_remote_command_execution_for_session(session_id),
+                        sessions.legacy_ssh_socket_path_for_session(session_id),
+                    )
+                });
             if disabled_remote_execution {
                 log::warn!(
                     "Disabled remote command execution for session {session_id:?} after SSH ControlMaster error"
@@ -9894,11 +9893,11 @@ impl TerminalView {
 
         let a11y_message = match &warpify_keybinding {
             Some(keystroke) => format!(
-                "You can press {} to Warpify this {} for more Warp features.",
+                "You can press {} to enable shell integration for this {}.",
                 keystroke.displayed(),
                 lowercase_title
             ),
-            None => format!("You can Warpify this {lowercase_title} for more Warp features."),
+            None => format!("You can enable shell integration for this {lowercase_title}."),
         };
 
         model
@@ -10061,7 +10060,7 @@ impl TerminalView {
 
         let a11y_content = AccessibilityContent::new(
             banner_title,
-            "Make sure you have enabled access for Warp notifications in System Preferences.",
+            "Make sure you have enabled access for app notifications in System Preferences.",
             WarpA11yRole::TextRole,
         );
         ctx.emit_a11y_content(a11y_content);
@@ -10385,11 +10384,9 @@ impl TerminalView {
         }
         self.remove_vim_mode_banner(ctx);
         VimBannerSettings::handle(ctx).update(ctx, |banner_settings, model_ctx| {
-            report_if_error!(
-                banner_settings
-                    .vim_keybindings_banner_state
-                    .set_value(BannerState::Dismissed, model_ctx)
-            );
+            report_if_error!(banner_settings
+                .vim_keybindings_banner_state
+                .set_value(BannerState::Dismissed, model_ctx));
         });
     }
 
@@ -10685,11 +10682,9 @@ impl TerminalView {
             }
             AwsBedrockLoginBannerAction::DontShowAgain => {
                 AISettings::handle(ctx).update(ctx, |ai_settings, ctx| {
-                    report_if_error!(
-                        ai_settings
-                            .aws_bedrock_login_banner_dismissed
-                            .set_value(true, ctx)
-                    );
+                    report_if_error!(ai_settings
+                        .aws_bedrock_login_banner_dismissed
+                        .set_value(true, ctx));
                 });
             }
             AwsBedrockLoginBannerAction::Dismiss => {
@@ -14661,7 +14656,11 @@ impl TerminalView {
             .editor()
             .as_ref(ctx)
             .selected_text(ctx);
-        if text.is_empty() { None } else { Some(text) }
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
     }
 }
 
@@ -14910,11 +14909,9 @@ impl TerminalView {
         ctx: &mut ViewContext<Self>,
     ) {
         AISettings::handle(ctx).update(ctx, |settings, ctx| {
-            report_if_error!(
-                settings
-                    .nld_in_terminal_enabled_internal
-                    .set_value(enable, ctx)
-            );
+            report_if_error!(settings
+                .nld_in_terminal_enabled_internal
+                .set_value(enable, ctx));
         });
     }
 
@@ -16680,13 +16677,11 @@ impl TerminalView {
                             Some(model.link_at_range(url, RespectObfuscatedSecrets::Yes));
                         url_content
                             .map(|url_content| {
-                                vec![
-                                    MenuItemFields::new("Copy URL")
-                                        .with_on_select_action(TerminalAction::ContextMenu(
-                                            ContextMenuAction::CopyUrl { url_content },
-                                        ))
-                                        .into_item(),
-                                ]
+                                vec![MenuItemFields::new("Copy URL")
+                                    .with_on_select_action(TerminalAction::ContextMenu(
+                                        ContextMenuAction::CopyUrl { url_content },
+                                    ))
+                                    .into_item()]
                             })
                             .unwrap_or_default()
                     }
@@ -16716,11 +16711,14 @@ impl TerminalView {
 
                             if is_markdown_file(&path) {
                                 items.push(
-                                    MenuItemFields::new("Open in Warp")
-                                        .with_on_select_action(TerminalAction::OpenFileInWarp(path))
-                                        .into_item(),
+                                    MenuItemFields::new(format!(
+                                        "Open in {}",
+                                        ChannelState::product_name()
+                                    ))
+                                    .with_on_select_action(TerminalAction::OpenFileInWarp(path))
+                                    .into_item(),
                                 );
-                                // Because the default for cmd-click is to open in Warp, we also
+                                // Because the default for cmd-click is to open in the app, we also
                                 // have an open-in-editor option.
                                 items.push(
                                     MenuItemFields::new("Open in editor")
@@ -16763,9 +16761,9 @@ impl TerminalView {
                     fields.extend([
                         MenuItem::Separator,
                         MenuItemFields::new(if FeatureFlag::AgentMode.is_enabled() {
-                            *ATTACH_AS_AGENT_MODE_CONTEXT_TEXT
+                            (*ATTACH_AS_AGENT_MODE_CONTEXT_TEXT).to_string()
                         } else {
-                            ASK_AI_ASSISTANT_TEXT
+                            ask_ai_assistant_text()
                         })
                         .with_on_select_action(TerminalAction::ContextMenu(
                             ContextMenuAction::AskAI(if FeatureFlag::AgentMode.is_enabled() {
@@ -16934,7 +16932,7 @@ impl TerminalView {
                     } else {
                         items.extend([
                             MenuItem::Separator,
-                            MenuItemFields::new("Ask Warp AI")
+                            MenuItemFields::new(ask_ai_assistant_text())
                                 .with_on_select_action(TerminalAction::ContextMenu(
                                     ContextMenuAction::AskAI(AskAISource::SelectedBlockOrText),
                                 ))
@@ -16999,30 +16997,24 @@ impl TerminalView {
                         ))
                         .into_item(),
                 ]);
-                items.append(&mut vec![
-                    MenuItemFields::new("Toggle block filter")
-                        .with_on_select_action(
-                            TerminalAction::ToggleBlockFilterOnSelectedOrLastBlock(
-                                ToggleBlockFilterSource::ContextMenu,
-                            ),
-                        )
-                        .with_key_shortcut_label(keybinding_name_to_display_string(
-                            TOGGLE_BLOCK_FILTER_KEYBINDING,
-                            ctx,
-                        ))
-                        .into_item(),
-                ]);
-                items.append(&mut vec![
-                    MenuItemFields::new("Toggle bookmark")
-                        .with_on_select_action(TerminalAction::ContextMenu(
-                            ContextMenuAction::ToggleBookmark,
-                        ))
-                        .with_key_shortcut_label(keybinding_name_to_display_string(
-                            "terminal:bookmark_selected_block",
-                            ctx,
-                        ))
-                        .into_item(),
-                ]);
+                items.append(&mut vec![MenuItemFields::new("Toggle block filter")
+                    .with_on_select_action(TerminalAction::ToggleBlockFilterOnSelectedOrLastBlock(
+                        ToggleBlockFilterSource::ContextMenu,
+                    ))
+                    .with_key_shortcut_label(keybinding_name_to_display_string(
+                        TOGGLE_BLOCK_FILTER_KEYBINDING,
+                        ctx,
+                    ))
+                    .into_item()]);
+                items.append(&mut vec![MenuItemFields::new("Toggle bookmark")
+                    .with_on_select_action(TerminalAction::ContextMenu(
+                        ContextMenuAction::ToggleBookmark,
+                    ))
+                    .with_key_shortcut_label(keybinding_name_to_display_string(
+                        "terminal:bookmark_selected_block",
+                        ctx,
+                    ))
+                    .into_item()]);
 
                 items.append(&mut vec![
                     MenuItem::Separator,
@@ -17036,17 +17028,15 @@ impl TerminalView {
                         ))
                         .into_item(),
                 ]);
-                items.append(&mut vec![
-                    MenuItemFields::new(scroll_to_bottom_str)
-                        .with_on_select_action(TerminalAction::ContextMenu(
-                            ContextMenuAction::ScrollToBottomOfBlock,
-                        ))
-                        .with_key_shortcut_label(keybinding_name_to_display_string(
-                            "terminal:scroll_to_bottom_of_selected_block",
-                            ctx,
-                        ))
-                        .into_item(),
-                ]);
+                items.append(&mut vec![MenuItemFields::new(scroll_to_bottom_str)
+                    .with_on_select_action(TerminalAction::ContextMenu(
+                        ContextMenuAction::ScrollToBottomOfBlock,
+                    ))
+                    .with_key_shortcut_label(keybinding_name_to_display_string(
+                        "terminal:scroll_to_bottom_of_selected_block",
+                        ctx,
+                    ))
+                    .into_item()]);
 
                 // Add debugging link for command blocks run by the agent
                 if is_single_selection {
@@ -17281,14 +17271,12 @@ impl TerminalView {
         is_rprompt_shown: bool,
         position: PromptPosition,
     ) -> Vec<MenuItem<TerminalAction>> {
-        let mut items = vec![
-            MenuItemFields::new("Copy prompt")
-                .with_on_select_action(TerminalAction::ContextMenu(ContextMenuAction::CopyPrompt {
-                    position,
-                    part: PromptPart::EntirePrompt,
-                }))
-                .into_item(),
-        ];
+        let mut items = vec![MenuItemFields::new("Copy prompt")
+            .with_on_select_action(TerminalAction::ContextMenu(ContextMenuAction::CopyPrompt {
+                position,
+                part: PromptPart::EntirePrompt,
+            }))
+            .into_item()];
 
         if is_rprompt_shown {
             items.push(
@@ -17611,7 +17599,7 @@ impl TerminalView {
 
             if !selected_input_text.is_empty() && !FeatureFlag::AgentMode.is_enabled() {
                 items.push(
-                    MenuItemFields::new("Ask Warp AI")
+                    MenuItemFields::new(ask_ai_assistant_text())
                         .with_on_select_action(TerminalAction::InputContextMenuItem(
                             InputContextMenuAction::AskWarpAI,
                         ))
@@ -17799,9 +17787,9 @@ impl TerminalView {
                 menu_items.extend([
                     MenuItem::Separator,
                     MenuItemFields::new(if FeatureFlag::AgentMode.is_enabled() {
-                        *ATTACH_AS_AGENT_MODE_CONTEXT_TEXT
+                        (*ATTACH_AS_AGENT_MODE_CONTEXT_TEXT).to_string()
                     } else {
-                        ASK_AI_ASSISTANT_TEXT
+                        ask_ai_assistant_text()
                     })
                     .with_on_select_action(TerminalAction::ContextMenu(ContextMenuAction::AskAI(
                         AskAISource::SelectedTerminalText,
@@ -21591,10 +21579,7 @@ impl TerminalView {
 
                     // Keep the long-running command in place, but surface why
                     // this shortcut cannot return to terminal yet.
-                    if let Err(error) = self
-                        .agent_view_controller
-                        .as_ref(ctx)
-                        .can_exit_agent_view()
+                    if let Err(error) = self.agent_view_controller.as_ref(ctx).can_exit_agent_view()
                     {
                         self.agent_view_controller.update(ctx, |controller, ctx| {
                             controller.show_exit_blocked_message(error, ctx);
@@ -22300,11 +22285,9 @@ impl TerminalView {
             set_custom_keybinding(MOVE_LINE_END_BINDING_NAME, &CTRL_E_KEYSTROKE, ctx);
         }
         EmacsBindingsSettings::handle(ctx).update(ctx, |settings_model, settings_ctx| {
-            report_if_error!(
-                settings_model
-                    .emacs_bindings_banner_state
-                    .set_value(BannerState::Dismissed, settings_ctx)
-            );
+            report_if_error!(settings_model
+                .emacs_bindings_banner_state
+                .set_value(BannerState::Dismissed, settings_ctx));
         });
         self.is_emacs_bindings_banner_open = false;
         ctx.notify();
@@ -22344,7 +22327,7 @@ impl TerminalView {
         let show_banner = if honor_ps1 {
             let banner_content = if shell_plugins.contains("p10k_unsupported") {
                 Some(BannerTextContent::formatted_text(vec![
-                    FormattedTextFragment::bold("Powerlevel10k now supports Warp!  "),
+                    FormattedTextFragment::bold("Powerlevel10k now supports this app!  "),
                     FormattedTextFragment::plain_text(
                         "You seem to be running an older (unsupported) version, please follow ",
                     ),
@@ -22357,7 +22340,7 @@ impl TerminalView {
             } else if shell_plugins.contains("pure") {
                 Some(BannerTextContent::formatted_text(vec![
                     FormattedTextFragment::plain_text(
-                        "Pure is not yet supported in Warp. You might consider one of the \
+                        "Pure is not yet supported in the app. You might consider one of the \
                         supported prompts as an alternative.  ",
                     ),
                     FormattedTextFragment::hyperlink("Learn more", PROMPT_COMPATIBILITY_URL),
@@ -26308,7 +26291,7 @@ impl TypedActionView for TerminalView {
                 WarpA11yRole::TextareaRole,
             )),
             ShowWarpifySettings => Custom(AccessibilityContent::new_without_help(
-                "Opened Warpify Settings",
+                "Opened shell integration settings",
                 WarpA11yRole::ButtonRole,
             )),
             OpenFilesPalette { .. } => Custom(AccessibilityContent::new_without_help(

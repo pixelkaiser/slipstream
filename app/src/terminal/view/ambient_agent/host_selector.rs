@@ -3,6 +3,7 @@ use std::sync::Arc;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use settings::Setting as _;
+use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
@@ -56,7 +57,7 @@ pub enum Host {
 impl Host {
     fn display_name(&self) -> &str {
         match self {
-            Host::Warp => "Warp",
+            Host::Warp => ChannelState::product_name(),
             Host::SelfHosted { slug } => slug.as_str(),
         }
     }

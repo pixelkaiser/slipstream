@@ -10,6 +10,7 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 
 use super::workflow::Workflow;
 use super::WorkflowSource;
+use crate::channel::ChannelState;
 use crate::terminal::model::session::Session;
 #[cfg(feature = "local_fs")]
 use crate::user_config::load_workflows;
@@ -223,7 +224,7 @@ pub fn prompt_chip_logging_workflow(shell_family: ShellFamily) -> Option<Workflo
         ),
         arguments: vec![],
         source_url: None,
-        author: Some("Warp".into()),
+        author: Some(ChannelState::product_name().into()),
         author_url: None,
         shells: vec![],
         environment_variables: None,

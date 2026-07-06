@@ -15,6 +15,7 @@ use warpui::{
 };
 
 use super::config::{QuakeModeWindow, ThemeType};
+use crate::channel::ChannelState;
 use crate::settings::import::config::{Config, ParsedTerminalSetting, SettingType};
 use crate::settings::import::model::{ImportedConfigModel, TerminalTypeAndProfile};
 use crate::settings::{
@@ -288,7 +289,10 @@ impl SettingsImportView {
                 background: Some(appearance.theme().outline().into()),
                 ..Default::default()
             })
-            .with_centered_text_label("Reset to Warp defaults".to_owned())
+            .with_centered_text_label(format!(
+                "Reset to {} defaults",
+                ChannelState::product_name()
+            ))
             .build()
             .on_click(move |ctx, _, _| {
                 ctx.dispatch_typed_action(SettingsImportAction::ResetButtonClicked);

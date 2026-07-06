@@ -25,7 +25,7 @@ pub struct WarpifyBannerState {
     pub dont_ask_button_mouse_state: MouseStateHandle,
     pub dismiss_button_mouse_state: MouseStateHandle,
 
-    /// This keybinding gets rendered in the Warpification banner, but we can't look it up
+    /// This keybinding gets rendered in the shell integration banner, but we can't look it up
     /// during render as a &mut AppContext is not available then. This needs to get
     /// looked up during action handling and cached here.
     pub initialize_warpify_keybinding: Option<Keystroke>,
@@ -46,7 +46,7 @@ impl WarpifyBannerState {
     }
 
     pub fn title(&self) -> &str {
-        "Warpify subshell"
+        "Enable shell integration"
     }
 
     pub fn action(&self) -> TerminalAction {

@@ -171,10 +171,10 @@ const AI_SETTINGS_DROPDOWN_WIDTH: f32 = 250.;
 const AI_SETTINGS_DROPDOWN_MAX_HEIGHT: f32 = 250.;
 
 fn agent_display_name() -> &'static str {
-    if ChannelState::product_name() == "Slipstream" {
+    if ChannelState::is_slipstream() {
         "Agent"
     } else {
-        "Warp Agent"
+        ChannelState::agent_name()
     }
 }
 const CONTEXT_WINDOW_SLIDER_WIDTH: f32 = 220.;
@@ -572,7 +572,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 FeatureFlag::AIRules.is_enabled() && FeatureFlag::SuggestedRules.is_enabled()
             }),
             ToggleSettingActionPair::new(
-                "Warp Drive as agent context",
+                "Drive as agent context",
                 builder(SettingsAction::AI(
                     AISettingsPageAction::ToggleWarpDriveContext,
                 )),
@@ -580,7 +580,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 flags::WARP_DRIVE_CONTEXT_FLAG,
             )
             .with_group(bindings::BindingGroup::WarpAi)
-            .with_enabled(|| FeatureFlag::AIRules.is_enabled()),
+            .with_enabled(|| FeatureFlag::AIRules.is_enabled() && !ChannelState::is_slipstream()),
             ToggleSettingActionPair::new(
                 "Auto-spawn servers from third-party agents",
                 builder(SettingsAction::AI(AISettingsPageAction::ToggleFileBasedMcp)),
@@ -599,7 +599,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
         vec![
             ToggleSettingActionPair::new(
-                "Warp credit fallback",
+                "Credit fallback",
                 builder(SettingsAction::AI(
                     AISettingsPageAction::ToggleCanUseWarpCreditsForFallback,
                 )),
@@ -607,6 +607,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 flags::WARP_CREDIT_FALLBACK_FLAG,
             )
             .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| !ChannelState::is_slipstream())
             .is_supported_on_current_platform(
                 UserWorkspaces::as_ref(app).is_byo_api_key_enabled(app)
                     || (FeatureFlag::CustomInferenceEndpoints.is_enabled()
@@ -4841,6 +4842,10 @@ impl SettingsWidget for UsageWidget {
         "a.i. ai usage limit plan"
     }
 
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !ChannelState::is_slipstream()
+    }
+
     fn render(
         &self,
         _view: &Self::View,
@@ -4888,12 +4893,12 @@ impl SettingsWidget for UsageWidget {
         .finish();
 
         let request_limit_description = format!(
-            "This is the {} limit of AI credits for your account.",
+            "This is the {} limit of AI requests for your account.",
             ai_request_usage_model.refresh_duration_to_string()
         );
 
         let request_usage_row = self.render_ai_usage_limit_row(
-            "Credits",
+            "Usage",
             request_limit_description,
             ai_request_usage_model.requests_used(),
             ai_request_usage_model.request_limit(),
@@ -6826,8 +6831,12 @@ impl AIFactWidget {
         ai_settings: &AISettings,
         app: &warpui::AppContext,
     ) -> Box<dyn Element> {
+        if ChannelState::is_slipstream() {
+            return Empty::new().finish();
+        }
+
         let toggle = render_ai_setting_toggle::<WarpDriveContextEnabled>(
-            "Warp Drive as agent context",
+            "Drive as agent context",
             AISettingsPageAction::ToggleWarpDriveContext,
             *ai_settings.warp_drive_context_enabled,
             ai_settings.is_any_ai_enabled(app),
@@ -6838,7 +6847,7 @@ impl AIFactWidget {
 
         let description = render_ai_setting_description(
             format!(
-                "The {} can leverage your Warp Drive Contents to tailor responses to your personal and team developer workflows and environments. This includes any Workflows, Notebooks, and Environment Variables.",
+                "The {} can leverage saved Drive contents to tailor responses to your personal and team developer workflows and environments. This includes any Workflows, Notebooks, and Environment Variables.",
                 agent_display_name()
             ),
             ai_settings.is_any_ai_enabled(app),
@@ -6932,9 +6941,10 @@ impl VoiceWidget {
         ));
 
         let voice_input_description_text_fragments = vec![
-            FormattedTextFragment::plain_text(
-                "Voice input allows you to control Warp by speaking directly to your terminal (powered by ",
-            ),
+            FormattedTextFragment::plain_text(format!(
+                "Voice input allows you to control {} by speaking directly to your terminal (powered by ",
+                ChannelState::product_name()
+            )),
             FormattedTextFragment::hyperlink("Wispr Flow", WISPR_FLOW_URL),
             FormattedTextFragment::plain_text(")."),
         ];
@@ -7349,7 +7359,7 @@ impl SettingsWidget for CLIAgentWidget {
                         on_click_action: None,
                         secondary_text: None,
                         tooltip_override_text: Some(
-                            "Requires the Warp plugin for your coding agent".to_owned(),
+                            "Requires the notification plugin for your coding agent".to_owned(),
                         ),
                     }),
                     LocalOnlyIconState::for_setting(
@@ -7764,7 +7774,7 @@ impl SettingsWidget for CloudAgentComputerUseWidget {
             )
             .with_child(toggle_row)
             .with_child(render_ai_setting_description(
-                "Enable computer use in cloud agent conversations started from the Warp app.",
+                "Enable computer use in cloud agent conversations started from this app.",
                 !is_disabled,
                 app,
             ))
@@ -7897,7 +7907,10 @@ impl SettingsWidget for CloudHandoffWidget {
                 );
                 column.add_child(auto_handoff_on_sleep_row);
                 column.add_child(render_ai_setting_description(
-                    "When macOS is about to sleep, automatically moves the most recently focused running local Warp Agent conversation to Cloud Mode so it can keep working.",
+                    format!(
+                        "When macOS is about to sleep, automatically moves the most recently focused running local {} conversation to Cloud Mode so it can keep working.",
+                        agent_display_name()
+                    ),
                     true,
                     app,
                 ));
@@ -8637,7 +8650,7 @@ impl ApiKeysWidget {
                 .local_graphql_db_path
                 .clone()
                 .unwrap_or_default(),
-            "Default Warp data path",
+            "Default app data path",
             |config, buffer_text| {
                 config.local_graphql_db_path = buffer_text
                     .trim()
@@ -8664,7 +8677,7 @@ impl ApiKeysWidget {
                 .local_service_log_path
                 .clone()
                 .unwrap_or_default(),
-            "Default Warp log path",
+            "Default app log path",
             |config, buffer_text| {
                 config.local_service_log_path = buffer_text
                     .trim()
@@ -9245,15 +9258,20 @@ impl ApiKeysWidget {
 
     fn render_custom_inference_description(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        let mut description = format!(
+            "Use your own API keys from model providers for the {} to use. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored locally and are never synced to the cloud.",
+            agent_display_name()
+        );
+        if !ChannelState::is_slipstream() {
+            description.push_str(
+                " Using auto models or models from providers you have not provided API keys for will consume account request balance.",
+            );
+        }
+        description.push(' ');
+
         let text_fragments = vec![
-            FormattedTextFragment::plain_text(format!(
-                "Use your own API keys from model providers for the {} to use. You can also add custom endpoints to use third-party models. Custom endpoints must support the OpenAI-compatible Chat Completions API. API keys are stored locally and are never synced to the cloud. Using auto models or models from providers you have not provided API keys for will consume Warp credits. ",
-                agent_display_name()
-            )),
-            FormattedTextFragment::hyperlink(
-                "Learn more",
-                CUSTOM_INFERENCE_LEARN_MORE_URL,
-            ),
+            FormattedTextFragment::plain_text(description),
+            FormattedTextFragment::hyperlink("Learn more", CUSTOM_INFERENCE_LEARN_MORE_URL),
         ];
         let description = FormattedTextElement::new(
             FormattedText::new([FormattedTextLine::Line(text_fragments)]),
@@ -9291,10 +9309,12 @@ impl ApiKeysWidget {
             FormattedTextFragment::plain_text(
                 "By using BYOK or custom endpoints, you agree to use them only as permitted by ",
             ),
-            FormattedTextFragment::hyperlink("Warp's Terms of Service", CUSTOM_INFERENCE_TERMS_URL),
-            FormattedTextFragment::plain_text(
-                ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Warp Business or Enterprise.",
-            ),
+            FormattedTextFragment::hyperlink("the Terms of Service", CUSTOM_INFERENCE_TERMS_URL),
+            FormattedTextFragment::plain_text(if ChannelState::is_slipstream() {
+                ".".to_string()
+            } else {
+                ". BYOK and custom endpoints are intended for individual use and small teams. Companies or organizations with more than 10 employees should use Business or Enterprise.".to_string()
+            }),
         ])]);
         let tooltip_background = appearance.theme().tooltip_background();
 
@@ -9480,7 +9500,10 @@ impl ApiKeysWidget {
 
         let description = Container::new(
             Text::new(
-                "Connect your SuperGrok subscription to use Grok models in the Warp Agent through your xAI account.",
+                format!(
+                    "Connect your SuperGrok subscription to use Grok models in the {} through your xAI account.",
+                    agent_display_name()
+                ),
                 appearance.ui_font_family(),
                 CONTENT_FONT_SIZE,
             )
@@ -10005,10 +10028,14 @@ impl ApiKeysWidget {
         view: &AISettingsPageView,
         app: &AppContext,
     ) -> Box<dyn Element> {
+        if ChannelState::is_slipstream() {
+            return Empty::new().finish();
+        }
+
         let ai_settings = AISettings::as_ref(app);
 
         let toggle = render_ai_setting_toggle::<CanUseWarpCreditsForFallback>(
-            "Warp credit fallback",
+            "Credit fallback",
             AISettingsPageAction::ToggleCanUseWarpCreditsForFallback,
             *ai_settings.can_use_warp_credits_for_fallback,
             ai_settings.is_any_ai_enabled(app),
@@ -10018,7 +10045,7 @@ impl ApiKeysWidget {
         );
 
         let description = render_ai_setting_description(
-            "When enabled, agent requests may be routed to one of Warp's provided models in the event of an error. Warp will prioritize using your API keys over your Warp credits.",
+            "When enabled, agent requests may be routed to a provided model in the event of an error. The app will prioritize using your API keys over account request balance.",
             ai_settings.is_any_ai_enabled(app),
             app,
         );
@@ -10197,7 +10224,7 @@ impl SettingsWidget for ApiKeysWidget {
             }
         }
 
-        // Warp credit fallback toggle (shown when BYO or custom inference is enabled)
+        // Credit fallback toggle (shown when BYO or custom inference is enabled)
         if is_byo_enabled || show_custom_inference {
             column.add_child(
                 Container::new(self.render_warp_credit_fallback_toggle(view, app))
@@ -10503,10 +10530,15 @@ impl AwsBedrockWidget {
         let are_credentials_enabled = user_workspaces.is_aws_bedrock_credentials_enabled(app);
         let is_usage_enabled = is_section_enabled && are_credentials_enabled;
         let toggle_description = if is_admin_enforced {
-            "Warp loads and sends local AWS CLI credentials for Bedrock-supported models. This setting is managed by your organization.".to_string()
+            format!(
+                "{} loads and sends local AWS CLI credentials for Bedrock-supported models. This setting is managed by your organization.",
+                ChannelState::product_name()
+            )
         } else {
-            "Warp loads and sends local AWS CLI credentials for Bedrock-supported models."
-                .to_string()
+            format!(
+                "{} loads and sends local AWS CLI credentials for Bedrock-supported models.",
+                ChannelState::product_name()
+            )
         };
 
         let mut column = Flex::column().with_spacing(16.).with_child(

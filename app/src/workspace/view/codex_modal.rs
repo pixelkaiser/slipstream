@@ -110,7 +110,7 @@ impl CodexModal {
 
         // Title
         let title = FormattedTextElement::from_str(
-            "Use Codex models in Warp",
+            "Use Codex models in this app",
             appearance.ui_font_family(),
             24.,
         )

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use itertools::Itertools;
 use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
+use warp_core::channel::ChannelState;
 use warp_core::ui::theme::Fill;
 use warp_editor::editor::NavigationKey;
 use warpui::clipboard::ClipboardContent;
@@ -85,8 +86,7 @@ const SCROLLBAR_WIDTH: ScrollbarWidth = ScrollbarWidth::Auto;
 
 const TITLE_PLACEHOLDER_TEXT: &str = "Untitled workflow";
 const DESCRIPTION_PLACEHOLDER_TEXT: &str = "Add a description";
-const COMMAND_EDITOR_PLACEHOLDER_TEXT: &str =
-    "echo \"Hello {{your_name}}\" # insert arguments with curly braces\n# enter a single-line command or an entire shell script";
+const COMMAND_EDITOR_PLACEHOLDER_TEXT: &str = "echo \"Hello {{your_name}}\" # insert arguments with curly braces\n# enter a single-line command or an entire shell script";
 const ARGUMENT_BUTTON_TEXT: &str = "New argument";
 const ARGUMENT_DESCRIPTION_PLACEHOLDER_TEXT: &str = "Description";
 const ARGUMENT_DEFAULT_VALUE_PLACEHOLDER_TEXT: &str = "Default value (optional)";
@@ -732,7 +732,12 @@ impl WorkflowModal {
         match (self.workflow_id, self.owner) {
             (Some(workflow_id), None) => {
                 UpdateManager::handle(ctx).update(ctx, |update_manager, ctx| {
-                    update_manager.update_workflow(workflow, workflow_id, self.revision_ts.clone(), ctx);
+                    update_manager.update_workflow(
+                        workflow,
+                        workflow_id,
+                        self.revision_ts.clone(),
+                        ctx,
+                    );
                 });
                 ctx.emit(WorkflowModalEvent::UpdatedWorkflow(workflow_id));
             }
@@ -749,7 +754,9 @@ impl WorkflowModal {
                     );
                 });
             }
-            _ => log::error!("Only one of a workflow ID or space can be specified for saving workflows, but both or neither were specified instead")
+            _ => log::error!(
+                "Only one of a workflow ID or space can be specified for saving workflows, but both or neither were specified instead"
+            ),
         }
 
         self.close(true, ctx);
@@ -1724,7 +1731,10 @@ impl WorkflowModal {
                 .finish();
 
             let button_with_tool_tip = appearance.ui_builder().tool_tip_on_element(
-                "Generate a title, descriptions, or parameters with Warp AI".to_string(),
+                format!(
+                    "Generate a title, descriptions, or parameters with {}",
+                    ChannelState::ai_name()
+                ),
                 self.button_mouse_states.ai_assist_tool_tip.clone(),
                 rendered_button,
                 ParentAnchor::BottomMiddle,

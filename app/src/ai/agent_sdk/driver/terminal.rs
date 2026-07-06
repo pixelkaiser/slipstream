@@ -22,6 +22,7 @@ use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity as _
 use super::AgentDriverError;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::attachment_utils::attachments_download_dir;
+use crate::channel::ChannelState;
 use crate::pane_group::NewTerminalOptions;
 use crate::root_view::{open_new_with_workspace_source, NewWorkspaceSource};
 use crate::terminal::model::block::{BlockId, SerializedBlock};
@@ -41,9 +42,9 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 pub(crate) enum BootstrapError {
     /// The PTY or shell process failed before the bootstrap script completed.
     /// When `reason` is `Some`, the message is
-    /// "Shell spawn failed: {reason}. Check the Warp logs for details."
+    /// "Shell spawn failed: {reason}. Check the app logs for details."
     /// When `reason` is `None`, it is
-    /// "Shell spawn failed. Check the Warp logs for details."
+    /// "Shell spawn failed. Check the app logs for details."
     PtySpawnFailed { reason: Option<String> },
     /// The bootstrap script did not complete within the expected time.
     TimedOut,
@@ -58,16 +59,22 @@ impl std::fmt::Display for BootstrapError {
             BootstrapError::PtySpawnFailed { reason: Some(r) } => {
                 write!(
                     f,
-                    "Shell spawn failed: {r}. Check the Warp logs for details."
+                    "Shell spawn failed: {r}. Check the {} logs for details.",
+                    ChannelState::product_name()
                 )
             }
             BootstrapError::PtySpawnFailed { reason: None } => {
-                write!(f, "Shell spawn failed. Check the Warp logs for details.")
+                write!(
+                    f,
+                    "Shell spawn failed. Check the {} logs for details.",
+                    ChannelState::product_name()
+                )
             }
             BootstrapError::TimedOut => write!(
                 f,
                 "Terminal session did not start within the expected time. \
-                 Check the Warp logs for details."
+                 Check the {} logs for details.",
+                ChannelState::product_name()
             ),
             BootstrapError::InternalError => {
                 write!(f, "An unexpected internal error occurred during bootstrap.")

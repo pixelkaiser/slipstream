@@ -1,4 +1,5 @@
 use ui_components::{button, Component as _, Options as _};
+use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::Fill;
@@ -23,7 +24,7 @@ use super::OnboardingSlide;
 use crate::model::{AiSetupChoice, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
 
-/// Checklist shown on the "Use Warp agent" card.
+/// Checklist shown on the built-in agent card.
 const WARP_AGENT_FEATURES: &[&str] = &[
     "Best harness for terminal tasks and agentic coding",
     "Frontier models from OpenAI, Anthropic, and Google",
@@ -116,7 +117,10 @@ impl AiSetupSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Choose if you'd like to use Warp Agent or third party agents.",
+            format!(
+                "Choose if you'd like to use {} or third party agents.",
+                ChannelState::agent_name()
+            ),
             appearance.ui_font_family(),
             16.,
         )
@@ -227,7 +231,7 @@ impl AiSetupSlide {
         let header_row = {
             let label = appearance
                 .ui_builder()
-                .paragraph("Use Warp Agent")
+                .paragraph(format!("Use {}", ChannelState::agent_name()))
                 .with_style(UiComponentStyles {
                     font_size: Some(16.),
                     font_weight: Some(Weight::Semibold),

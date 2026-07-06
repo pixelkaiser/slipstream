@@ -48,7 +48,6 @@ use crate::workspaces::workspace::CustomerType;
 use crate::{report_if_error, send_telemetry_from_ctx, TelemetryEvent};
 
 const PHOTO_SIZE: f32 = 40.;
-const REFERRAL_CTA: &str = "Earn rewards by sharing Warp with friends & colleagues";
 const REGULAR_TEXT_FONT_SIZE: f32 = 12.;
 const VERTICAL_MARGIN: f32 = 24.;
 const LOG_OUT_TEXT: &str = "Log out";
@@ -795,7 +794,10 @@ impl SettingsWidget for EarnRewardsWidget {
         Container::new(
             self.render_row(
                 appearance,
-                REFERRAL_CTA,
+                &format!(
+                    "Earn rewards by sharing {} with friends & colleagues",
+                    ChannelState::product_name()
+                ),
                 appearance
                     .ui_builder()
                     .link(
@@ -835,11 +837,11 @@ impl VersionInfoWidget {
             .with_opacity(60)
             .into();
         struct StatusContent {
-            text: &'static str,
+            text: String,
             color: ColorU,
         }
         struct CallToActionContent {
-            text: &'static str,
+            text: String,
             action: MainPageAction,
         }
 
@@ -849,73 +851,79 @@ impl VersionInfoWidget {
                 match autoupdate::get_update_state(app) {
                     AutoupdateStage::NoUpdateAvailable => (
                         Some(StatusContent {
-                            text: "Up to date",
+                            text: "Up to date".to_string(),
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
-                            text: "Check for updates",
+                            text: "Check for updates".to_string(),
                             action: MainPageAction::CheckForUpdate,
                         }),
                     ),
                     AutoupdateStage::CheckingForUpdate => (
                         Some(StatusContent {
-                            text: "checking for update...",
+                            text: "checking for update...".to_string(),
                             color: faded_text_color,
                         }),
                         None,
                     ),
                     AutoupdateStage::DownloadingUpdate => (
                         Some(StatusContent {
-                            text: "downloading update...",
+                            text: "downloading update...".to_string(),
                             color: faded_text_color,
                         }),
                         None,
                     ),
                     AutoupdateStage::UpdateReady { .. } => (
                         Some(StatusContent {
-                            text: "Update available",
+                            text: "Update available".to_string(),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Relaunch Warp",
+                            text: format!("Relaunch {}", ChannelState::product_name()),
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::Updating { .. } => (
                         Some(StatusContent {
-                            text: "Updating...",
+                            text: "Updating...".to_string(),
                             color: faded_text_color,
                         }),
                         None,
                     ),
                     AutoupdateStage::UpdatedPendingRestart { .. } => (
                         Some(StatusContent {
-                            text: "Installed update",
+                            text: "Installed update".to_string(),
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
-                            text: "Relaunch Warp",
+                            text: format!("Relaunch {}", ChannelState::product_name()),
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => (
                         Some(StatusContent {
-                            text: "A new version of Warp is available but can't be installed",
+                            text: format!(
+                                "A new version of {} is available but can't be installed",
+                                ChannelState::product_name()
+                            ),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Update Warp manually",
+                            text: format!("Update {} manually", ChannelState::product_name()),
                             // note: the handler for this action is a no-op
                             action: MainPageAction::DownloadUpdate,
                         }),
                     ),
                     AutoupdateStage::UnableToLaunchNewVersion { .. } => (
                         Some(StatusContent {
-                            text: "A new version of Warp is installed but can't be launched.",
+                            text: format!(
+                                "A new version of {} is installed but can't be launched.",
+                                ChannelState::product_name()
+                            ),
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Update Warp manually",
+                            text: format!("Update {} manually", ChannelState::product_name()),
                             // note: the handler for this action is a no-op
                             action: MainPageAction::DownloadUpdate,
                         }),
@@ -945,14 +953,15 @@ impl VersionInfoWidget {
                 .finish(),
             );
         if let Some(call_to_action_content) = call_to_action_content {
+            let CallToActionContent { text, action } = call_to_action_content;
             first_row.add_child(
                 appearance
                     .ui_builder()
                     .link(
-                        call_to_action_content.text.into(),
+                        text,
                         None,
                         Some(Box::new(move |ctx| {
-                            ctx.dispatch_typed_action(call_to_action_content.action.clone());
+                            ctx.dispatch_typed_action(action.clone());
                         })),
                         self.version_info_cta_link_mouse_state.clone(),
                     )

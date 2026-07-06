@@ -112,8 +112,7 @@ const INVALID_DOMAINS_INSTRUCTIONS: &str =
     "Some of the provided domains are invalid, or have already been added.";
 
 const INVITE_LINK_TOGGLE_INSTRUCTIONS: &str = "As an admin, you can choose whether to enable or disable the ability for team members to invite others by invitation link.";
-const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str =
-    "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
+const INVITE_LINK_DOMAIN_RESTRICTIONS_INSTRUCTIONS: &str = "Restrict by domain — only allow users with emails at specific domains to join your team through the invite link.";
 
 const INVITE_BY_EMAIL_EXPIRY_INSTRUCTIONS: &str = "Email invitations are valid for 7 days.";
 const INVALID_EMAILS_INSTRUCTIONS: &str =
@@ -2157,9 +2156,9 @@ impl TeamsWidget {
         has_admin_permissions: bool,
     ) -> Box<dyn Element> {
         let prorated_message = if has_admin_permissions {
-            "You'll be charged for a portion of the team member's usage of Warp."
+            "You'll be charged for a portion of the team member's usage."
         } else {
-            "Your admin will be charged for a portion of the team member's usage of Warp."
+            "Your admin will be charged for a portion of the team member's usage."
         };
 
         let additional_members_cost_money_msg = if let Some((monthly_cost, yearly_cost)) =
@@ -3249,8 +3248,10 @@ impl TeamsWidget {
         let header = self.render_subsubsection_header("By discovery".to_owned(), appearance);
 
         let domain = current_user_email.split('@').nth(1).unwrap_or("");
-        let team_discoverability_instructions =
-            format!("Allow Warp users with an @{domain} email to find and join the team.");
+        let team_discoverability_instructions = format!(
+            "Allow {} users with an @{domain} email to find and join the team.",
+            ChannelState::product_name()
+        );
         let subtext = self.render_sub_text(
             team_discoverability_instructions,
             appearance,
@@ -4009,10 +4010,15 @@ impl TeamsWidget {
             .with_margin_left(-4.)
             .finish();
             let checkbox_row_text = if let Some(domain) = view.auth_state.user_email_domain() {
-                format!("Allow Warp users with an @{domain} email to find and join the team.")
+                format!(
+                    "Allow {} users with an @{domain} email to find and join the team.",
+                    ChannelState::product_name()
+                )
             } else {
-                "Allow Warp users with the same email domain as you to find and join the team."
-                    .to_string()
+                format!(
+                    "Allow {} users with the same email domain as you to find and join the team.",
+                    ChannelState::product_name()
+                )
             };
             let checkbox_row = Container::new(
                 Flex::row()

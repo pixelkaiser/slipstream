@@ -1,6 +1,6 @@
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
-use ui_components::{Component as _, Options as _, button};
+use ui_components::{button, Component as _, Options as _};
 use warp_core::channel::ChannelState;
 use warp_core::send_telemetry_from_ctx;
 use warp_core::ui::appearance::Appearance;

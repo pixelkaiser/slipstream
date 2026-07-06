@@ -12,6 +12,7 @@ use strum_macros::EnumIter;
 #[cfg(not(target_family = "wasm"))]
 pub use templatable_manager::McpIntegration;
 pub use templatable_manager::TemplatableMCPServerManager;
+use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::Icon;
 
@@ -502,7 +503,7 @@ pub enum MCPProvider {
 impl MCPProvider {
     pub fn display_name(&self) -> &str {
         match self {
-            MCPProvider::Warp => "Warp",
+            MCPProvider::Warp => ChannelState::product_name(),
             MCPProvider::Claude => "Claude",
             MCPProvider::Codex => "Codex",
             MCPProvider::Agents => "Other Agents",

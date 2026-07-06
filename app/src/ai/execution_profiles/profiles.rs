@@ -411,7 +411,7 @@ impl AIExecutionProfilesModel {
         let mut new_profile = self.default_profile(ctx).data().clone();
         new_profile.name = "".to_string();
         new_profile.is_default_profile = false;
-        new_profile.autosync_plans_to_warp_drive = true;
+        new_profile.autosync_plans_to_warp_drive = !ChannelState::is_slipstream();
 
         let Some(owner) = UserWorkspaces::as_ref(ctx).personal_drive(ctx) else {
             let local_profile = LocalAIExecutionProfile {

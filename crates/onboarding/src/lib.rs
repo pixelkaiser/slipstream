@@ -50,7 +50,7 @@ const SLIPSTREAM_AI_FEATURES: &[&str] = &[
 /// skip-login confirmation dialog so the list stays in sync with any future
 /// surfaces that need it.
 const WARP_DRIVE_FEATURES: &[&str] = &["Warp Drive", "Session Sharing"];
-const SLIPSTREAM_DRIVE_FEATURES: &[&str] = &["Slipstream Drive", "Session Sharing"];
+const SLIPSTREAM_DRIVE_FEATURES: &[&str] = &[];
 
 pub fn ai_features() -> &'static [&'static str] {
     if warp_core::channel::ChannelState::product_name() == "Slipstream" {
@@ -70,7 +70,7 @@ pub fn drive_features() -> &'static [&'static str] {
 
 pub fn drive_name() -> &'static str {
     if warp_core::channel::ChannelState::product_name() == "Slipstream" {
-        "Slipstream Drive"
+        "Drive"
     } else {
         "Warp Drive"
     }

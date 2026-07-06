@@ -1,5 +1,5 @@
 //! Inline block view that asks the user whether they want to install
-//! Warp's SSH extension on the remote host the shell just connected to,
+//! the SSH extension on the remote host the shell just connected to,
 //! or continue without installing (falling back to the existing
 //! ControlMaster warpification path).
 //!
@@ -8,7 +8,7 @@
 //!
 //! The view owns:
 //! - a child [`KeyboardNavigableButtons`] handle for the two selectable
-//!   cards ("Install Warp's SSH extension" / "Continue without installing"),
+//!   cards ("Install SSH extension" / "Continue without installing"),
 //! - the [`SessionId`] this prompt is scoped to (used for event forwarding),
 //! - the current "Don't ask me this again" checked state (purely local to
 //!   this prompt instance; persisted to `ssh_extension_install_mode` only
@@ -94,29 +94,29 @@ impl SshRemoteServerChoiceView {
     ) -> Self {
         let (install_title, install_description, skip_title, skip_description) = match mode {
             SshRemoteServerChoiceViewMode::InitialInstall => (
-                "Install Warp's SSH extension",
-                "Install Warp's extension to enable agent features like file browsing, \
+                "Install SSH extension",
+                "Install the SSH extension to enable agent features like file browsing, \
                  code review, and intelligent command completions in this session.",
                 "Continue without installing",
-                "You'll still get a Warpified experience just without the coding features.",
+                "You'll still get shell integration, just without the coding features.",
             ),
             SshRemoteServerChoiceViewMode::UpdateRequired => (
-                "Update Warp's SSH extension",
-                "Update Warp's extension to restore agent features like file browsing, \
+                "Update SSH extension",
+                "Update the SSH extension to restore agent features like file browsing, \
                  code review, and intelligent command completions.",
                 "Continue without SSH extension",
                 "Keep this SSH shell running with advanced remote features disabled.",
             ),
             SshRemoteServerChoiceViewMode::RetryAfterControlMasterError => (
                 "Retry installing SSH extension",
-                "Reinstall and reconnect Warp's extension to restore agent features like file \
+                "Reinstall and reconnect the SSH extension to restore agent features like file \
                  browsing, code review, and intelligent command completions.",
                 "Continue without SSH extension",
                 "Keep this SSH shell running with advanced remote features disabled.",
             ),
             SshRemoteServerChoiceViewMode::RetryAfterSetupFailure => (
                 "Retry installing SSH extension",
-                "Reinstall and reconnect Warp's extension to restore agent features like file \
+                "Reinstall and reconnect the SSH extension to restore agent features like file \
                  browsing, code review, and intelligent command completions.",
                 "Continue without SSH extension",
                 "Keep this SSH shell running with advanced remote features disabled.",
@@ -170,13 +170,13 @@ impl SshRemoteServerChoiceView {
                 "Choose your experience for this remote session:"
             }
             SshRemoteServerChoiceViewMode::UpdateRequired => {
-                "Warp's SSH extension is out of date on this host. Update it?"
+                "The SSH extension is out of date on this host. Update it?"
             }
             SshRemoteServerChoiceViewMode::RetryAfterControlMasterError => {
-                "Warp's SSH extension hit an SSH channel error. Repair this session?"
+                "The SSH extension hit an SSH channel error. Repair this session?"
             }
             SshRemoteServerChoiceViewMode::RetryAfterSetupFailure => {
-                "Warp couldn't connect to the SSH extension. Retry this session?"
+                "The app couldn't connect to the SSH extension. Retry this session?"
             }
         };
         HeaderConfig::new(title, app)
@@ -230,11 +230,11 @@ impl SshRemoteServerChoiceView {
             .with_child(Container::new(checkbox_label).with_margin_left(4.).finish())
             .finish();
 
-        // Right: "Manage Warpify settings" link.
+        // Right: "Manage shell integration settings" link.
         let manage_settings_link = appearance
             .ui_builder()
             .link(
-                "Manage Warpify settings".into(),
+                "Manage shell integration settings".into(),
                 None,
                 Some(Box::new(|ctx| {
                     ctx.dispatch_typed_action(SshRemoteServerChoiceViewAction::OpenWarpifySettings);

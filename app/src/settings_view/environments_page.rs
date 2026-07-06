@@ -80,7 +80,7 @@ use {
 };
 
 const PAGE_TITLE_TEXT: &str = "Environments";
-const PAGE_DESCRIPTION_TEXT: &str = "Environments define where your ambient agents run. Set one up in minutes via GitHub (recommended), Warp-assisted setup, or manual configuration.";
+const PAGE_DESCRIPTION_TEXT: &str = "Environments define where your ambient agents run. Set one up in minutes via GitHub (recommended), agent-assisted setup, or manual configuration.";
 const CARD_BORDER_WIDTH: f32 = 1.;
 const CARD_PADDING: f32 = 16.;
 const CARD_SPACING: f32 = 12.;
@@ -1314,8 +1314,8 @@ impl EnvironmentsPageWidget {
             EnvironmentListScope::Team => {
                 let shared_by_text = UserWorkspaces::as_ref(app)
                     .current_team()
-                    .map(|team| format!("Shared by Warp and {}", team.name))
-                    .unwrap_or_else(|| "Shared by Warp and your team".to_string());
+                    .map(|team| format!("Shared by the app and {}", team.name))
+                    .unwrap_or_else(|| "Shared by the app and your team".to_string());
                 Self::render_overline_header(&shared_by_text, appearance)
             }
         };
@@ -1448,8 +1448,7 @@ impl EnvironmentsPageWidget {
                 icon: Icon::Github,
                 title: "Quick setup",
                 badge: Some("Suggested"),
-                subtitle:
-                    "Select the GitHub repositories you’d like to work with and we’ll suggest a base image and config",
+                subtitle: "Select the GitHub repositories you’d like to work with and we’ll suggest a base image and config",
                 action_button: github_button,
                 compact_action_button: github_button_compact,
                 icon_size,
@@ -1462,8 +1461,7 @@ impl EnvironmentsPageWidget {
                 icon: Icon::Terminal,
                 title: "Use the agent",
                 badge: None,
-                subtitle:
-                    "Choose a locally set up project and we’ll help you set up an environment based on it",
+                subtitle: "Choose a locally set up project and we’ll help you set up an environment based on it",
                 action_button: local_repos_button,
                 compact_action_button: local_repos_button_compact,
                 icon_size,

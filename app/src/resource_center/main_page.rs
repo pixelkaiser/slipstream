@@ -391,7 +391,7 @@ impl ResourceCenterMainView {
                 .with_text_and_icon_label(
                     TextAndIcon::new(
                         TextAndIconAlignment::IconFirst,
-                        "Invite a friend to Warp",
+                        format!("Invite a friend to {}", ChannelState::product_name()),
                         Icon::new(SEND_SVG_PATH, appearance.theme().accent()),
                         MainAxisSize::Max,
                         MainAxisAlignment::Center,

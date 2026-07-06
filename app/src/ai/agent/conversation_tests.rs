@@ -8,8 +8,7 @@ use warpui::{App, SingletonEntity};
 
 use super::{
     artifact_from_fork_proto, codex_output_status, footer_model_token_usage, AIConversation,
-    AIConversationAutoexecuteMode, AIConversationId,
-    ConversationStatus, RestoreConversationError,
+    AIConversationAutoexecuteMode, AIConversationId, ConversationStatus, RestoreConversationError,
 };
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{

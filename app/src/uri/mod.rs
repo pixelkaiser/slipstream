@@ -1142,7 +1142,10 @@ impl Action {
             | Self::AutoHandoffToCloud { .. } => W::default(),
             Self::NewTab => W::ShowPrimaryWindow(WindowActivationFallbackBehavior::Notify {
                 title: "New tab created".to_owned(),
-                description: "Go to Warp to see your new tab.".to_owned(),
+                description: format!(
+                    "Go to {} to see your new tab.",
+                    ChannelState::product_name()
+                ),
             }),
             Self::NewWindow => W::Nothing,
         }

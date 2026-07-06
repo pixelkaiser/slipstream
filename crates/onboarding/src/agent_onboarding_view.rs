@@ -424,7 +424,7 @@ impl AgentOnboardingView {
             appearance,
             FeatureOptOutDialog {
                 title: "Are you sure you don't want AI?",
-                body: "Without AI, you'll still get Warp's terminal experience, but you'll miss \
+                body: "Without AI, you'll still get the terminal experience, but you'll miss \
                        our agentic features like automatic fixes for terminal errors.",
                 features: &[],
                 close_button,

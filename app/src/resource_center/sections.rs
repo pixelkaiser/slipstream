@@ -37,13 +37,13 @@ pub fn sections(ctx: &mut ViewContext<ResourceCenterMainView>) -> Vec<Section> {
             ),
             FeatureItem::new(
                 "Open command palette",
-                "Access all of Warp via the keyboard.",
+                "Access the app from the keyboard.",
                 Tip::Action(TipAction::CommandPalette),
                 ctx,
             ),
             FeatureItem::new(
                 "Set your theme",
-                "Make Warp your own by choosing a theme.",
+                "Make the app your own by choosing a theme.",
                 Tip::Action(TipAction::ThemePicker),
                 ctx,
             ),
@@ -62,21 +62,21 @@ pub fn sections(ctx: &mut ViewContext<ResourceCenterMainView>) -> Vec<Section> {
         items: vec![
             ContentItem {
                 title: "Use your custom prompt",
-                description: "Set up Warp to honor your PS1 setting",
-                url: "https://docs.warp.dev/terminal/appearance/prompt",
-                button_label: "View documentation",
+                description: "Set up the terminal to honor your PS1 setting",
+                url: "https://github.com/pixelkaiser/slipstream",
+                button_label: "View project",
             },
             ContentItem {
-                title: "Integrate Warp with your IDE",
-                description: "Configure Warp to launch from your most used development tools",
-                url: "https://docs.warp.dev/terminal/integrations-and-plugins",
-                button_label: "View documentation",
+                title: "Integrate with your IDE",
+                description: "Configure the app to launch from your most used development tools",
+                url: "https://github.com/pixelkaiser/slipstream",
+                button_label: "View project",
             },
             ContentItem {
-                title: "How Warp uses Warp",
-                description: "Learn how Warp's engineering team uses their favorite features",
-                url: "https://www.warp.dev/blog/how-warp-uses-warp",
-                button_label: "Read article",
+                title: "Project resources",
+                description: "Learn more about Slipstream and its development",
+                url: "https://github.com/pixelkaiser/slipstream",
+                button_label: "View project",
             },
         ],
     };

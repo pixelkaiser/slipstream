@@ -3,7 +3,9 @@ use warpui::elements::{
     Align, CacheOption, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Image,
     MainAxisAlignment, MouseStateHandle, ParentElement, Wrap,
 };
+use warpui::fonts::Weight;
 use warpui::ui_components::components::UiComponent;
+use warpui::ui_components::components::UiComponentStyles;
 use warpui::{AppContext, Entity, View, ViewContext, ViewHandle};
 
 use super::settings_page::{
@@ -45,7 +47,6 @@ impl View for AboutPageView {
 #[derive(Default)]
 struct AboutPageWidget {
     copy_version_button_mouse_state: MouseStateHandle,
-    warp_link_mouse_state: MouseStateHandle,
     warp_dev_link_mouse_state: MouseStateHandle,
 }
 
@@ -65,16 +66,56 @@ impl SettingsWidget for AboutPageWidget {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder();
 
-        let image_path: &'static str = if ChannelState::product_name() == "Slipstream" {
-            if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
-                "bundled/svg/slipstream-logo-with-light-title.svg"
-            } else {
-                "bundled/svg/slipstream-logo-with-dark-title.svg"
-            }
-        } else if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
-            "bundled/svg/warp-logo-with-light-title.svg"
+        let logo_header = if ChannelState::product_name() == "Slipstream" {
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_alignment(MainAxisAlignment::Center)
+                .with_child(
+                    ConstrainedBox::new(
+                        Image::new(
+                            AssetSource::Bundled {
+                                path: "bundled/png/slipstream-app-icon.png",
+                            },
+                            CacheOption::BySize,
+                        )
+                        .finish(),
+                    )
+                    .with_width(72.)
+                    .with_height(72.)
+                    .finish(),
+                )
+                .with_child(
+                    ui_builder
+                        .span("Slipstream".to_string())
+                        .with_style(
+                            UiComponentStyles::default()
+                                .set_font_size(44.)
+                                .set_font_color(theme.active_ui_text_color().into())
+                                .set_font_weight(Weight::Bold),
+                        )
+                        .build()
+                        .with_margin_left(24.)
+                        .finish(),
+                )
+                .finish()
         } else {
-            "bundled/svg/warp-logo-with-dark-title.svg"
+            let image_path: &'static str =
+                if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
+                    "bundled/svg/warp-logo-with-light-title.svg"
+                } else {
+                    "bundled/svg/warp-logo-with-dark-title.svg"
+                };
+
+            ConstrainedBox::new(
+                Image::new(
+                    AssetSource::Bundled { path: image_path },
+                    CacheOption::BySize,
+                )
+                .finish(),
+            )
+            .with_max_height(100.)
+            .with_max_width(350.)
+            .finish()
         };
 
         let version = ChannelState::app_version().unwrap_or("v#.##.###");
@@ -119,13 +160,13 @@ impl SettingsWidget for AboutPageWidget {
             .with_main_axis_alignment(MainAxisAlignment::Center)
             .with_children([
                 ui_builder
-                    .span("Portions copyright ".to_string())
+                    .span("Portions based on ".to_string())
                     .with_soft_wrap()
                     .build()
                     .finish(),
                 ui_builder
                     .link(
-                        "Warp.dev".to_string(),
+                        "the original project".to_string(),
                         Some("https://www.warp.dev".to_string()),
                         None,
                         self.warp_dev_link_mouse_state.clone(),
@@ -134,18 +175,8 @@ impl SettingsWidget for AboutPageWidget {
                     .build()
                     .finish(),
                 ui_builder
-                    .span(" - based on ".to_string())
+                    .span(" and its contributors".to_string())
                     .with_soft_wrap()
-                    .build()
-                    .finish(),
-                ui_builder
-                    .link(
-                        "Warp".to_string(),
-                        Some("https://www.warp.dev".to_string()),
-                        None,
-                        self.warp_link_mouse_state.clone(),
-                    )
-                    .soft_wrap(false)
                     .build()
                     .finish(),
             ])
@@ -154,18 +185,7 @@ impl SettingsWidget for AboutPageWidget {
         Align::new(
             Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(
-                    ConstrainedBox::new(
-                        Image::new(
-                            AssetSource::Bundled { path: image_path },
-                            CacheOption::BySize,
-                        )
-                        .finish(),
-                    )
-                    .with_max_height(100.)
-                    .with_max_width(350.)
-                    .finish(),
-                )
+                .with_child(logo_header)
                 .with_child(version_row.finish())
                 .with_child(copyright_notice)
                 .with_child(Container::new(upstream_notice).with_margin_top(6.).finish())

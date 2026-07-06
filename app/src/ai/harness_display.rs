@@ -6,6 +6,7 @@
 
 use pathfinder_color::ColorU;
 use warp_cli::agent::Harness;
+use warp_core::channel::ChannelState;
 use warp_core::ui::theme::color::internal_colors;
 use warp_core::ui::theme::{Fill as WarpThemeFill, WarpTheme};
 
@@ -17,7 +18,7 @@ use crate::ui_components::icons::Icon;
 /// User-visible display name for a [`Harness`].
 pub fn display_name(harness: Harness) -> &'static str {
     match harness {
-        Harness::Oz => "Warp",
+        Harness::Oz => ChannelState::product_name(),
         Harness::Claude => "Claude Code",
         Harness::OpenCode => "OpenCode",
         Harness::Gemini => "Gemini CLI",

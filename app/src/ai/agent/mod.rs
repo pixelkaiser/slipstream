@@ -680,7 +680,7 @@ pub enum RenderableAIError {
 
 impl RenderableAIError {
     const TRANSIENT_NETWORK_ERROR_MESSAGE: &'static str =
-        "Warp lost connection while receiving the agent response. This is usually temporary.";
+        "The app lost connection while receiving the agent response. This is usually temporary.";
     /// Creates a transient network error. `kind` is the structured cause (including the raw API
     /// error where one exists), preserved so user reports can disambiguate the different causes
     /// behind the shared user-facing copy.
@@ -815,9 +815,15 @@ impl Display for RenderableAIError {
                 }
             }
             Self::ServerOverloaded => {
-                write!(f, "Warp is currently overloaded. Please try again later.")
+                write!(
+                    f,
+                    "{} is currently overloaded. Please try again later.",
+                    ChannelState::product_name()
+                )
             }
-            Self::InternalWarpError => write!(f, "Internal Warp error."),
+            Self::InternalWarpError => {
+                write!(f, "Internal {} error.", ChannelState::product_name())
+            }
             Self::ContextWindowExceeded(message) => {
                 write!(f, "Context window exceeded: {message}")
             }
@@ -3181,7 +3187,10 @@ impl AIAgentExchange {
             return None;
         }
 
-        Some(format!("readFiles: {}", serde_json::json!({ "files": files })))
+        Some(format!(
+            "readFiles: {}",
+            serde_json::json!({ "files": files })
+        ))
     }
 
     fn codex_read_files_result_files(&self, action_id: &AIAgentActionId) -> Option<&[FileContext]> {

@@ -9,6 +9,7 @@ use warp_terminal::shell::ShellType;
 use warpui::ViewContext;
 
 use super::{release_assets_directory_url, DownloadReady, ReadyForRelaunch};
+use crate::util::links;
 use crate::workspace::Workspace;
 
 lazy_static::lazy_static! {
@@ -205,18 +206,25 @@ mod package_manager {
                     ))],
                 }),
                 FormattedTextLine::Line(vec![
-                    FormattedTextFragment::plain_text("If you installed Warp using "),
+                    FormattedTextFragment::plain_text(format!(
+                        "If you installed {} using ",
+                        ChannelState::product_name()
+                    )),
                     FormattedTextFragment::bold(package_manager_name),
-                    FormattedTextFragment::plain_text(
-                        " or a compatible tool, the pre-filled command will update Warp for you.",
-                    ),
+                    FormattedTextFragment::plain_text(format!(
+                        " or a compatible tool, the pre-filled command will update {} for you.",
+                        ChannelState::product_name()
+                    )),
                 ]),
             ];
 
             if self.package_manager.needs_repository_configuration() {
                 lines.push(FormattedTextLine::Line(vec![
                     FormattedTextFragment::plain_text(
-                        "\nThe command below includes a one-time configuration of the Warp package repository and PGP signing key.",
+                        format!(
+                            "\nThe command below includes a one-time configuration of the {} package repository and PGP signing key.",
+                            ChannelState::product_name()
+                        ),
                     ),
                 ]));
             }
@@ -231,7 +239,10 @@ mod package_manager {
                     ),
                     FormattedTextFragment::inline_code("warp_handle_dist_upgrade"),
                     FormattedTextFragment::plain_text(
-                        " function ensures the Warp package repository is enabled, as we've detected you recently upgraded your distribution.",
+                        format!(
+                            " function ensures the {} package repository is enabled, as we've detected you recently upgraded your distribution.",
+                            ChannelState::product_name()
+                        ),
                     ),
                 ]));
             }
@@ -239,10 +250,13 @@ mod package_manager {
             lines.push(FormattedTextLine::Line(vec![
                 FormattedTextFragment::plain_text("\nReview the command below, then "),
                 FormattedTextFragment::bold("press enter"),
-                FormattedTextFragment::plain_text(" to install the update and re-launch Warp.  "),
+                FormattedTextFragment::plain_text(format!(
+                    " to install the update and re-launch {}.  ",
+                    ChannelState::product_name()
+                )),
                 FormattedTextFragment::hyperlink(
                     "Please report any issues",
-                    "https://github.com/warpdotdev/Warp/issues/new/choose",
+                    links::github_issues_url(),
                 ),
             ]));
 

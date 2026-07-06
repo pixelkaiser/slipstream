@@ -23,9 +23,9 @@ const NO_CONNECTION_PRIMARY_TEXT: &str = "No internet connection";
 const ANONYMOUS_USER_REQUEST_LIMIT_SOFT_GATE_PRIMARY_TEXT: &str = "";
 const ANONYMOUS_USER_REQUEST_LIMIT_HARD_GATE_PRIMARY_TEXT: &str = "At Limit -";
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_PRIMARY_TEXT: &str = "Restricted due to payment issue";
-const OUT_OF_REQUESTS_PRIMARY_TEXT: &str = "Out of credits";
+const OUT_OF_REQUESTS_PRIMARY_TEXT: &str = "AI limit reached";
 
-const ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT: &str = "Sign up for more AI credits";
+const ANONYMOUS_USER_REQUEST_LIMIT_ACTION_TEXT: &str = "Sign up for more AI access";
 const DELINQUENT_DUE_TO_PAYMENT_ISSUE_ACTION_TEXT: &str = "Manage billing";
 const OVERAGES_TOGGLEABLE_BUT_NOT_ENABLED_ACTION_TEXT: &str = "Enable premium overages";
 const MONTHLY_OVERAGES_SPEND_LIMIT_REACHED_ACTION_TEXT: &str = "Increase monthly spend limit";
@@ -391,7 +391,7 @@ impl View for PromptAlertView {
         if suggest_buy_credits {
             text_fragments.push(FormattedTextFragment::plain_text("  "));
             text_fragments.push(FormattedTextFragment::hyperlink_action(
-                "Add credits",
+                "Manage usage",
                 WorkspaceAction::ShowSettingsPage(SettingsSection::BillingAndUsage),
             ));
         } else {

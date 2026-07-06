@@ -466,7 +466,7 @@ impl FileBasedMCPManager {
                 ),
                 Err(err) => {
                     log::error!(
-                        "Failed to copy externally detected MCP server '{}' into Warp config {}: {err:#}",
+                        "Failed to copy externally detected MCP server '{}' into app config {}: {err:#}",
                         installation.templatable_mcp_server().name,
                         config_path.display()
                     );
@@ -581,7 +581,7 @@ impl FileBasedMCPManager {
             None => {
                 let object = config
                     .as_object_mut()
-                    .ok_or_else(|| anyhow::anyhow!("Warp MCP config is not a JSON object"))?;
+                    .ok_or_else(|| anyhow::anyhow!("App MCP config is not a JSON object"))?;
                 object
                     .entry("mcpServers")
                     .or_insert_with(|| Value::Object(Map::new()))

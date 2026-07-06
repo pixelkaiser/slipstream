@@ -54,7 +54,10 @@ where
         ..Default::default()
     };
 
-    let text = "You are currently offline. An internet connection is required to use Warp for the first time.";
+    let text = format!(
+        "You are currently offline. An internet connection is required to use {} for the first time.",
+        ChannelState::product_name()
+    );
 
     let (button_color, button_variant) = action_button_color_and_variant(appearance);
     let button_styles = UiComponentStyles {
@@ -454,7 +457,11 @@ pub fn render_privacy_settings_toggles<A: Action + Clone + 'static>(
         .with_child(
             Shrinkable::new(
                 1.,
-                render_privacy_settings_section_header("Help improve Warp", appearance).finish(),
+                render_privacy_settings_section_header(
+                    &format!("Help improve {}", ChannelState::product_name()),
+                    appearance,
+                )
+                .finish(),
             )
             .finish(),
         )

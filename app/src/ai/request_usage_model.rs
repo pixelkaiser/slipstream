@@ -12,6 +12,7 @@ use warpui::{AppContext, Entity, ModelContext, SingletonEntity};
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::AIAgentExchangeId;
 use crate::auth::AuthStateProvider;
+use crate::channel::ChannelState;
 use crate::pricing::PricingInfoModel;
 use crate::server::server_api::ai::AIClient;
 use crate::settings::AISettings;
@@ -581,6 +582,10 @@ impl AIRequestUsageModel {
         &self,
         ctx: &AppContext,
     ) -> BuyCreditsBannerDisplayState {
+        if ChannelState::is_slipstream() {
+            return BuyCreditsBannerDisplayState::Hidden;
+        }
+
         // Early return if user dismissed
         if self.buy_addon_credits_banner_dismissed {
             return BuyCreditsBannerDisplayState::Hidden;

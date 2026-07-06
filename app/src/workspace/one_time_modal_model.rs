@@ -514,6 +514,10 @@ impl OneTimeModalModel {
     }
 
     fn check_and_trigger_oz_launch_modal(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if ChannelState::is_slipstream() {
+            return false;
+        }
+
         // Only show if the feature flag is enabled.
         if !FeatureFlag::OzLaunchModal.is_enabled() {
             return false;
@@ -628,6 +632,10 @@ impl OneTimeModalModel {
         ctx: &mut ModelContext<Self>,
     ) -> bool {
         use crate::workspaces::user_workspaces::UserWorkspaces;
+
+        if ChannelState::is_slipstream() {
+            return false;
+        }
 
         // Check if already dismissed
         let general_settings = GeneralSettings::as_ref(ctx);

@@ -7,6 +7,7 @@ use warpui::{Entity, ModelContext, SingletonEntity};
 use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, BonusGrant, BonusGrantScope,
 };
+use crate::channel::ChannelState;
 use crate::terminal::general_settings::GeneralSettings;
 
 pub struct BonusGrantNotificationModel {
@@ -41,6 +42,10 @@ impl BonusGrantNotificationModel {
     }
 
     fn check_for_new_bonus_grants(&mut self, ctx: &mut ModelContext<Self>) {
+        if ChannelState::is_slipstream() {
+            return;
+        }
+
         let usage_model = AIRequestUsageModel::as_ref(ctx);
         let bonus_grants = usage_model.bonus_grants();
 
@@ -110,7 +115,7 @@ impl BonusGrantNotificationModel {
             BonusGrantScope::Workspace(_) => "team",
         };
         format!(
-            "{} Reload Credits have been added to your {}.",
+            "{} AI requests have been added to your {}.",
             grant.request_credits_granted, scope_text
         )
     }

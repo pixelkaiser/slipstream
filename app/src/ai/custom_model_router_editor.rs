@@ -687,7 +687,7 @@ impl CustomRouterEditorView {
             );
             let rules_copy = FormattedText::new([
                 FormattedTextLine::Line(vec![FormattedTextFragment::plain_text(
-                    "Rules are custom prompts that describe when to use a specific model. Warp intelligently matches your tasks against these rules.",
+                    "Rules are custom prompts that describe when to use a specific model. The app intelligently matches your tasks against these rules.",
                 )]),
                 FormattedTextLine::Line(vec![FormattedTextFragment::plain_text(
                     "Rules are matched top to bottom — rules higher in the list take precedence over those below.",
@@ -750,7 +750,7 @@ impl CustomRouterEditorView {
             FormattedTextLine::Line(vec![
                 FormattedTextFragment::bold("Complexity-based"),
                 FormattedTextFragment::plain_text(
-                    " routing chooses a model based on Warp's classification of the task's difficulty.",
+                    " routing chooses a model based on the app's classification of the task's difficulty.",
                 ),
             ]),
             FormattedTextLine::Line(vec![

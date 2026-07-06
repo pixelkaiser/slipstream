@@ -1,4 +1,5 @@
 use ui_components::{button, Component as _, Options as _};
+use warp_core::channel::ChannelState;
 use warp_core::ui::appearance::Appearance;
 use warp_core::ui::icons::Icon;
 use warp_core::ui::theme::color::internal_colors;
@@ -115,7 +116,10 @@ impl AiAccessSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Save with a recurring plan, or explore Warp's AI before committing.",
+            format!(
+                "Save with a recurring plan, or explore {} AI before committing.",
+                ChannelState::product_name()
+            ),
             appearance.ui_font_family(),
             16.,
         )
@@ -309,8 +313,11 @@ impl AiAccessSlide {
             .finish();
 
         let description = FormattedTextElement::from_str(
-            "Explore Warp's built-in AI features before committing to a plan, or bring your own \
+            format!(
+                "Explore {}'s built-in AI features before committing to a plan, or bring your own \
              inference.",
+                ChannelState::product_name()
+            ),
             appearance.ui_font_family(),
             14.,
         )

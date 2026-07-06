@@ -15,6 +15,7 @@ use warpui::accessibility::{AccessibilityContent, ActionAccessibilityContent, Wa
 use warpui::{SingletonEntity, ViewContext};
 
 use super::{Event, InlineBannerItem, InlineBannerType, TerminalView};
+use crate::channel::ChannelState;
 #[cfg(feature = "local_fs")]
 use crate::code::editor_management::CodeSource;
 use crate::report_if_error;
@@ -22,6 +23,7 @@ use crate::terminal::event::UserBlockCompleted;
 use crate::terminal::general_settings::GeneralSettings;
 use crate::terminal::model::session::Session;
 use crate::terminal::view::inline_banner::{OpenInWarpBannerAction, OpenInWarpBannerState};
+use crate::util::links;
 use crate::util::openable_file_type::{is_file_openable_in_warp, OpenableFileType};
 
 #[cfg(test)]
@@ -32,7 +34,7 @@ const LEARN_MORE_MARKDOWN_URL: &str =
     "https://docs.warp.dev/terminal/more-features/markdown-viewer";
 const LEARN_MORE_CODE_URL: &str = "https://docs.warp.dev/code/overview#built-in-code-editor";
 
-/// A path to a file that can be opened in Warp, along with its type.
+/// A path to a file that can be opened in the app, along with its type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenablePath {
     pub path: PathBuf,
@@ -86,7 +88,7 @@ impl TerminalView {
         }
     }
 
-    /// Whether or not the "Open in Warp" banner is open.
+    /// Whether or not the open-in-app banner is open.
     #[cfg(feature = "integration_tests")]
     pub fn is_open_in_warp_banner_open(&self) -> bool {
         self.inline_banners_state.open_in_warp_banner.is_some()
@@ -116,7 +118,7 @@ impl TerminalView {
     }
 
     /// Insert a suggestion banner for opening the file `openable_path`, originating from
-    /// `session`, in a Warp pane.
+    /// `session`, in an app pane.
     fn suggest_open_in_warp(
         &mut self,
         openable_path: OpenablePath,
@@ -183,9 +185,13 @@ impl TerminalView {
             }
             OpenInWarpBannerAction::LearnMore => {
                 if let Some(banner_state) = &self.inline_banners_state.open_in_warp_banner {
-                    let url = match banner_state.target.file_type {
-                        OpenableFileType::Markdown => LEARN_MORE_MARKDOWN_URL,
-                        OpenableFileType::Code | OpenableFileType::Text => LEARN_MORE_CODE_URL,
+                    let url = if ChannelState::is_slipstream() {
+                        links::user_docs_url()
+                    } else {
+                        match banner_state.target.file_type {
+                            OpenableFileType::Markdown => LEARN_MORE_MARKDOWN_URL,
+                            OpenableFileType::Code | OpenableFileType::Text => LEARN_MORE_CODE_URL,
+                        }
                     };
                     ctx.open_url(url);
                 }
@@ -224,7 +230,11 @@ impl TerminalView {
                 match &self.inline_banners_state.open_in_warp_banner {
                     Some(banner_state) => {
                         ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
-                            format!("Open {} in Warp", banner_state.target.path.display()),
+                            format!(
+                                "Open {} in {}",
+                                banner_state.target.path.display(),
+                                ChannelState::product_name()
+                            ),
                             WarpA11yRole::UserAction,
                         ))
                     }
@@ -233,14 +243,17 @@ impl TerminalView {
             }
             OpenInWarpBannerAction::Close => {
                 ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
-                    "Close View in Warp banner",
+                    format!("Close View in {} banner", ChannelState::product_name()),
                     WarpA11yRole::UserAction,
                 ))
             }
             OpenInWarpBannerAction::LearnMore => {
                 ActionAccessibilityContent::Custom(AccessibilityContent::new(
                     "Learn more",
-                    "Learn more about opening Markdown files in Warp",
+                    format!(
+                        "Learn more about opening Markdown files in {}",
+                        ChannelState::product_name()
+                    ),
                     WarpA11yRole::UserAction,
                 ))
             }

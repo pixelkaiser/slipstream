@@ -26,7 +26,7 @@ use warpui::elements::{
 use warpui::event::{DispatchedEvent, KeyState, ModifiersState};
 use warpui::fonts::{FamilyId, Properties, Weight};
 use warpui::geometry::rect::RectF;
-use warpui::geometry::vector::{Vector2F, vec2f};
+use warpui::geometry::vector::{vec2f, Vector2F};
 use warpui::platform::keyboard::KeyCode;
 use warpui::platform::Cursor;
 use warpui::text::SelectionType;
@@ -43,7 +43,6 @@ use super::cursor_trail::{CursorTrailStateHandle, CursorTrailSurface};
 use super::find::{BlockFindRenderData, TerminalFindModel};
 use super::grid_renderer::CellGlyphCache;
 use super::meta_shortcuts::handle_keystroke_despite_composing;
-use super::model::SecretHandle;
 use super::model::block::BlockId;
 use super::model::blocks::{RichContentItem, SelectionRange};
 use super::model::grid::grid_handler::{Link, TermMode};
@@ -51,19 +50,20 @@ use super::model::image_map::StoredImageMetadata;
 use super::model::mouse::{MouseAction, MouseButton, MouseState};
 use super::model::session::SessionId;
 use super::model::terminal_model::{SelectedBlocks, WithinBlock, WithinModel};
+use super::model::SecretHandle;
 use super::shared_session::presence_manager::{
-    MUTED_PARTICIPANT_COLOR, PresenceManager, text_selection_color,
+    text_selection_color, PresenceManager, MUTED_PARTICIPANT_COLOR,
 };
 use super::shared_session::render_util::SHARED_SESSION_AVATAR_DIAMETER;
 use super::view::{
-    BLOCK_BANNER_HEIGHT, BlocklistAIRenderContext, InlineBannerId, RichContentMetadata,
-    SeparatorId, SharedSessionBanners, TerminalEditor, TerminalViewRenderContext,
+    BlocklistAIRenderContext, InlineBannerId, RichContentMetadata, SeparatorId,
+    SharedSessionBanners, TerminalEditor, TerminalViewRenderContext, BLOCK_BANNER_HEIGHT,
 };
 use super::warpify::render::{draw_flag_pole, render_subshell_flag};
 use super::{heights_approx_eq, TerminalModel, HEIGHT_FUDGE_FACTOR_LINES};
 use crate::ai::blocklist::agent_view::{agent_view_bg_fill, AgentViewState};
 use crate::ai::blocklist::{ai_brand_color, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT};
-use crate::ai_assistant::{AI_ASSISTANT_SVG_PATH, ASK_AI_ASSISTANT_TEXT};
+use crate::ai_assistant::{ask_ai_assistant_text, AI_ASSISTANT_SVG_PATH};
 use crate::appearance::Appearance;
 use crate::drive::settings::WarpDriveSettings;
 use crate::features::FeatureFlag;
@@ -80,7 +80,7 @@ use crate::terminal::model::blocks::{
     BlockHeight, BlockHeightItem, BlockHeightSummary, BlockList, BlockListPoint, TotalIndex,
 };
 use crate::terminal::model::escape_sequences::{
-    KeystrokeWithDetails, ToEscapeSequence, maybe_kitty_keyboard_escape_sequence,
+    maybe_kitty_keyboard_escape_sequence, KeystrokeWithDetails, ToEscapeSequence,
 };
 use crate::terminal::model::index::Point as IndexPoint;
 use crate::terminal::model::selection::{SelectAction, SelectionPoint};
@@ -1170,23 +1170,23 @@ impl BlockListElement {
                 if has_active_long_running_command && active_block.index() == block_index {
                     (
                         Some(TerminalAction::SetInputModeAgent),
-                        TAG_AGENT_FOR_ASSISTANCE_TEXT,
+                        TAG_AGENT_FOR_ASSISTANCE_TEXT.to_string(),
                     )
                 } else {
                     (
                         Some(TerminalAction::AskAIAssistant { block_index }),
-                        *ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
+                        (*ATTACH_AS_AGENT_MODE_CONTEXT_TEXT).to_string(),
                     )
                 }
             } else {
                 (
                     Some(TerminalAction::AskAIAssistant { block_index }),
-                    ASK_AI_ASSISTANT_TEXT,
+                    ask_ai_assistant_text(),
                 )
             };
 
             let tooltip = ToolbeltButtonTooltip {
-                label: ai_button_tooltip.to_owned(),
+                label: ai_button_tooltip,
                 tool_tip_below_button: should_render_tooltip_below_button,
             };
 

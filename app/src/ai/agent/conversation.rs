@@ -5,9 +5,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use ai::agent::orchestration_config::{OrchestrationConfig, OrchestrationConfigStatus};
-use ai::LLMId;
 use ai::document::AIDocumentId;
 use ai::skills::SkillPathOrigin;
+use ai::LLMId;
 use chrono::{DateTime, Local, TimeZone};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
@@ -41,9 +41,8 @@ use super::{
     AIAgentOutput, AIAgentOutputStatus, AIAgentText, AIAgentTextSection, AIAgentTodo,
     AIAgentTodoId, AgentOutputText, AnyFileContent, FileContext, FileLocations,
     FinishedAIAgentOutput, MessageId, OutputModelInfo, ReadFilesRequest, ReadFilesResult,
-    RenderableAIError,
-    RequestCommandOutputResult, RequestCost, ServerOutputId, Shared, SuggestedLoggingId,
-    Suggestions, UserQueryMode,
+    RenderableAIError, RequestCommandOutputResult, RequestCost, ServerOutputId, Shared,
+    SuggestedLoggingId, Suggestions, UserQueryMode,
 };
 use crate::ai::agent::api::convert_conversation::{
     compute_time_to_first_token_ms_from_messages, proto_timestamp_to_local_datetime,

@@ -131,10 +131,7 @@ pub fn write_has_auto_opened_welcome_folder_to_user_defaults(app: &mut AppContex
     schemars::JsonSchema,
     settings_value::SettingsValue,
 )]
-#[schemars(
-    description = "Sort order for Warp Drive items.",
-    rename_all = "snake_case"
-)]
+#[schemars(description = "Sort order for Drive items.", rename_all = "snake_case")]
 pub enum DriveSortOrder {
     /// Sort by newest revision first in main index, most recently trashed in trash index
     #[default]

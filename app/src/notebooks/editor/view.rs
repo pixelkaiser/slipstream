@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use markdown_parser::{parse_html, parse_markdown, FormattedText};
 use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
+use warp_core::channel::ChannelState;
 use warp_editor::content::anchor::Anchor;
 use warp_editor::content::text::{BufferTextStyle, CodeBlockType, TextStyles};
 use warp_editor::content::version::BufferVersion;
@@ -2535,7 +2536,7 @@ impl RichTextEditorView {
         if show_open_in_warp {
             let path_for_warp = path.clone();
             links.push(TooltipLink {
-                text: "Open in Warp".to_string(),
+                text: format!("Open in {}", ChannelState::product_name()),
                 on_click: Box::new(move |ctx: &mut EventContext| {
                     ctx.dispatch_typed_action(EditorViewAction::OpenFile {
                         path: path_for_warp.clone(),

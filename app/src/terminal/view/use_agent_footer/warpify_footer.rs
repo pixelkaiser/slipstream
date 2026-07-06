@@ -15,7 +15,7 @@ use crate::view_components::action_button::{
 };
 
 /// Footer view rendered for detected subshell commands, offering both
-/// "Warpify" and "Use agent" buttons in a horizontal row.
+/// "Enable shell integration" and "Use agent" buttons in a horizontal row.
 pub(super) struct WarpifyFooterView {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     warpify_button: ViewHandle<ActionButton>,
@@ -30,14 +30,17 @@ impl WarpifyFooterView {
         let button_size = ButtonSize::XSmall;
 
         let warpify_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Warpify subshell", AgentFooterButtonTheme::new(None))
-                .with_icon(Icon::Warp)
-                .with_size(button_size)
-                .with_tooltip("Enable Warp shell integration in this session")
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(WarpifyFooterViewAction::Warpify);
-                })
+            ActionButton::new(
+                "Enable shell integration",
+                AgentFooterButtonTheme::new(None),
+            )
+            .with_icon(Icon::Warp)
+            .with_size(button_size)
+            .with_tooltip("Enable shell integration in this session")
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(WarpifyFooterViewAction::Warpify);
+            })
         });
 
         let use_agent_button = ctx.add_typed_action_view(|ctx| {
@@ -45,7 +48,7 @@ impl WarpifyFooterView {
                 .with_icon(Icon::Oz)
                 .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
                 .with_size(button_size)
-                .with_tooltip("Ask the Warp agent to assist")
+                .with_tooltip("Ask the agent to assist")
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(WarpifyFooterViewAction::UseAgent);

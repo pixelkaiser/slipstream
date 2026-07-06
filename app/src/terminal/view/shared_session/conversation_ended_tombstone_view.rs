@@ -24,6 +24,8 @@ use crate::ai::ambient_agents::{
 use crate::ai::artifacts::{Artifact, ArtifactButtonsRow, ArtifactButtonsRowEvent};
 use crate::ai::blocklist::{format_credits, BlocklistAIHistoryModel};
 use crate::appearance::Appearance;
+#[cfg(target_family = "wasm")]
+use crate::channel::ChannelState;
 use crate::server::ids::SyncId;
 use crate::server::server_api::ServerApiProvider;
 use crate::settings::ai::{AISettings, AISettingsChangedEvent};
@@ -236,13 +238,19 @@ impl ConversationEndedTombstoneView {
             } else {
                 conversation_id.map(|conv_id| {
                     ctx.add_typed_action_view(move |_| {
-                        ActionButton::new("Open in Warp", PrimaryTheme)
-                            .with_tooltip("Open this conversation in the Warp desktop app")
-                            .on_click(move |ctx| {
-                                ctx.dispatch_typed_action(
-                                    ConversationEndedTombstoneAction::OpenInWarp(conv_id),
-                                );
-                            })
+                        ActionButton::new(
+                            format!("Open in {}", ChannelState::product_name()),
+                            PrimaryTheme,
+                        )
+                        .with_tooltip(format!(
+                            "Open this conversation in the {} desktop app",
+                            ChannelState::product_name()
+                        ))
+                        .on_click(move |ctx| {
+                            ctx.dispatch_typed_action(
+                                ConversationEndedTombstoneAction::OpenInWarp(conv_id),
+                            );
+                        })
                     })
                 })
             };
@@ -438,7 +446,7 @@ impl ConversationEndedTombstoneView {
         }
 
         if let Some(credits) = &self.display_data.credits {
-            parts.push(format!("Credits used: {credits}"));
+            parts.push(format!("Usage: {credits}"));
         }
 
         if parts.is_empty() {

@@ -203,7 +203,7 @@ impl View for SpendingLimitModal {
         .finish();
 
         let additional_note_text = Text::new(
-            "Note that AI credits made near your chosen limit may exceed it by a few dollars.",
+            "Note that AI requests made near your chosen limit may exceed it by a few dollars.",
             appearance.ui_font_family(),
             12.,
         )

@@ -97,7 +97,7 @@ use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::WorkspaceUid;
 use crate::{report_if_error, send_telemetry_from_ctx, ObjectActions};
 
-const WARP_DRIVE_TITLE: &str = "Warp Drive";
+const WARP_DRIVE_TITLE: &str = "Drive";
 
 // Team zero state consts
 const HINT_HORIZONTAL_PADDING: f32 = 18.;
@@ -186,7 +186,7 @@ const SORTING_BUTTON_TOOLTIP_LABEL: &str = "Sort by";
 const RETRY_BUTTON_TOOLTIP_LABEL: &str = "Retry sync";
 
 const SHARED_OBJECT_LIMIT_HIT_BANNER_LINE: &str =
-    "Upgrade for access to more notebooks, workflows, shared sessions, and AI credits.";
+    "Upgrade for access to more notebooks, workflows, shared sessions, and AI requests.";
 
 const PAYMENT_ISSUE_BANNER_LINE_1: &str =
     "Shared objects have been restricted due to a subscription payment issue.";
@@ -1255,7 +1255,9 @@ impl DriveIndex {
                     {
                         self.expand_section_for_object(&id.uid().clone(), ctx);
                     } else {
-                        log::warn!("unknown GenericStringObject type found while trying to manually expand drive section. {object_id:?}");
+                        log::warn!(
+                            "unknown GenericStringObject type found while trying to manually expand drive section. {object_id:?}"
+                        );
                     }
                 }
             };
@@ -1720,7 +1722,7 @@ impl DriveIndex {
             (DriveIndexVariant::MainIndex, DriveIndexSection::JoinTeam) => {
                 if self.is_online(app) {
                     let join_teams_text = format!(
-                        "Collaborate with {} of your teammates already on Warp.",
+                        "Collaborate with {} of your teammates already using the app.",
                         UserWorkspaces::handle(app)
                             .as_ref(app)
                             .total_teammates_in_joinable_teams()
@@ -2968,7 +2970,7 @@ impl DriveIndex {
                 if mouse_state.is_hovered() {
                     let tooltip = appearance
                         .ui_builder()
-                        .tool_tip(String::from("Syncing Warp Drive"));
+                        .tool_tip(String::from("Syncing Drive"));
 
                     stack.add_positioned_overlay_child(
                         tooltip.build().finish(),
@@ -3950,7 +3952,7 @@ impl DriveIndex {
             .with_cross_axis_alignment(CrossAxisAlignment::Start)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_child(
-                Text::new_inline("Warp Drive".to_string(), appearance.ui_font_family(), 14.)
+                Text::new_inline("Drive".to_string(), appearance.ui_font_family(), 14.)
                     .with_color(theme.main_text_color(background_color).into())
                     .with_style(Properties {
                         weight: warpui::fonts::Weight::Bold,
@@ -5395,7 +5397,9 @@ impl TypedActionView for DriveIndex {
                         log::error!("Creation of EnvVarCollections is not yet supported")
                     }
                     DriveObjectType::AIFact | DriveObjectType::AIFactCollection => {
-                        log::error!("Use DriveIndexAction::OpenAIFactCollection to open the pane view instead");
+                        log::error!(
+                            "Use DriveIndexAction::OpenAIFactCollection to open the pane view instead"
+                        );
                     }
                     DriveObjectType::MCPServer | DriveObjectType::MCPServerCollection => {
                         log::error!(

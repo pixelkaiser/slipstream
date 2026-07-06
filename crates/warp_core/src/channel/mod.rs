@@ -83,6 +83,47 @@ impl Channel {
         }
     }
 
+    /// Returns true for the Slipstream OSS distribution.
+    pub fn is_slipstream(&self) -> bool {
+        matches!(self, Channel::Oss)
+    }
+
+    /// Returns the branded agent name for UI copy.
+    pub fn agent_name(&self) -> &'static str {
+        match self {
+            Channel::Oss => "Slipstream Agent",
+            Channel::Stable
+            | Channel::Preview
+            | Channel::Dev
+            | Channel::Local
+            | Channel::Integration => "Warp Agent",
+        }
+    }
+
+    /// Returns the branded AI assistant name for UI copy.
+    pub fn ai_name(&self) -> &'static str {
+        match self {
+            Channel::Oss => "Slipstream AI",
+            Channel::Stable
+            | Channel::Preview
+            | Channel::Dev
+            | Channel::Local
+            | Channel::Integration => "Warp AI",
+        }
+    }
+
+    /// Returns the branded local-control CLI name for UI copy.
+    pub fn control_cli_name(&self) -> &'static str {
+        match self {
+            Channel::Oss => "Slipstream Control CLI",
+            Channel::Stable
+            | Channel::Preview
+            | Channel::Dev
+            | Channel::Local
+            | Channel::Integration => "Warp Control CLI",
+        }
+    }
+
     /// Returns the Warp Control CLI command name corresponding to this channel.
     pub fn warpctrl_command_name(&self) -> &'static str {
         match self {

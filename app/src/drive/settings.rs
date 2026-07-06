@@ -2,6 +2,8 @@ use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 use warp_core::features::FeatureFlag;
 
+use crate::channel::ChannelState;
+
 use super::DriveSortOrder;
 
 pub const HAS_AUTO_OPENED_WELCOME_FOLDER: &str = "HasAutoOpenedWelcomeFolder";
@@ -14,7 +16,7 @@ define_settings_group!(WarpDriveSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "warp_drive.sorting_choice",
-        description: "The sort order for items in Warp Drive.",
+        description: "The sort order for items in Drive.",
     },
     sharing_onboarding_block_shown: WarpDriveSharingOnboardingBlockShown {
         type: bool,
@@ -23,7 +25,7 @@ define_settings_group!(WarpDriveSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: true,
     },
-    // Controls whether Warp Drive appears in the tools panel, command palette, and command search.
+    // Controls whether Drive appears in the tools panel, command palette, and command search.
     enable_warp_drive: EnableWarpDrive {
         type: bool,
         default: true,
@@ -31,7 +33,7 @@ define_settings_group!(WarpDriveSettings, settings: [
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
         toml_path: "warp_drive.enabled",
-        description: "Whether Warp Drive is enabled.",
+        description: "Whether Drive is enabled.",
     },
 ]);
 
@@ -41,6 +43,10 @@ impl WarpDriveSettings {
     /// regardless of the user setting.
     pub fn is_warp_drive_enabled(app: &warpui::AppContext) -> bool {
         use warpui::SingletonEntity as _;
+        if ChannelState::is_slipstream() {
+            return false;
+        }
+
         let is_anonymous_or_logged_out = FeatureFlag::SkipFirebaseAnonymousUser.is_enabled()
             && crate::auth::AuthStateProvider::as_ref(app)
                 .get()

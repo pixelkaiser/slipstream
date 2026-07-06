@@ -316,23 +316,25 @@ impl CustomizeUISlide {
                 })),
             });
 
-            chips.push(ChipSpec {
-                label: drive_name(),
-                is_enabled: ui.show_warp_drive,
-                mouse_state: self.chip_warp_drive_mouse.clone(),
-                on_click: Box::new(|ctx, _, _| {
-                    ctx.dispatch_typed_action(CustomizeSlideAction::ToggleToolsSubSetting {
-                        setting: ToolsPanelSubSetting::WarpDrive,
-                    });
-                }),
-                on_hover: Some(Box::new(|is_hovered, ctx, _, _| {
-                    if is_hovered {
-                        ctx.dispatch_typed_action(CustomizeSlideAction::HoverToolsChip {
+            if !ChannelState::is_slipstream() {
+                chips.push(ChipSpec {
+                    label: drive_name(),
+                    is_enabled: ui.show_warp_drive,
+                    mouse_state: self.chip_warp_drive_mouse.clone(),
+                    on_click: Box::new(|ctx, _, _| {
+                        ctx.dispatch_typed_action(CustomizeSlideAction::ToggleToolsSubSetting {
                             setting: ToolsPanelSubSetting::WarpDrive,
                         });
-                    }
-                })),
-            });
+                    }),
+                    on_hover: Some(Box::new(|is_hovered, ctx, _, _| {
+                        if is_hovered {
+                            ctx.dispatch_typed_action(CustomizeSlideAction::HoverToolsChip {
+                                setting: ToolsPanelSubSetting::WarpDrive,
+                            });
+                        }
+                    })),
+                });
+            }
         }
 
         render_toggle_card(
@@ -832,8 +834,10 @@ impl TypedActionView for CustomizeUISlide {
                             model.set_show_global_search(!current, ctx);
                         }
                         ToolsPanelSubSetting::WarpDrive => {
-                            let current = model.ui_customization().show_warp_drive;
-                            model.set_show_warp_drive(!current, ctx);
+                            if !ChannelState::is_slipstream() {
+                                let current = model.ui_customization().show_warp_drive;
+                                model.set_show_warp_drive(!current, ctx);
+                            }
                         }
                     });
                 ctx.notify();

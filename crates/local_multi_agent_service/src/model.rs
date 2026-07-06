@@ -24,7 +24,7 @@ pub fn configured_model_aliases(raw_aliases: Option<&str>) -> Result<BTreeMap<St
     let value: serde_json::Value = serde_json::from_str(raw_aliases)?;
     let Some(object) = value.as_object() else {
         bail!(
-            "LOCAL_MODEL_ALIASES must be a JSON object mapping Warp model IDs to provider model IDs."
+            "LOCAL_MODEL_ALIASES must be a JSON object mapping local model aliases to provider model IDs."
         );
     };
     Ok(object
@@ -101,12 +101,9 @@ mod tests {
 
     #[test]
     fn autocomplete_requested_model_is_preserved() {
-        let model = resolve_provider_model(
-            Some("Qwen/Qwen3.6-27B-FP8"),
-            Some("autocomplete"),
-            None,
-        )
-        .unwrap();
+        let model =
+            resolve_provider_model(Some("Qwen/Qwen3.6-27B-FP8"), Some("autocomplete"), None)
+                .unwrap();
         assert_eq!(model, "autocomplete");
     }
 

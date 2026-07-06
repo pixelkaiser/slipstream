@@ -168,7 +168,7 @@ impl ProviderRuntime {
                 let message = if is_xai_request {
                     "Connect your SuperGrok subscription or configure an xAI API key to use local xAI inference."
                 } else {
-                    "OPENAI_API_KEY is not set and the Warp request did not include an OpenAI key."
+                    "OPENAI_API_KEY is not set and the request did not include an OpenAI key."
                 };
                 let provider = provider_for_base_url(&base_url);
                 LocalAgentError::new(

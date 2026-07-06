@@ -1830,7 +1830,7 @@ impl AgentManagementView {
         }
 
         if let Some(usage) = entry.display.request_usage.map(format_credits) {
-            metadata_parts.push(format!("Credits used: {usage}"));
+            metadata_parts.push(format!("Usage: {usage}"));
         }
 
         Text::new(metadata_parts.join(" • "), font_family, font_size)

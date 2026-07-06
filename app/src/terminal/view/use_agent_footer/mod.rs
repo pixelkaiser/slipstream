@@ -11,6 +11,7 @@ use crate::ai::agent::ImageContext;
 use crate::ai::blocklist::agent_view::agent_input_footer::{
     AgentInputFooter, AgentInputFooterEvent,
 };
+use crate::channel::ChannelState;
 use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentSessionsModel};
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
@@ -1074,7 +1075,7 @@ impl UseAgentToolbar {
             .with_icon(Icon::Oz)
             .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
             .with_size(button_size)
-            .with_tooltip("Ask the Warp agent to assist")
+            .with_tooltip(format!("Ask {} to assist", ChannelState::agent_name()))
             .with_tooltip_alignment(TooltipAlignment::Left)
             .on_click(|ctx| {
                 ctx.dispatch_typed_action(TerminalAction::SetInputModeAgent);
@@ -1088,7 +1089,7 @@ impl UseAgentToolbar {
             .with_icon(Icon::Oz)
             .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
             .with_size(button_size)
-            .with_tooltip("Ask the Warp agent to resume")
+            .with_tooltip(format!("Ask {} to resume", ChannelState::agent_name()))
             .with_tooltip_alignment(TooltipAlignment::Left)
             .on_click(|ctx| {
                 ctx.dispatch_typed_action(TerminalAction::SetInputModeAgent);

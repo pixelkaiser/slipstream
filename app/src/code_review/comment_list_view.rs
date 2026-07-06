@@ -915,7 +915,7 @@ impl CommentListView {
         } else if !ai_enabled {
             Cow::Borrowed("AI must be enabled to send comments to Agent")
         } else if !ai_available {
-            Cow::Borrowed("Agent code review requires AI credits")
+            Cow::Borrowed("Agent code review requires AI access")
         } else if matches!(destination, ReviewDestination::None) {
             Cow::Borrowed("All terminals are busy")
         } else if !has_sendable_comments {

@@ -345,6 +345,22 @@ impl ChannelState {
         Self::channel().product_name()
     }
 
+    pub fn is_slipstream() -> bool {
+        Self::channel().is_slipstream()
+    }
+
+    pub fn agent_name() -> &'static str {
+        Self::channel().agent_name()
+    }
+
+    pub fn ai_name() -> &'static str {
+        Self::channel().ai_name()
+    }
+
+    pub fn control_cli_name() -> &'static str {
+        Self::channel().control_cli_name()
+    }
+
     #[cfg(feature = "test-util")]
     pub fn app_version() -> Option<&'static str> {
         let version = APP_VERSION.lock();

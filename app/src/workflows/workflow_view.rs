@@ -10,6 +10,7 @@ use pathfinder_geometry::vector::vec2f;
 use string_offset::CharOffset;
 use syntax_highlightable::SyntaxHighlightable;
 use url::Url;
+use warp_core::channel::ChannelState;
 use warp_core::context_flag::ContextFlag;
 use warp_core::settings::Setting;
 use warp_core::ui::theme::AnsiColorIdentifier;
@@ -169,7 +170,7 @@ const AI_ASSIST_LOADING_TEXT: &str = "Loading";
 
 const ALIAS_HELP_TEXT: &str = "Aliases allow you to create short strings to execute workflows. Each alias can have different argument values and environment variables, and aliases are personal to you.";
 
-const RUN_ON_DESKTOP_BUTTON_TEXT: &str = "Run in Warp";
+const RUN_ON_DESKTOP_BUTTON_TEXT: &str = "Run in app";
 const RUN_ON_DESKTOP_BUTTON_WIDTH: f32 = 108.;
 
 const UNSAVED_CHANGES_TEXT: &str = "You have unsaved changes.";
@@ -2450,7 +2451,10 @@ impl WorkflowView {
                     .finish();
 
                 let button_with_tool_tip = appearance.ui_builder().tool_tip_on_element(
-                    "Generate a title, descriptions, or parameters with Warp AI".to_string(),
+                    format!(
+                        "Generate a title, descriptions, or parameters with {}",
+                        ChannelState::ai_name()
+                    ),
                     self.ui_state_handles.ai_assist_tool_tip.clone(),
                     rendered_button,
                     ParentAnchor::TopMiddle,
@@ -2654,7 +2658,7 @@ impl WorkflowView {
                                         pane.display_upgrade_error(Some(team.uid), current_user_id, ctx);
                                     } else {
                                         pane.display_error_toast(
-                                            "Looks like you're out of AI credits. Contact a team admin to upgrade for more credits.".to_string(),
+                                            "Provider or account limit reached. Contact a team admin to check account limits.".to_string(),
                                             ctx,
                                         );
                                     }
@@ -2709,15 +2713,15 @@ impl WorkflowView {
 
         let window_id = ctx.window_id();
         let toast_link = if self.auth_state.is_anonymous_or_logged_out() {
-            ToastLink::new("Upgrade for more credits.".into())
+            ToastLink::new("Review account limits.".into())
                 .with_onclick_action(WorkspaceAction::AttemptLoginGatedAIUpgrade)
         } else {
-            ToastLink::new("Upgrade for more credits.".into()).with_href(upgrade_link)
+            ToastLink::new("Review account limits.".into()).with_href(upgrade_link)
         };
 
         crate::workspace::ToastStack::handle(ctx).update(ctx, |stack, ctx| {
             stack.add_ephemeral_toast(
-                DismissibleToast::error("Looks like you're out of AI credits.".into())
+                DismissibleToast::error("Provider or account limit reached.".into())
                     .with_link(toast_link),
                 window_id,
                 ctx,

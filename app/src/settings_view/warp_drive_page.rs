@@ -13,6 +13,8 @@ use warpui::{
     id, Action, AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
 };
 
+use crate::channel::ChannelState;
+
 use super::settings_page::{
     render_body_item, AdditionalInfo, MatchData, PageType, SettingsPageMeta,
     SettingsPageViewHandle, SettingsWidget,
@@ -37,9 +39,13 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     context: &ContextPredicate,
     builder: fn(SettingsAction) -> T,
 ) {
+    if ChannelState::is_slipstream() {
+        return;
+    }
+
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
         vec![ToggleSettingActionPair::custom(
-            SettingActionPairDescriptions::new("Enable Warp Drive", "Disable Warp Drive"),
+            SettingActionPairDescriptions::new("Enable Drive", "Disable Drive"),
             builder(SettingsAction::WarpDrive(
                 WarpDriveSettingsPageAction::ToggleShowWarpDrive,
             )),
@@ -117,7 +123,7 @@ impl SettingsPageMeta for WarpDriveSettingsPageView {
     }
 
     fn should_render(&self, _ctx: &AppContext) -> bool {
-        FeatureFlag::OpenWarpNewSettingsModes.is_enabled()
+        FeatureFlag::OpenWarpNewSettingsModes.is_enabled() && !ChannelState::is_slipstream()
     }
 
     fn update_filter(&mut self, query: &str, ctx: &mut ViewContext<Self>) -> MatchData {
@@ -168,7 +174,7 @@ impl SettingsWidget for WarpDriveHeaderWidget {
 
         let message = Container::new(
             Text::new_inline(
-                "To use Warp Drive, please create an account.".to_string(),
+                "To use Drive, please create an account.".to_string(),
                 appearance.ui_font_family(),
                 14.,
             )
@@ -247,7 +253,7 @@ impl SettingsWidget for WarpDriveToggleWidget {
                 .is_anonymous_or_logged_out();
 
         render_body_item::<WarpDriveSettingsPageAction>(
-            "Warp Drive".into(),
+            "Drive".into(),
             Some(AdditionalInfo {
                 mouse_state: self.info_icon_mouse_state.clone(),
                 on_click_action: Some(WarpDriveSettingsPageAction::OpenUrl(
@@ -277,7 +283,7 @@ impl SettingsWidget for WarpDriveToggleWidget {
                     }
                 })
                 .finish(),
-            Some("Warp Drive is a workspace in your terminal where you can save Workflows, Notebooks, Prompts, and Environment Variables for personal use or to share with a team.".into()),
+            Some("Drive is a workspace in your terminal where you can save Workflows, Notebooks, Prompts, and Environment Variables for personal use or to share with a team.".into()),
         )
     }
 }

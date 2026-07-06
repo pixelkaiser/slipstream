@@ -6868,9 +6868,7 @@ fn enter_external_agent_conversation_for_test(
     conversation_id
 }
 
-fn run_external_agent_conversation_input_policy_test(
-    provider: ExternalAgentConversationProvider,
-) {
+fn run_external_agent_conversation_input_policy_test(provider: ExternalAgentConversationProvider) {
     App::test((), |mut app| async move {
         let _agent_mode_flag = FeatureFlag::AgentMode.override_enabled(true);
         let _agent_view_flag = FeatureFlag::AgentView.override_enabled(true);

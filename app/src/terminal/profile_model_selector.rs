@@ -2411,7 +2411,7 @@ impl ProfileModelSelector {
         let theme = appearance.theme();
         let header = self.render_model_spec_header(
             "Model Specs".to_string(),
-            "Warp’s benchmarks for how well a model performs in our harness, the rate at which it consumes credits, and task speed.".to_string(),
+            "Benchmarks for how well a model performs in the harness, request cost, and task speed.".to_string(),
             app,
         );
         let spec = self.render_all_model_spec_values(
@@ -2455,7 +2455,7 @@ impl ProfileModelSelector {
             ),
             ModelSpecSidecarKind::Reasoning => (
                 "Reasoning level",
-                "Increased reasoning levels consume more credits and have higher latency, but higher performance for complicated tasks.",
+                "Increased reasoning levels can use more request capacity and have higher latency, but higher performance for complicated tasks.",
             ),
         };
 

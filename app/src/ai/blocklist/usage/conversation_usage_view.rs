@@ -323,7 +323,7 @@ impl ConversationUsageView {
         ));
         values.push(render_section_header("".to_string(), appearance));
 
-        // "Credits spent (total)" value: use the rollup total when available,
+        // "Usage (total)" value: use the rollup total when available,
         // otherwise the orchestrator's own self total (today's behavior).
         // PRODUCT invariants 2a, 11.
         let total_credits_value = rollup
@@ -335,23 +335,20 @@ impl ConversationUsageView {
             && self.usage_info.credits_spent_for_last_block.is_some()
         {
             let last_block_credits = self.usage_info.credits_spent_for_last_block.unwrap();
-            labels.push(render_label_text(
-                "Credits spent (last response)",
-                appearance,
-            ));
+            labels.push(render_label_text("Usage (last response)", appearance));
             values.push(render_value_text(
                 format_credits(last_block_credits),
                 appearance,
             ));
 
-            labels.push(render_label_text("Credits spent (total)", appearance));
+            labels.push(render_label_text("Usage (total)", appearance));
             values.push(self.render_total_credits_value_row(
                 total_credits_value,
                 rollup.as_ref(),
                 appearance,
             ));
         } else {
-            labels.push(render_label_text("Credits spent", appearance));
+            labels.push(render_label_text("Usage", appearance));
             values.push(self.render_total_credits_value_row(
                 total_credits_value,
                 rollup.as_ref(),

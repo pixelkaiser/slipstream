@@ -67,7 +67,7 @@ impl TeamDeleteDisabledReason {
                 "Your team cannot be deleted with an active subscription."
             }
             TeamDeleteDisabledReason::RemainingBonusCredits => {
-                "Your team cannot be deleted with unused add-on credits."
+                "Your team cannot be deleted with an unused AI request balance."
             }
             TeamDeleteDisabledReason::OtherMembers => {
                 "Your team cannot be deleted with other team members."

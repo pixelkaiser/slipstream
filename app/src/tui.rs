@@ -27,7 +27,7 @@ pub fn init(ctx: &mut AppContext) {
         return;
     }
 
-    println!("Welcome to Warp TUI. Let's get you logged in.");
+    println!("Welcome. Let's get you logged in.");
 
     // Reuses the same device-authorization flow as `oz login` (see
     // `app/src/ai/agent_sdk/admin.rs`). The browser handles login and control
