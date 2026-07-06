@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Validate agent-facing routing docs without project dependencies."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+REQUIRED_FILES = [
+    "AGENTS.md",
+    "PLANS.md",
+    "docs/agent-knowledge-map.md",
+    "LOCAL_DEVELOPMENT.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "RELEASE.md",
+    "Makefile",
+    ".github/workflows/release-macos.yml",
+    ".github/workflows/release-remote-server-latest.yml",
+    ".github/workflows/local-multi-agent-image.yml",
+]
+
+DOCS_WITH_LOCAL_LINKS = [
+    "AGENTS.md",
+    "PLANS.md",
+    "docs/agent-knowledge-map.md",
+    "LOCAL_DEVELOPMENT.md",
+    "README.md",
+    "RELEASE.md",
+]
+
+EXEC_PLAN_SECTIONS = [
+    "Purpose / Big Picture",
+    "Progress",
+    "Surprises & Discoveries",
+    "Decision Log",
+    "Context and Orientation",
+    "Plan of Work",
+    "Concrete Steps",
+    "Validation and Acceptance",
+    "Idempotence and Recovery",
+    "Outcomes & Retrospective",
+]
+
+RELEASE_GUIDANCE_STRINGS = [
+    "byok",
+    "master",
+    "release-macos.yml",
+    "release-remote-server-latest.yml",
+    "local-multi-agent-image.yml",
+    "remote-server-latest",
+    "slipstream-remote-server-linux-x86_64.tar.gz",
+    "gh release view",
+    "make release-macos",
+]
+
+ROUTING_STRINGS = [
+    "docs/agent-knowledge-map.md",
+    "PLANS.md",
+    "LOCAL_DEVELOPMENT.md",
+    "RELEASE.md",
+    "make verify-agent-docs",
+]
+
+
+def fail(message: str) -> None:
+    print(f"verify-agent-docs: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def check_required_files() -> None:
+    missing = [path for path in REQUIRED_FILES if not (ROOT / path).exists()]
+    if missing:
+        fail("missing required file(s): " + ", ".join(missing))
+
+
+def check_local_markdown_links() -> None:
+    link_pattern = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+    ignored_prefixes = ("http://", "https://", "mailto:", "#")
+    broken: list[str] = []
+
+    for doc in DOCS_WITH_LOCAL_LINKS:
+        text = read(doc)
+        base = (ROOT / doc).parent
+        for match in link_pattern.finditer(text):
+            raw_target = match.group(1).strip()
+            if raw_target.startswith(ignored_prefixes):
+                continue
+            target = raw_target.split("#", 1)[0]
+            if not target:
+                continue
+            if target.startswith("<") and target.endswith(">"):
+                target = target[1:-1]
+            candidate = (base / target).resolve()
+            if not candidate.exists():
+                broken.append(f"{doc}: {raw_target}")
+
+    if broken:
+        fail("broken local Markdown link(s): " + "; ".join(broken))
+
+
+def check_exec_plan_convention() -> None:
+    text = read("PLANS.md")
+    missing = [section for section in EXEC_PLAN_SECTIONS if section not in text]
+    if missing:
+        fail("PLANS.md missing ExecPlan section name(s): " + ", ".join(missing))
+
+
+def check_skill_map_coverage() -> None:
+    map_text = read("docs/agent-knowledge-map.md")
+    skill_dirs = sorted(
+        path.parent.name for path in (ROOT / ".agents" / "skills").glob("*/SKILL.md")
+    )
+    missing = [skill for skill in skill_dirs if skill not in map_text]
+    if missing:
+        fail("knowledge map missing repo skill(s): " + ", ".join(missing))
+
+
+def check_release_guidance() -> None:
+    release_text = read("RELEASE.md")
+    map_text = read("docs/agent-knowledge-map.md")
+    combined = release_text + "\n" + map_text
+    missing = [item for item in RELEASE_GUIDANCE_STRINGS if item not in combined]
+    if missing:
+        fail("release guidance missing required string(s): " + ", ".join(missing))
+
+
+def check_agents_router() -> None:
+    text = read("AGENTS.md")
+    missing = [item for item in ROUTING_STRINGS if item not in text]
+    if missing:
+        fail("AGENTS.md missing routing string(s): " + ", ".join(missing))
+    if "WARP.md" in text and not (ROOT / "WARP.md").exists():
+        fail("AGENTS.md references WARP.md, but no top-level WARP.md exists")
+
+
+def main() -> None:
+    check_required_files()
+    check_local_markdown_links()
+    check_exec_plan_convention()
+    check_skill_map_coverage()
+    check_release_guidance()
+    check_agents_router()
+    print("verify-agent-docs: ok")
+
+
+if __name__ == "__main__":
+    main()

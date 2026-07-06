@@ -10,8 +10,10 @@ the task is unfamiliar, then open only the referenced files that match the work.
   positioning.
 - `LOCAL_DEVELOPMENT.md` - local backend, no-cloud defaults, provider
   environment variables, build commands, and troubleshooting.
-- `WARP.md` - engineering guide for build/test commands, architecture, Rust
-  style, terminal locking rules, feature flags, and PR expectations.
+- `Makefile` - local build, check, package, signing utility, and release helper
+  entrypoints.
+- `RELEASE.md` - Slipstream release, package publishing, branch/tag, asset, and
+  GitHub Actions verification runbook.
 - `CONTRIBUTING.md` - public issue/spec/PR workflow, readiness labels, manual
   testing requirements, and review flow.
 - `PLANS.md` - ExecPlan convention for restartable long-running agent work.
@@ -69,9 +71,48 @@ using it.
 - Release and changelog automation: `Makefile`, `.github/workflows/`,
   `.agents/skills/changelog-draft/`, and release scripts under `script/`.
 
+## Build, Package, and Publishing
+
+- Local macOS app build: `make warp-build`.
+- Optimized local macOS bundle: `make warp-build-optimized`, which produces
+  `target/release-lto/bundle/osx/Slipstream.app`.
+- Local package dispatcher: `script/bundle`, which routes to platform-specific
+  bundle scripts under `script/macos/`, `script/linux/`, or `script/windows/`.
+- Slipstream production release: push a `vMAJOR.MINOR.PATCH` tag to `origin`;
+  `.github/workflows/release-macos.yml` builds and publishes the signed
+  `Slipstream.dmg`, Linux SSH extension tarball, and `SHA256SUMS` to the
+  GitHub Release.
+- Slipstream release source branch: usually `byok` in this fork, but the
+  release identity is the tag and exact commit. Verify with `git branch -vv`,
+  `git rev-parse <tag>`, and the workflow run before publishing.
+- Moving SSH-extension release: `.github/workflows/release-remote-server-latest.yml`
+  runs on `byok`, `main`, and `master` pushes and updates the
+  `remote-server-latest` prerelease asset.
+- Local backend container image: `.github/workflows/local-multi-agent-image.yml`
+  publishes `ghcr.io/<owner>/warp-local-multi-agent` on path-filtered pushes to
+  `byok` and `master`, with branch, SHA, and `latest` tags.
+- Inherited upstream Warp release automation:
+  `.github/workflows/cut_new_releases.yml`,
+  `.github/workflows/cut_new_release_candidate.yml`, and
+  `.github/workflows/create_release.yml` target upstream-style `master` and
+  `*_release/*` release flows. Do not use them for Slipstream production
+  publishing unless the task explicitly says to.
+- Release inspection: prefer `gh run list --workflow release-macos.yml`,
+  `gh run watch <run-id> --exit-status`, and
+  `gh release view <tag> --repo pixelkaiser/slipstream`.
+
+## Mechanical Verification
+
+- Run `make verify-agent-docs` after changing `AGENTS.md`, `PLANS.md`,
+  `docs/agent-knowledge-map.md`, `RELEASE.md`, Makefile release targets, or the
+  agent-facing workflow guidance.
+- The verifier checks required routing files, local Markdown links, ExecPlan
+  required-section coverage, repo-scoped skill coverage in this map, and
+  release/publishing strings that should not drift silently.
+
 ## Lookup Recipes
 
-- For a UI change, read `WARP.md`, then
+- For a UI change, read `CONTRIBUTING.md`, then
   `.agents/skills/warp-ui-guidelines/SKILL.md`, then the relevant view files.
 - For a feature flag change, use `add-feature-flag`, `promote-feature`, or
   `remove-feature-flag` before editing code.
@@ -85,9 +126,13 @@ using it.
   `specs/codex-warp-plugin/TECH.md`.
 - For specs or long-running work, read `CONTRIBUTING.md` and `PLANS.md`, then
   place durable artifacts under `specs/`.
+- For release/package changes, read `RELEASE.md`, `Makefile`, the relevant
+  workflow under `.github/workflows/`, and the invoked `script/` helper before
+  changing behavior.
 
 ## Maintenance
 
 Update this map when adding a new top-level guide, repo-scoped skill, major spec
-family, or durable workflow that agents should discover early. Keep entries
-short and navigational; detailed rules belong in the linked source files.
+family, release/publishing path, or durable workflow that agents should
+discover early. Keep entries short and navigational; detailed rules belong in
+the linked source files.

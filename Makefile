@@ -6,7 +6,7 @@ DRY_RUN ?= 0
 
 .DEFAULT_GOAL := help
 
-.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test release-macos warp-local-signing-identity warp-signing-status warp-grant-keychain-access warp-trash-local-settings warp-check warp-build warp-build-optimized warp-build-oss
+.PHONY: help local-agent-install local-agent-dev local-agent-build local-agent-start local-agent-test release-macos verify-agent-docs warp-local-signing-identity warp-signing-status warp-grant-keychain-access warp-trash-local-settings warp-check warp-build warp-build-optimized warp-build-oss
 
 help:
 	@echo "Slipstream local development targets:"
@@ -16,6 +16,7 @@ help:
 	@echo "  make local-agent-start    Run the built local multi-agent service"
 	@echo "  make local-agent-test     Build and test the local multi-agent service"
 	@echo "  make release-macos TAG=v0.2.0 REF=<commit-ish>  Tag a commit and trigger the macOS + SSH extension release workflow"
+	@echo "  make verify-agent-docs    Validate agent routing docs, links, skills, and release guidance"
 	@echo "  make warp-local-signing-identity  Create a stable local macOS signing identity"
 	@echo "  make warp-signing-status  Show available macOS code-signing identities"
 	@echo "  make warp-grant-keychain-access  Grant existing Slipstream keychain items to the signed app Team ID"
@@ -38,6 +39,9 @@ local-agent-start: local-agent-build
 
 local-agent-test:
 	cargo test -p $(LOCAL_AGENT_PACKAGE)
+
+verify-agent-docs:
+	python3 script/verify_agent_docs
 
 release-macos:
 	@bash -eu -o pipefail -c '\

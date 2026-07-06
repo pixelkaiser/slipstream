@@ -134,5 +134,6 @@ For a README-only or documentation-only change, code tests are not required.
 ## Related Files
 
 - Local backend README: [crates/local_multi_agent_service/README.md](crates/local_multi_agent_service/README.md)
-- Engineering guide inherited from Warp: [WARP.md](WARP.md)
+- Agent routing and repo map: [AGENTS.md](AGENTS.md) and [docs/agent-knowledge-map.md](docs/agent-knowledge-map.md)
+- Release and package publishing runbook: [RELEASE.md](RELEASE.md)
 - Contributing guide inherited from Warp: [CONTRIBUTING.md](CONTRIBUTING.md)

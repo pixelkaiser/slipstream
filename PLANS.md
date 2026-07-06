@@ -27,6 +27,10 @@ user asks for one.
   creating a parallel location.
 - Keep ephemeral chat-only plans out of the repository unless they need to be
   restartable across agents or reviewed as an artifact.
+- For release, package publishing, CI migration, or branch-promotion work, the
+  plan must name the source branch or tag, the workflow or script that publishes
+  artifacts, expected package outputs, and the command used to verify the
+  published state.
 
 ## Requirements
 
@@ -62,6 +66,8 @@ Each ExecPlan should contain these sections in this order:
 
 Use checkbox entries in `Progress`. Use dated bullets in `Decision Log` and
 `Surprises & Discoveries` when a choice or observation affects future work.
+The required section names are checked by `make verify-agent-docs`; update that
+verifier in the same change if the convention changes.
 
 ## Writing Guidance
 
@@ -75,6 +81,9 @@ for verification.
 Acceptance should be behavior a person can observe, not just internal structure.
 For example, say which test fails before and passes after, which command returns
 which response, or which UI state should be visible after launching the app.
+For release work, acceptance should include the exact GitHub Actions run,
+GitHub Release, moving tag, GHCR image tag, or local package path that proves
+the package was built or published.
 
 ## Updating an ExecPlan
 
