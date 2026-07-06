@@ -261,7 +261,7 @@ fn wait_for_callback(listener: &TcpListener, timeout: Duration) -> anyhow::Resul
                 std::thread::sleep(POLL_INTERVAL);
             }
             Err(e) => {
-                return Err(anyhow::Error::new(e).context("Grok OAuth callback accept failed"))
+                return Err(anyhow::Error::new(e).context("Grok OAuth callback accept failed"));
             }
         }
     }
@@ -443,14 +443,14 @@ async fn post_token_request<T: serde::Serialize + ?Sized>(
 }
 
 const SUCCESS_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
-<title>Warp — Grok connected</title></head>\
+<title>Slipstream — Grok connected</title></head>\
 <body style=\"font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:3rem\">\
-<h1>Grok connected</h1><p>You can close this window and return to Warp.</p></body></html>";
+<h1>Grok connected</h1><p>You can close this window and return to the app.</p></body></html>";
 
 const FAILURE_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\">\
-<title>Warp — Grok authorization failed</title></head>\
+<title>Slipstream — Grok authorization failed</title></head>\
 <body style=\"font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:3rem\">\
-<h1>Authorization failed</h1><p>Something went wrong. Return to Warp and try again.</p></body></html>";
+<h1>Authorization failed</h1><p>Something went wrong. Return to the app and try again.</p></body></html>";
 
 #[cfg(test)]
 #[path = "oauth_tests.rs"]

@@ -10,7 +10,7 @@ define_settings_group!(CodeSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "code.editor.use_warp_as_default_editor",
-        description: "Whether Warp is used as the default code editor.",
+        description: "Whether the app is used as the default code editor.",
     }
     codebase_context_enabled: CodebaseContextEnabled {
         type: bool,

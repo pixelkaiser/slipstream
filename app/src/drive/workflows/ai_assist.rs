@@ -68,7 +68,7 @@ impl GeneratedCommandMetadataError {
                 "Failed to generate metadata. Please try again with a different command."
             }
             Self::AiProviderError => "Something went wrong. Please try again.",
-            Self::RateLimited => "Looks like you're out of AI credits. Please try again later.",
+            Self::RateLimited => "Provider or account limit reached. Please try again later.",
             Self::Other => "Something went wrong. Please try again.",
         }
         .to_string()
@@ -146,7 +146,7 @@ impl WorkflowModal {
                                     if has_admin_permissions {
                                         ctx.emit(WorkflowModalEvent::AiAssistUpgradeError(Some(team.uid), current_user_id));
                                     } else {
-                                        ctx.emit(WorkflowModalEvent::AiAssistError("Looks like you're out of AI credits. Contact a team admin to upgrade for more credits.".to_string()));
+                                        ctx.emit(WorkflowModalEvent::AiAssistError("Provider or account limit reached. Contact a team admin to check account limits.".to_string()));
                                     }
                                 } else {
                                     ctx.emit(WorkflowModalEvent::AiAssistError(message.clone()));

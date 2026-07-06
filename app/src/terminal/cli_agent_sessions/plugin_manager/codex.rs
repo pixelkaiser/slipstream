@@ -5,6 +5,7 @@ use std::{env, fs, io};
 
 use async_trait::async_trait;
 use serde_json::Value;
+use warp_core::channel::ChannelState;
 
 use super::{
     compare_versions, run_cli_command_logged, CliAgentPluginManager, PluginInstallError,
@@ -89,7 +90,7 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 
     fn can_auto_install(&self) -> bool {
-        FeatureFlag::CodexPlugin.is_enabled()
+        FeatureFlag::CodexPlugin.is_enabled() && !ChannelState::is_slipstream()
     }
 
     fn is_installed(&self) -> bool {
@@ -193,14 +194,18 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 
     fn install_success_message(&self) -> &'static str {
-        "Warp plugin installed. Please restart Codex to activate."
+        "Plugin installed. Please restart Codex to activate."
     }
 
     fn update_success_message(&self) -> &'static str {
-        "Warp plugin updated. Please restart Codex to activate."
+        "Plugin updated. Please restart Codex to activate."
     }
 
     fn install_instructions(&self) -> &'static PluginInstructions {
+        if ChannelState::is_slipstream() {
+            return &SLIPSTREAM_UNAVAILABLE_INSTRUCTIONS;
+        }
+
         if FeatureFlag::CodexPlugin.is_enabled() {
             &PLUGIN_INSTALL_INSTRUCTIONS
         } else {
@@ -209,6 +214,10 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 
     fn update_instructions(&self) -> &'static PluginInstructions {
+        if ChannelState::is_slipstream() {
+            return &SLIPSTREAM_UNAVAILABLE_INSTRUCTIONS;
+        }
+
         if FeatureFlag::CodexPlugin.is_enabled() {
             &PLUGIN_UPDATE_INSTRUCTIONS
         } else {
@@ -273,17 +282,17 @@ impl CliAgentPluginManager for CodexPluginManager {
 
 static PLUGIN_INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> =
     LazyLock::new(|| PluginInstructions {
-        title: "Install Warp Plugin for Codex",
+        title: "Install Codex Notification Plugin",
         subtitle: "Run the following commands, then restart Codex.",
         steps: &[
             PluginInstructionStep {
-                description: "Add the Warp plugin marketplace repository",
+                description: "Add the plugin marketplace repository",
                 command: "codex plugin marketplace add warpdotdev/codex-warp",
                 executable: true,
                 link: None,
             },
             PluginInstructionStep {
-                description: "Install the Warp plugin",
+                description: "Install the plugin",
                 command: "codex plugin add warp@codex-warp",
                 executable: true,
                 link: None,
@@ -294,8 +303,8 @@ static PLUGIN_INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> =
 
 static NATIVE_INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
     PluginInstructions {
-        title: "Enable Warp Notifications for Codex",
-        subtitle: "Update Codex to the latest version, then enable in-focus notifications so Warp can display them while you work.",
+        title: "Enable App Notifications for Codex",
+        subtitle: "Update Codex to the latest version, then enable in-focus notifications so the app can display them while you work.",
         steps: &[
             PluginInstructionStep {
                 description: "Update Codex to the latest version.",
@@ -321,9 +330,17 @@ static EMPTY_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| Plugi
     post_install_notes: &[],
 });
 
+static SLIPSTREAM_UNAVAILABLE_INSTRUCTIONS: LazyLock<PluginInstructions> =
+    LazyLock::new(|| PluginInstructions {
+        title: "Plugin Packages Unavailable",
+        subtitle: "Slipstream does not ship these plugin install flows yet.",
+        steps: &[],
+        post_install_notes: &[],
+    });
+
 static PLUGIN_UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
     PluginInstructions {
-        title: "Update Warp Plugin for Codex",
+        title: "Update Codex Notification Plugin",
         subtitle: "Run the following commands, then restart Codex.",
         steps: &[
             PluginInstructionStep {
@@ -333,7 +350,7 @@ static PLUGIN_UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(
                 link: None,
             },
             PluginInstructionStep {
-                description: "Reinstall the Warp plugin",
+                description: "Reinstall the plugin",
                 command: "codex plugin add warp@codex-warp",
                 executable: true,
                 link: None,

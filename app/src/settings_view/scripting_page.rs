@@ -121,7 +121,8 @@ impl ScriptingSettingsPageView {
                     Ok(()) => {
                         let command_name = ChannelState::channel().warpctrl_command_name();
                         let message = format!(
-                            "Successfully installed the Warp Control CLI! You can now run '{command_name}' from the command line."
+                            "Successfully installed {}! You can now run '{command_name}' from the command line.",
+                            ChannelState::control_cli_name()
                         );
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
@@ -132,7 +133,7 @@ impl ScriptingSettingsPageView {
                         });
                     }
                     Err(error) => {
-                        let message = format!("Failed to install Warp Control command: {error}");
+                        let message = format!("Failed to install control command: {error}");
                         log::warn!("{message}");
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_persistent_toast(
@@ -259,13 +260,17 @@ impl SettingsWidget for WarpControlCliInstallWidget {
         };
 
         render_body_item::<ScriptingSettingsPageAction>(
-            "Warp Control CLI command".into(),
+            format!("{} command", ChannelState::control_cli_name()),
             None,
             LocalOnlyIconState::Hidden,
             ToggleState::Enabled,
             appearance,
             button,
-            Some("Install the warpctrl command for scripting Warp from your terminal.".to_owned()),
+            Some(format!(
+                "Install the {} command for scripting {} from your terminal.",
+                ChannelState::channel().warpctrl_command_name(),
+                ChannelState::product_name()
+            )),
         )
     }
 }
@@ -296,7 +301,7 @@ impl SettingsWidget for LocalControlModeWidget {
             ToggleState::Enabled,
             appearance,
             ChildView::new(&view.local_control_mode_dropdown).finish(),
-            Some("warpctrl allows for scripting Warp's UI. Use with care.".to_owned()),
+            Some("The control command allows scripting the app UI. Use with care.".to_owned()),
         )
     }
 }

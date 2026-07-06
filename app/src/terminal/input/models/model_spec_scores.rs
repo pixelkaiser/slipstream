@@ -19,10 +19,10 @@ const CORNER_RADIUS: f32 = 4.0;
 const ROW_SPACING: f32 = 12.0;
 
 pub const MODEL_SPECS_TITLE: &str = "Model Specs";
-pub const MODEL_SPECS_DESCRIPTION: &str = "Warp's benchmarks for how well a model performs in our harness, the rate at which it consumes credits, and task speed.";
+pub const MODEL_SPECS_DESCRIPTION: &str = "Benchmarks for how well a model performs in the agent harness, the rate at which it uses account quota, and task speed.";
 
 pub const REASONING_LEVEL_TITLE: &str = "Reasoning level";
-pub const REASONING_LEVEL_DESCRIPTION: &str = "Increased reasoning levels consume more credits and have higher latency, but higher performance for complicated tasks.";
+pub const REASONING_LEVEL_DESCRIPTION: &str = "Increased reasoning levels can use more account quota and have higher latency, but higher performance for complicated tasks.";
 
 pub const CUSTOM_MODEL_ROUTER_TITLE: &str = "Custom Model Router";
 pub const CUSTOM_MODEL_ROUTER_DESCRIPTION: &str = "Routes each request to a concrete model based on your routing rules, rather than using a single fixed model.";

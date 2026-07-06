@@ -17,9 +17,9 @@ use warpui_core::{
 
 use super::toggle_card::{render_toggle_card, ToggleCardSpec};
 use super::OnboardingSlide;
-use crate::OnboardingIntention;
 use crate::model::{OnboardingStateEvent, OnboardingStateModel};
 use crate::slides::{bottom_nav, layout, slide_content};
+use crate::OnboardingIntention;
 
 /// Which setting card is currently expanded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

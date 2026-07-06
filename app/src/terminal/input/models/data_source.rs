@@ -44,7 +44,8 @@ use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 
-const AUTO_BEDROCK_TOOLTIP: &str = "Warp uses Bedrock when the model Auto selects supports it; otherwise it may use Warp-hosted inference.";
+const AUTO_BEDROCK_TOOLTIP: &str =
+    "Auto uses Bedrock when the selected model supports it; otherwise it may use hosted inference.";
 
 #[derive(Clone, Debug)]
 pub struct AcceptModel {

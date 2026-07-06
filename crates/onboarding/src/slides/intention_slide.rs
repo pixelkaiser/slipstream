@@ -424,7 +424,11 @@ impl IntentionSlide {
 
         let is_terminal = selected_index == 1;
         let (step_index, step_count) = if new_settings_modes {
-            if is_terminal { (0, 4) } else { (0, 5) }
+            if is_terminal {
+                (0, 4)
+            } else {
+                (0, 5)
+            }
         } else {
             (1, 4)
         };

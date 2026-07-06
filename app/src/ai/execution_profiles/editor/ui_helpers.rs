@@ -1,6 +1,7 @@
 use pathfinder_geometry::vector::vec2f;
 use thousands::Separable;
 use uuid::Uuid;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
@@ -275,7 +276,7 @@ pub fn render_models_section(
         .with_child(render_filterable_dropdown_row(
             appearance,
             "Base model",
-            "This model serves as the primary engine behind the agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. Warp may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
+            "This model serves as the primary engine behind the agent. It powers most interactions and invokes other models for tasks like planning or code generation when necessary. The app may automatically switch to alternate models based on model availability or for auxiliary tasks such as conversation summarization.",
             &view.base_model_dropdown,
         ));
 
@@ -1035,11 +1036,13 @@ pub fn render_permissions_section(
         );
     }
 
-    column.add_child(
-        Container::new(render_plan_auto_sync_toggle(appearance, view, profile_data))
-            .with_margin_top(16.)
-            .finish(),
-    );
+    if !ChannelState::is_slipstream() {
+        column.add_child(
+            Container::new(render_plan_auto_sync_toggle(appearance, view, profile_data))
+                .with_margin_top(16.)
+                .finish(),
+        );
+    }
 
     Container::new(column.finish())
         .with_margin_bottom(24.)
@@ -1328,8 +1331,7 @@ pub fn render_plan_auto_sync_toggle(
     .finish();
 
     let desc_elem = Text::new(
-        "The plans this agent creates will be automatically added and synced to Warp Drive."
-            .to_string(),
+        "The plans this agent creates will be automatically added and synced to Drive.".to_string(),
         appearance.ui_font_family(),
         11.,
     )

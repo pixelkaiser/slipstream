@@ -14,6 +14,7 @@ use warpui::{Entity, SingletonEntity as _, TypedActionView, View, ViewContext};
 
 use crate::terminal::model::terminal_model::ExitReason;
 use crate::ui_components;
+use crate::util::links;
 
 const FILE_ISSUE_TEXT: &str = "File issue";
 const MORE_INFO_TEXT: &str = "More info";
@@ -183,8 +184,8 @@ impl TerminationType {
                 format!("{pty_spawn_error:#}").into()
             }
             TerminationType::Premature { shell_detail, .. } => format!(
-                "Something went wrong while starting {shell_detail} and Warpifying it, causing the \
-                process to terminate. Warpify script output is displayed here, which may point at \
+                "Something went wrong while starting {shell_detail} with shell integration, causing the \
+                process to terminate. Shell integration script output is displayed here, which may point at \
                 a cause."
             )
             .into(),
@@ -216,7 +217,7 @@ impl TerminationType {
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(Action::OpenUrl(
-                                "https://github.com/warpdotdev/Warp/issues/new/choose".to_string(),
+                                links::github_issues_url().to_string(),
                             ));
                         })
                         .finish(),
@@ -226,7 +227,7 @@ impl TerminationType {
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(Action::OpenUrl(
-                                "https://docs.warp.dev/support-and-community/troubleshooting-and-support/known-issues#debugging".to_string(),
+                                links::user_docs_url().to_string(),
                             ));
                         })
                         .finish(),
@@ -254,7 +255,7 @@ impl TerminationType {
                         .build()
                         .on_click(|ctx, _, _| {
                             ctx.dispatch_typed_action(Action::OpenUrl(
-                                "https://github.com/warpdotdev/Warp/issues/new/choose".to_string(),
+                                links::github_issues_url().to_string(),
                             ));
                         })
                         .finish(),

@@ -232,7 +232,7 @@ pub enum AIApiError {
         user_display_message: Option<String>,
     },
 
-    #[error("Warp is currently overloaded. Please try again later.")]
+    #[error("The service is currently overloaded. Please try again later.")]
     ServerOverloaded,
 
     #[error("Internal error occurred at transport layer.")]
@@ -441,7 +441,7 @@ pub enum TranscribeError {
     #[error("Request failed due to lack of Voice quota.")]
     QuotaLimit,
 
-    #[error("Warp is currently overloaded. Please try again later.")]
+    #[error("The service is currently overloaded. Please try again later.")]
     ServerOverloaded,
 
     #[error("Internal error occurred at transport layer.")]
@@ -1386,9 +1386,9 @@ impl ServerApi {
             .append_pair("include_changelogs", &include_changelogs.to_string());
 
         if include_changelogs {
-            log::info!("Fetching channel versions and changelogs from Warp server");
+            log::info!("Fetching channel versions and changelogs from update server");
         } else {
-            log::info!("Fetching channel versions (without changelogs) from Warp server");
+            log::info!("Fetching channel versions (without changelogs) from update server");
         }
 
         let mut request_builder = self
@@ -1416,7 +1416,7 @@ impl ServerApi {
             self.observe_iap_challenge(&response);
         }
         let versions: ChannelVersions = response.json().await?;
-        log::info!("Received channel versions from Warp server: {versions}");
+        log::info!("Received channel versions from update server: {versions}");
         Ok(versions)
     }
 }

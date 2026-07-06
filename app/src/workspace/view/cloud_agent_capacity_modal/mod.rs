@@ -130,8 +130,8 @@ impl CloudAgentCapacityModal {
                 "This cloud run is queued because your team has reached the maximum number of concurrent cloud agents. It will start automatically when another cloud run finishes.".to_string(),
             ),
             CloudAgentCapacityModalVariant::OutOfCredits => (
-                "You're out of AI credits",
-                "This cloud run stopped because your team has used all available AI credits for the current billing period.".to_string(),
+                "AI limit reached",
+                "This cloud run stopped because your team has used all available AI quota for the current billing period.".to_string(),
             ),
         };
 
@@ -209,12 +209,12 @@ impl CloudAgentCapacityModal {
             )
             .finish();
 
-            // Credits text from plan pricing
+            // Quota text from plan pricing
             let credits_text = if let Some(limit) = plan_pricing.and_then(|plan| plan.request_limit)
             {
-                format!("{} AI credits per month", limit.separate_with_commas())
+                format!("{} AI requests per month", limit.separate_with_commas())
             } else {
-                "Extended AI credits per month".to_string()
+                "Extended AI requests per month".to_string()
             };
 
             // Benefits list based on plan type

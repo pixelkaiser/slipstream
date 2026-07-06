@@ -167,6 +167,11 @@ fn main() {
     }
 
     let active_flags = active_flags_for_channel(channel);
+    let product_name = if channel == "oss" {
+        "Slipstream"
+    } else {
+        "Warp"
+    };
     let mut generator = SchemaGenerator::default();
     let mut root_properties = Map::new();
     let mut entry_count = 0;
@@ -229,12 +234,12 @@ fn main() {
     );
     root.insert(
         "title".to_string(),
-        Value::String("Warp Settings".to_string()),
+        Value::String(format!("{product_name} Settings")),
     );
     root.insert(
         "description".to_string(),
         Value::String(format!(
-            "JSON Schema for Warp settings ({channel} channel, {entry_count} settings)"
+            "JSON Schema for {product_name} settings ({channel} channel, {entry_count} settings)"
         )),
     );
     root.insert("type".to_string(), Value::String("object".to_string()));

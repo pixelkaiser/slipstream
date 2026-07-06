@@ -20,6 +20,7 @@ use warpui::{AppContext, SingletonEntity};
 
 use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::auth::AuthStateProvider;
+use crate::channel::ChannelState;
 use crate::default_terminal::DefaultTerminal;
 use crate::features::{runtime_flags_menu_items, FeatureFlag};
 use crate::root_view::OpenLaunchConfigArg;
@@ -52,17 +53,16 @@ const SHOW_BOOTSTRAP_BLOCK_MENU_ITEM_NAME: &str = "Show Initialization Block";
 const HIDE_BOOTSTRAP_BLOCK_MENU_ITEM_NAME: &str = "Hide Initialization Block";
 const SHOW_IN_BAND_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Show In-band Command Blocks";
 const HIDE_IN_BAND_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Hide In-band Command Blocks";
-const SHOW_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Show Warpified SSH Blocks";
-const HIDE_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Hide Warpified SSH Blocks";
+const SHOW_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Show SSH Integration Blocks";
+const HIDE_SSH_COMMAND_BLOCKS_MENU_ITEM_NAME: &str = "Hide SSH Integration Blocks";
 const EXPORT_DEFAULT_SETTINGS_CSV_MENU_ITEM_NAME: &str =
     "Export Default Settings as CSV to home dir";
 
-const SETTINGS_CSV_FILE_NAME: &str = "warp_default_settings.csv";
 const MAX_RECENT_REPOS_IN_MENU: usize = 10;
 
 /// Creates the root app menu bar
 pub fn menu_bar(ctx: &mut AppContext) -> MenuBar {
-    MenuBar::new(vec![
+    let mut menus = vec![
         make_new_app_menu(ctx),
         make_new_file_menu(ctx),
         make_new_edit_menu(ctx),
@@ -70,10 +70,22 @@ pub fn menu_bar(ctx: &mut AppContext) -> MenuBar {
         make_new_tab_menu(ctx),
         make_new_blocks_menu(ctx),
         make_new_ai_menu(ctx),
-        make_new_drive_menu(ctx),
-        make_new_window_menu(),
-        make_new_help_menu(),
-    ])
+    ];
+
+    if !ChannelState::is_slipstream() {
+        menus.push(make_new_drive_menu(ctx));
+    }
+
+    menus.extend([make_new_window_menu(), make_new_help_menu()]);
+    MenuBar::new(menus)
+}
+
+fn settings_csv_file_name() -> &'static str {
+    if ChannelState::is_slipstream() {
+        "slipstream_default_settings.csv"
+    } else {
+        "warp_default_settings.csv"
+    }
 }
 
 // Creates the app dock menu
@@ -185,7 +197,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
     menu_items.push(MenuItem::Separator);
     menu_items.push(link_menu_item(
         "Privacy Policy...",
-        links::PRIVACY_POLICY_URL.into(),
+        links::privacy_policy_url().into(),
     ));
 
     let debug_menu_items = debug_menu_items();
@@ -205,7 +217,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
     menu_items.push(MenuItem::Standard(StandardAction::ShowAllApps));
     menu_items.push(MenuItem::Separator);
     menu_items.push(MenuItem::Custom(CustomMenuItem::new(
-        "Set Warp as Default Terminal",
+        &format!("Set {} as Default Terminal", ChannelState::product_name()),
         move |ctx| {
             DefaultTerminal::handle(ctx).update(ctx, |default_terminal, ctx| {
                 default_terminal.make_warp_default(ctx)
@@ -240,7 +252,7 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
         None,
     )));
     menu_items.push(MenuItem::Standard(StandardAction::Quit));
-    Menu::new("Warp", menu_items)
+    Menu::new(ChannelState::product_name(), menu_items)
 }
 
 fn make_new_file_menu(ctx: &AppContext) -> Menu {
@@ -296,7 +308,7 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
     ];
     let group_5 = vec![
         MenuItem::Custom(CustomMenuItem::new(
-            "Use Warp's Prompt",
+            &format!("Use {}'s Prompt", ChannelState::product_name()),
             move |ctx| ctx.dispatch_global_action("app:toggle_user_ps1", &()),
             move |_props, ctx| MenuItemPropertyChanges {
                 checked: Some(
@@ -371,9 +383,16 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
 }
 
 fn make_new_view_menu(ctx: &AppContext) -> Menu {
-    let mut items = vec![
-        updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx),
-        MenuItem::Separator,
+    let mut items = vec![];
+
+    if !ChannelState::is_slipstream() {
+        items.extend([
+            updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx),
+            MenuItem::Separator,
+        ]);
+    }
+
+    items.extend([
         updateable_custom_item_without_checkmark(CustomAction::CommandPalette, ctx),
         updateable_custom_item_without_checkmark(CustomAction::NavigationPalette, ctx),
         updateable_custom_item_without_checkmark(CustomAction::LaunchConfigPalette, ctx),
@@ -432,7 +451,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             },
             None,
         )),
-    ];
+    ]);
 
     let is_compact_mode = matches!(
         TerminalSettings::handle(ctx)
@@ -857,7 +876,7 @@ fn debug_menu_items() -> Vec<MenuItem> {
                     File::create(
                         dirs::home_dir()
                             .unwrap_or_default()
-                            .join(SETTINGS_CSV_FILE_NAME),
+                            .join(settings_csv_file_name()),
                     )
                     .expect("Failed to create settings csv file"),
                 );
@@ -917,15 +936,27 @@ fn feedback_menu_item() -> MenuItem {
 }
 
 fn make_new_help_menu() -> Menu {
-    Menu::new(
-        "Help",
-        vec![
-            feedback_menu_item(),
-            link_menu_item("Warp Documentation...", links::USER_DOCS_URL.into()),
-            link_menu_item("GitHub Issues...", links::GITHUB_ISSUES_URL.into()),
-            link_menu_item("Warp Slack Community...", links::SLACK_URL.into()),
-        ],
-    )
+    let mut items = vec![
+        feedback_menu_item(),
+        link_menu_item(
+            if ChannelState::is_slipstream() {
+                "Slipstream Documentation..."
+            } else {
+                "Warp Documentation..."
+            },
+            links::user_docs_url().into(),
+        ),
+        link_menu_item("GitHub Issues...", links::github_issues_url().into()),
+    ];
+
+    if !ChannelState::is_slipstream() {
+        items.push(link_menu_item(
+            "Warp Slack Community...",
+            links::slack_url().into(),
+        ));
+    }
+
+    Menu::new("Help", items)
 }
 
 fn make_launch_config_menu_items(ctx: &mut AppContext) -> Vec<MenuItem> {

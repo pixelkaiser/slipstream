@@ -25,6 +25,7 @@ use warpui::{
 
 use super::{tab_config_step, welcome_banner};
 use crate::appearance::Appearance;
+use crate::channel::ChannelState;
 use crate::settings::AISettings;
 use crate::tab_configs::session_config::{is_git_repo, SessionConfigSelection, SessionType};
 use crate::tab_configs::session_config_rendering;
@@ -476,9 +477,10 @@ impl HoaOnboardingFlow {
         };
 
         let formatted = FormattedText::new([FormattedTextLine::Line(vec![
-            FormattedTextFragment::plain_text(
-                "Warp pipes through notifications from any CLI coding agent into a unified notification center that works across all coding agents and harnesses. ",
-            ),
+            FormattedTextFragment::plain_text(format!(
+                "{} pipes through notifications from any CLI coding agent into a unified notification center that works across all coding agents and harnesses. ",
+                ChannelState::product_name()
+            )),
             learn_more_fragment,
         ])]);
 

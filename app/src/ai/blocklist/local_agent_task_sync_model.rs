@@ -461,7 +461,7 @@ pub(crate) fn classify_renderable_error(
             AgentTaskState::Failed,
             Some(TaskStatusUpdate::with_error_code(
                 user_display_message.as_deref().unwrap_or(
-                    "Your team has run out of credits. Purchase more credits to continue.",
+                    "Your team has run out of AI requests. Increase your request capacity to continue.",
                 ),
                 PlatformErrorCode::InsufficientCredits,
             )),
@@ -469,7 +469,7 @@ pub(crate) fn classify_renderable_error(
         RenderableAIError::ServerOverloaded => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(
-                "Warp is temporarily overloaded. Please try again shortly.",
+                "The service is temporarily overloaded. Please try again shortly.",
                 PlatformErrorCode::ResourceUnavailable,
             )),
         ),

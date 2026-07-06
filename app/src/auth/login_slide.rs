@@ -4,7 +4,7 @@ use onboarding::components::feature_optout_dialog::{
     render_feature_optout_dialog, FeatureOptOutDialog,
 };
 use onboarding::slides::{layout, slide_content};
-use onboarding::{ai_features, drive_features, drive_name, OnboardingIntention};
+use onboarding::{ai_features, drive_features, OnboardingIntention};
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use ui_components::{button, Component as _, Options as _};
@@ -1207,7 +1207,7 @@ impl LoginSlideView {
 
         let cmd_enter = Keystroke::parse("cmdorctrl-enter").unwrap_or_default();
         let skip_label = match self.login_purpose() {
-            LoginPurpose::WarpDrive => format!("Disable {}", drive_name()),
+            LoginPurpose::WarpDrive => "Disable Drive".to_string(),
             LoginPurpose::WarpAgent | LoginPurpose::ThirdParty => "Skip for now".to_string(),
         };
         let skip_button = self.skip_button.render(
@@ -1502,17 +1502,11 @@ impl LoginSlideView {
             &'static [&'static str],
             &'static str,
         ) = match self.login_purpose() {
-            LoginPurpose::WarpDrive if ChannelState::product_name() == "Slipstream" => (
-                "Are you sure you want to disable Slipstream Drive?",
-                "Slipstream Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:",
-                drive_features(),
-                "Enable Slipstream Drive",
-            ),
             LoginPurpose::WarpDrive => (
-                "Are you sure you want to disable Warp Drive?",
-                "Warp Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:",
+                "Are you sure you want to disable Drive?",
+                "Drive lets you save workflows and knowledge across devices and share them with your team. By continuing, you won't have access to the following features:",
                 drive_features(),
-                "Enable Warp Drive",
+                "Enable Drive",
             ),
             LoginPurpose::WarpAgent | LoginPurpose::ThirdParty
                 if ChannelState::product_name() == "Slipstream" =>
@@ -1526,7 +1520,7 @@ impl LoginSlideView {
             }
             LoginPurpose::WarpAgent | LoginPurpose::ThirdParty => (
                 "Are you sure you want to disable AI features?",
-                "Warp is better with AI. By continuing, you won't have access to any of the following features:",
+                "The app is better with AI. By continuing, you won't have access to any of the following features:",
                 ai_features(),
                 "Enable AI features",
             ),

@@ -9,6 +9,7 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use crate::appearance::Appearance;
+use crate::channel::ChannelState;
 use crate::report_if_error;
 use crate::settings::app_installation_detection::{
     UserAppInstallDetectionSettings, UserAppInstallStatus,
@@ -16,6 +17,7 @@ use crate::settings::app_installation_detection::{
 use crate::settings::{NativePreferenceSettings, UserNativePreference};
 use crate::ui_components::dialog::{dialog_styles, Dialog};
 use crate::uri::web_intent_parser::{self, WebIntent};
+use crate::util::links;
 
 const CLOSE_BUTTON_DIAMETER: f32 = 20.;
 const DIALOG_WIDTH: f32 = 350.;
@@ -152,18 +154,22 @@ impl View for WasmNUXDialog {
 
         let dialog = if self.requested_download {
             Dialog::new(
-                "Open in Warp Desktop?".to_string(),
+                format!("Open in {} Desktop?", ChannelState::product_name()),
                 Some("Future links will automatically open on desktop.".to_string()),
                 dialog_styles,
             )
             .with_bottom_row_child(Self::render_dialog_button(
-                "Open in Warp",
+                &format!("Open in {}", ChannelState::product_name()),
                 WasmNUXDialogAction::OpenNativeAndClose,
                 &self.confirm_mouse_state,
                 appearance,
             ))
         } else if app_install_detected == &UserAppInstallStatus::NotDetected {
-            Dialog::new("Download Warp Desktop?".to_string(), None, dialog_styles)
+            Dialog::new(
+                format!("Download {} Desktop?", ChannelState::product_name()),
+                None,
+                dialog_styles,
+            )
                 .with_child(
                     Flex::column()
                         .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
@@ -171,7 +177,10 @@ impl View for WasmNUXDialog {
                         .with_child(
                             appearance
                                 .ui_builder()
-                                .span("Warp is the intelligent terminal with AI and your dev team's knowledge built-in.")
+                                .span(format!(
+                                    "{} is the intelligent terminal with AI and your dev team's knowledge built-in.",
+                                    ChannelState::product_name()
+                                ))
                                 .with_style(UiComponentStyles {
                                     font_weight: Some(Weight::Thin),
                                     font_color: Some(
@@ -216,9 +225,9 @@ impl View for WasmNUXDialog {
                 ))
         } else {
             let object_kind = match web_intent_parser::current_web_intent() {
-                Some(WebIntent::DriveObject(_)) => "Warp Drive objects",
+                Some(WebIntent::DriveObject(_)) => "Drive objects",
                 Some(WebIntent::SessionView(_)) => "shared sessions",
-                _ => "Warp links",
+                _ => "app links",
             };
 
             Dialog::new(
@@ -276,12 +285,20 @@ impl TypedActionView for WasmNUXDialog {
                 }
             }
             WasmNUXDialogAction::OpenDownloadDesktopAppLink => {
-                ctx.open_url("https://app.warp.dev/get_warp");
+                ctx.open_url(if ChannelState::is_slipstream() {
+                    links::user_docs_url()
+                } else {
+                    "https://app.warp.dev/get_warp"
+                });
                 self.requested_download = true;
                 ctx.notify();
             }
             WasmNUXDialogAction::LearnMore => {
-                ctx.open_url("https://www.warp.dev");
+                ctx.open_url(if ChannelState::is_slipstream() {
+                    links::user_docs_url()
+                } else {
+                    "https://www.warp.dev"
+                });
             }
         }
     }

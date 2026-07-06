@@ -4,6 +4,7 @@ use std::time::Duration;
 use instant::Instant;
 use serde::{Deserialize, Serialize};
 use warp_cli::agent::Harness;
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::user_preferences::GetUserPreferences;
 use warp_managed_secrets::client::SecretOwner;
@@ -47,7 +48,7 @@ pub struct HarnessAvailability {
 fn default_harnesses() -> Vec<HarnessAvailability> {
     vec![HarnessAvailability {
         harness: Harness::Oz,
-        display_name: "Warp".to_string(),
+        display_name: ChannelState::product_name().to_string(),
         enabled: true,
         available_models: vec![],
     }]

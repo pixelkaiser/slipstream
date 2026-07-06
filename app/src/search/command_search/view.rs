@@ -609,7 +609,7 @@ impl CommandSearchView {
                             current_user_id,
                         )
                     } else {
-                        self.render_error_header_text("Looks like you're out of credits. Contact a team admin to upgrade for more credits.".to_string(), appearance)
+                        self.render_error_header_text("Looks like you're out of AI requests. Contact a team admin to increase your request capacity.".to_string(), appearance)
                     }
                 } else {
                     self.render_error_header_text(message, appearance)
@@ -701,7 +701,7 @@ impl CommandSearchView {
         row.add_child(
             appearance
                 .ui_builder()
-                .span("Looks like you're out of credits. ")
+                .span("Looks like you're out of AI requests. ")
                 .with_style(UiComponentStyles {
                     font_size: Some(appearance.monospace_font_size()),
                     font_family_id: Some(appearance.ui_font_family()),
@@ -723,7 +723,7 @@ impl CommandSearchView {
         row.add_child(
             appearance
                 .ui_builder()
-                .span(" for more credits.")
+                .span(" to increase your request capacity.")
                 .with_style(UiComponentStyles {
                     font_size: Some(appearance.monospace_font_size()),
                     font_family_id: Some(appearance.ui_font_family()),

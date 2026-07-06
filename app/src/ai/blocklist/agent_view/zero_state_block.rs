@@ -1234,7 +1234,7 @@ where
     let font_size = styles::CREDITS_BANNER_FONT_SIZE;
     let text_color = theme.terminal_colors().normal.blue;
 
-    let credits_text = format!("{credits} free cloud agent credits");
+    let credits_text = format!("{credits} free cloud agent requests");
     let text = Text::new(credits_text, font_family, font_size)
         .with_color(text_color.into())
         .with_style(Properties::default().weight(Weight::Semibold))

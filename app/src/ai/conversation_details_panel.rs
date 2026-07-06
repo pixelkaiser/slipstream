@@ -2037,7 +2037,7 @@ impl View for ConversationDetailsPanel {
         if let Some(credits) = self.data.credits {
             let formatted = format!("{credits:.1}");
             content.add_child(
-                Container::new(self.render_simple_field("Credits used", &formatted, appearance))
+                Container::new(self.render_simple_field("Usage", &formatted, appearance))
                     .with_margin_bottom(FIELD_SPACING)
                     .finish(),
             );

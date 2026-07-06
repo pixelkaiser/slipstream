@@ -6,6 +6,7 @@ use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View
 use super::auth_manager::AuthManager;
 use crate::appearance::Appearance;
 use crate::auth::login_error_modal::LoginErrorModal;
+use crate::channel::ChannelState;
 
 #[derive(Debug)]
 pub enum NeedsSsoLinkViewAction {
@@ -78,7 +79,10 @@ impl View for NeedsSsoLinkView {
 
         LoginErrorModal::new(app)
             .with_header("Your organization has enabled SSO for your account")
-            .with_detail("Click the button below to link your Warp account to your SSO provider.")
+            .with_detail(format!(
+                "Click the button below to link your {} account to your SSO provider.",
+                ChannelState::product_name()
+            ))
             .with_action(link_sso_button)
             .build()
             .finish()

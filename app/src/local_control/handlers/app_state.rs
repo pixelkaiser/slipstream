@@ -695,7 +695,7 @@ fn settings_section(page: String) -> Result<SettingsSection, ControlError> {
     if section == SettingsSection::WarpDrive {
         return Err(ControlError::new(
             ErrorCode::UnsupportedAction,
-            "surface.settings.open does not open Warp Drive settings",
+            "surface.settings.open does not open Drive settings",
         ));
     }
     Ok(section)

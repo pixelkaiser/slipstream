@@ -7,9 +7,9 @@ pub(crate) mod codex_modal;
 pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
 mod crash_recovery;
-pub(crate) mod free_ai_removal_modal;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod docker_containers;
+pub(crate) mod free_ai_removal_modal;
 pub(crate) mod free_tier_limit_hit_modal;
 pub mod global_search;
 pub(crate) mod launch_modal;
@@ -224,7 +224,7 @@ use crate::ai::persisted_workspace::PersistedWorkspace;
 use crate::ai::{conversation_utils, AIRequestUsageModel};
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
 use crate::ai_assistant::panel::{AIAssistantPanelEvent, AIAssistantPanelView};
-use crate::ai_assistant::{AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR};
+use crate::ai_assistant::{ai_assistant_feature_name, AskAIType, AI_ASSISTANT_LOGO_COLOR};
 use crate::app_state::{
     LeafContents, LeafSnapshot, LeftPanelDisplayedTab, LeftPanelSnapshot, NotebookPaneSnapshot,
     PaneNodeSnapshot, PaneUuid, RightPanelSnapshot, SettingsPaneSnapshot, TabGroupSnapshot,
@@ -556,7 +556,7 @@ const MAX_FONT_SIZE: f32 = 25.0;
 const FONT_SIZE_INCREMENT: f32 = 1.0;
 
 pub const TAB_BAR_HEIGHT: f32 = 34.;
-/// Height for all panel headers (tab bar, warp drive, resource center, theme chooser, etc.).
+/// Height for all panel headers (tab bar, Drive, resource center, theme chooser, etc.).
 /// This ensures consistent header heights across all UI panels.
 pub const PANEL_HEADER_HEIGHT: f32 = TAB_BAR_HEIGHT;
 /// The hover area height for states where the tab bar is revealed on hover.
@@ -573,9 +573,7 @@ const TAB_BAR_ICON_PADDING: f32 = 4.;
 
 const TAB_BAR_PILL_WIDTH: f32 = 100.;
 const PILL_FONT_SIZE: f32 = 12.;
-// We use the word "Warp" in the Update Ready button to make it obvious that the terminal is Warp.
-// This can lead to free advertising when users screen-share Warp when an update is available.
-const UPDATE_READY_TEXT: &str = "Update Warp";
+const UPDATE_READY_TEXT: &str = "Update app";
 
 const TAB_BAR_OVERFLOW_MENU_WIDTH: f32 = 300.;
 
@@ -604,7 +602,7 @@ const AI_ASSISTANT_BUTTON_ID: &str = "workspace_view:ai_assistant_button";
 
 const VERSION_DEPRECATION_BANNER_TEXT: &str = "Your app is out of date and some features may not work as expected. Please update immediately.";
 
-const VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT: &str = "Some Warp features may not work as expected without updating immediately, but Warp is unable to perform the update.";
+const VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT: &str = "Some app features may not work as expected without updating immediately, but the app is unable to perform the update.";
 
 const ASK_AI_ASSISTANT_KEYBINDING_NAME: &str = "workspace:toggle_ai_assistant";
 const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_center";
@@ -685,7 +683,7 @@ const MAX_WINDOW_TITLE_LENGTH: usize = 80;
 
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 const AUTO_CLOUD_HANDOFF_PROMPT: &str =
-    "Continue this local Warp Agent task in the cloud from the current conversation state.";
+    "Continue this local agent task in the cloud from the current conversation state.";
 
 /// The default display name used for the user if they have no associated display name.
 pub const DEFAULT_USER_DISPLAY_NAME: &str = "User";
@@ -6531,11 +6529,11 @@ impl Workspace {
     }
 
     fn join_slack(&mut self, ctx: &mut ViewContext<Self>) {
-        ctx.open_url(links::SLACK_URL);
+        ctx.open_url(links::slack_url());
     }
 
     fn view_user_docs(&mut self, ctx: &mut ViewContext<Self>) {
-        ctx.open_url(links::USER_DOCS_URL);
+        ctx.open_url(links::user_docs_url());
     }
 
     fn view_latest_changelog(&mut self, ctx: &mut ViewContext<Self>) {
@@ -6554,7 +6552,7 @@ impl Workspace {
     }
 
     fn view_privacy_policy(&mut self, ctx: &mut ViewContext<Self>) {
-        ctx.open_url(links::PRIVACY_POLICY_URL);
+        ctx.open_url(links::privacy_policy_url());
     }
 
     fn send_feedback(&mut self, ctx: &mut ViewContext<Self>) {
@@ -7849,9 +7847,12 @@ impl Workspace {
                             .into_item(),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => menu_items.push(
-                        MenuItemFields::new("Update Warp manually")
-                            .with_on_select_action(WorkspaceAction::DownloadNewVersion)
-                            .into_item(),
+                        MenuItemFields::new(format!(
+                            "Update {} manually",
+                            ChannelState::product_name()
+                        ))
+                        .with_on_select_action(WorkspaceAction::DownloadNewVersion)
+                        .into_item(),
                     ),
                     AutoupdateStage::NoUpdateAvailable
                     | AutoupdateStage::CheckingForUpdate
@@ -8998,39 +8999,41 @@ impl Workspace {
         );
     }
 
-    /// Install the Warp Control CLI by creating a symlink in /usr/local/bin
+    /// Install the control CLI by creating a symlink in /usr/local/bin
     #[cfg(target_os = "macos")]
     fn install_warpctrl(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
             async { cli_install::install_warpctrl() },
             |view, result, ctx| {
                 let command_name = ChannelState::channel().warpctrl_command_name();
-                let message = format!("Installed the Warp Control CLI globally. You can now run '{command_name}' from any terminal outside of Warp.");
+                let message = format!(
+                    "Successfully installed {}! You can now run '{command_name}' from the command line.",
+                    ChannelState::control_cli_name()
+                );
                 let toast = DismissibleToast::success(message);
                 view.handle_cli_command_result(
                     result,
                     toast,
-                    "Failed to install Warp Control command",
+                    "Failed to install control command",
                     ctx,
                 );
             },
         );
     }
 
-    /// Uninstall the Warp Control CLI by removing the symlink from /usr/local/bin
+    /// Uninstall the control CLI by removing the symlink from /usr/local/bin
     #[cfg(target_os = "macos")]
     fn uninstall_warpctrl(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(
             async { cli_install::uninstall_warpctrl() },
             |view, result, ctx| {
                 let toast = DismissibleToast::success(
-                    "Removed the global Warp Control CLI installation — it still works inside Warp."
-                        .to_string(),
+                    "Successfully uninstalled the control command.".to_string(),
                 );
                 view.handle_cli_command_result(
                     result,
                     toast,
-                    "Failed to uninstall Warp Control command",
+                    "Failed to uninstall control command",
                     ctx,
                 );
             },
@@ -9648,10 +9651,13 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new("Update and relaunch Warp")
-                            .with_on_select_action(WorkspaceAction::ApplyUpdate)
-                            .with_override_text_color(appearance.theme().ansi_fg_red())
-                            .into_item(),
+                        MenuItemFields::new(format!(
+                            "Update and relaunch {}",
+                            ChannelState::product_name()
+                        ))
+                        .with_on_select_action(WorkspaceAction::ApplyUpdate)
+                        .with_override_text_color(appearance.theme().ansi_fg_red())
+                        .into_item(),
                     )
                 }
                 AutoupdateStage::Updating { new_version, .. }
@@ -9671,10 +9677,13 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new("Update Warp manually")
-                            .with_on_select_action(WorkspaceAction::DownloadNewVersion)
-                            .with_override_text_color(appearance.theme().ansi_fg_red())
-                            .into_item(),
+                        MenuItemFields::new(format!(
+                            "Update {} manually",
+                            ChannelState::product_name()
+                        ))
+                        .with_on_select_action(WorkspaceAction::DownloadNewVersion)
+                        .with_override_text_color(appearance.theme().ansi_fg_red())
+                        .into_item(),
                     )
                 }
                 _ => {}
@@ -9702,16 +9711,18 @@ impl Workspace {
 
         #[cfg(not(target_family = "wasm"))]
         items.push(
-            MenuItemFields::new("View Warp logs")
+            MenuItemFields::new(format!("View {} logs", ChannelState::product_name()))
                 .with_on_select_action(WorkspaceAction::ViewLogs)
                 .into_item(),
         );
 
-        items.push(
-            MenuItemFields::new("Slack")
-                .with_on_select_action(WorkspaceAction::JoinSlack)
-                .into_item(),
-        );
+        if !ChannelState::is_slipstream() {
+            items.push(
+                MenuItemFields::new("Slack")
+                    .with_on_select_action(WorkspaceAction::JoinSlack)
+                    .into_item(),
+            );
+        }
 
         let mut account_items = Vec::new();
 
@@ -11102,15 +11113,27 @@ impl Workspace {
                 self.view_in_and_focus_warp_drive(*id, ctx);
             }
             WorkflowModalEvent::AiAssistUpgradeError(team_uid, user_id) => {
+                if ChannelState::is_slipstream() {
+                    self.toast_stack.update(ctx, |view, ctx| {
+                        view.add_ephemeral_toast(
+                            DismissibleToast::error(
+                                "The selected provider or account limit was reached.".into(),
+                            ),
+                            ctx,
+                        );
+                    });
+                    return;
+                }
+
                 let upgrade_link = team_uid
                     .map(UserWorkspaces::upgrade_link_for_team)
                     .unwrap_or_else(|| UserWorkspaces::upgrade_link(*user_id));
 
                 self.toast_stack.update(ctx, |view, ctx| {
                     let new_toast =
-                        DismissibleToast::error("Looks like you're out of AI credits.".into())
+                        DismissibleToast::error("Provider or account limit reached.".into())
                             .with_link(
-                                ToastLink::new("Upgrade for more credits.".into())
+                                ToastLink::new("Review account limits.".into())
                                     .with_href(upgrade_link),
                             );
                     view.add_ephemeral_toast(new_toast, ctx);
@@ -14166,7 +14189,7 @@ impl Workspace {
                         let url = NOTIFICATIONS_TROUBLESHOOT_URL.to_string();
                         view.toast_stack.update(ctx, |toast_stack, ctx| {
                             let toast = DismissibleToast::error(
-                                "Warp doesn't have permission to send desktop notifications.".to_string(),
+                                format!("{} doesn't have permission to send desktop notifications.", ChannelState::product_name()),
                             )
                             .with_link(ToastLink::new("Troubleshoot notifications".to_string()).with_href(url));
                             toast_stack.add_persistent_toast(toast, ctx);
@@ -14830,13 +14853,16 @@ impl Workspace {
                                 link = link.with_keystroke(keystroke);
                             }
 
-                            let toast = DismissibleToast::default(String::from("Warp updated!"))
-                                .with_link(link);
+                            let toast = DismissibleToast::default(format!(
+                                "{} updated!",
+                                ChannelState::product_name()
+                            ))
+                            .with_link(link);
 
                             stack.add_ephemeral_toast(toast, ctx);
                         });
                     } else {
-                        // If resource center isn't already open and Warp AI isn't open, then open resource center
+                        // If resource center isn't already open and AI isn't open, then open resource center
                         if !self.current_workspace_state.is_resource_center_open
                             && !self.current_workspace_state.is_ai_assistant_panel_open
                         {
@@ -15397,8 +15423,10 @@ impl Workspace {
             WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                 toast_stack.add_ephemeral_toast(
                     DismissibleToast::error(
-                        "Couldn't open a cloud pane for handoff. Try again, or restart Warp if this keeps happening."
-                            .to_owned(),
+                        format!(
+                            "Couldn't open a cloud pane for handoff. Try again, or restart {} if this keeps happening.",
+                            ChannelState::product_name()
+                        ),
                     ),
                     window_id,
                     ctx,
@@ -15812,8 +15840,10 @@ impl Workspace {
                 WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
                         DismissibleToast::error(
-                            "Couldn't open a cloud pane for handoff. Try again, or restart Warp if this keeps happening."
-                                .to_owned(),
+                            format!(
+                                "Couldn't open a cloud pane for handoff. Try again, or restart {} if this keeps happening.",
+                                ChannelState::product_name()
+                            ),
                         ),
                         window_id,
                         ctx,
@@ -16015,6 +16045,9 @@ impl Workspace {
                 self.show_settings_with_section(Some(*section), ctx);
             }
             pane_group::Event::OpenAutoReloadModal { purchased_credits } => {
+                if ChannelState::is_slipstream() {
+                    return;
+                }
                 self.current_workspace_state
                     .is_enable_auto_reload_modal_open = true;
                 self.enable_auto_reload_modal.update(ctx, |modal, ctx| {
@@ -17402,7 +17435,7 @@ impl Workspace {
 
             // Check whether this remote session has an active remote server
             // connection (or is in the process of connecting). This is only
-            // true for Auto SSH Warpification (mode 1) sessions where
+            // true for Auto SSH shell integration sessions where
             // `connect_session` was called at `InitShell` time.
             let has_remote_server = is_remote
                 && WarpifySettings::is_ssh_remote_server_enabled(ctx)
@@ -18172,7 +18205,7 @@ impl Workspace {
                                             },
                                         ) {
                                             new_toast = DismissibleToast::success(
-                                                "Plan synced to your Warp Drive".to_string(),
+                                                "Plan synced to Drive".to_string(),
                                             )
                                             .with_object_id(object_id_clone)
                                             .with_link(
@@ -18915,8 +18948,9 @@ impl Workspace {
                 let command = code.trim().to_string();
                 let args_state =
                     ArgumentsState::for_command_workflow(&Default::default(), command.clone());
-                let workflow = Workflow::new("Command from Warp AI", command)
-                    .with_arguments(args_state.arguments);
+                let workflow =
+                    Workflow::new(format!("Command from {}", ChannelState::ai_name()), command)
+                        .with_arguments(args_state.arguments);
                 self.run_workflow_in_active_input(
                     &WorkflowType::AIGenerated {
                         workflow,
@@ -19324,7 +19358,7 @@ impl Workspace {
         variant: CloudAgentCapacityModalVariant,
         ctx: &mut ViewContext<Self>,
     ) {
-        if !FeatureFlag::CloudMode.is_enabled() {
+        if ChannelState::is_slipstream() || !FeatureFlag::CloudMode.is_enabled() {
             return;
         }
         self.cloud_agent_capacity_modal.update(ctx, |modal, ctx| {
@@ -19369,6 +19403,10 @@ impl Workspace {
     }
 
     pub fn check_and_open_free_tier_limit_modal(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        if ChannelState::is_slipstream() {
+            return false;
+        }
+
         let is_free_tier = !UserWorkspaces::as_ref(ctx)
             .current_workspace()
             .is_some_and(|workspace| workspace.billing_metadata.is_user_on_paid_plan());
@@ -19683,12 +19721,16 @@ impl Workspace {
                 .finish(),
             )
             .with_child(
-                Text::new_inline(AI_ASSISTANT_FEATURE_NAME, appearance.ui_font_family(), 14.)
-                    .with_style(Properties {
-                        weight: warpui::fonts::Weight::Bold,
-                        ..Default::default()
-                    })
-                    .finish(),
+                Text::new_inline(
+                    ai_assistant_feature_name(),
+                    appearance.ui_font_family(),
+                    14.,
+                )
+                .with_style(Properties {
+                    weight: warpui::fonts::Weight::Bold,
+                    ..Default::default()
+                })
+                .finish(),
             )
             .with_child(
                 Shrinkable::new(
@@ -19719,7 +19761,10 @@ impl Workspace {
         let body = appearance
             .ui_builder()
             .wrappable_text(
-                "Ask Warp AI to explain errors, suggest commands or write scripts.".to_owned(),
+                format!(
+                    "Ask {} to explain errors, suggest commands or write scripts.",
+                    ChannelState::ai_name()
+                ),
                 true,
             )
             .with_style(UiComponentStyles {
@@ -20395,7 +20440,7 @@ impl Workspace {
                     {
                         ToolPanelView::ProjectExplorer => "Project explorer",
                         ToolPanelView::GlobalSearch { .. } => "Global search",
-                        ToolPanelView::WarpDrive => "Warp Drive",
+                        ToolPanelView::WarpDrive => "Drive",
                         ToolPanelView::ConversationListView => "Agent conversations",
                         #[cfg(not(target_family = "wasm"))]
                         ToolPanelView::CodexConversations => "Codex conversations",
@@ -20455,7 +20500,7 @@ impl Workspace {
             {
                 ToolPanelView::ProjectExplorer => "Project explorer",
                 ToolPanelView::GlobalSearch { .. } => "Global search",
-                ToolPanelView::WarpDrive => "Warp Drive",
+                ToolPanelView::WarpDrive => "Drive",
                 ToolPanelView::ConversationListView => "Agent conversations",
                 #[cfg(not(target_family = "wasm"))]
                 ToolPanelView::CodexConversations => "Codex conversations",
@@ -20789,7 +20834,14 @@ impl Workspace {
                 .finish()
             })
             .on_click(|ctx, _, _| {
-                ctx.dispatch_typed_action(WorkspaceAction::OpenLink("https://warp.dev".to_owned()));
+                ctx.dispatch_typed_action(WorkspaceAction::OpenLink(
+                    if ChannelState::is_slipstream() {
+                        links::user_docs_url()
+                    } else {
+                        "https://warp.dev"
+                    }
+                    .to_owned(),
+                ));
             })
             .with_cursor(Cursor::PointingHand)
             .finish();
@@ -21665,7 +21717,7 @@ impl Workspace {
                 icons::Icon::Lightbulb,
                 &self.mouse_states.resource_center_icon,
                 WorkspaceAction::ToggleResourceCenter,
-                "Warp Essentials".to_string(),
+                format!("{} Essentials", ChannelState::product_name()),
                 self.cached_keybindings[TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME].clone(),
                 false,
                 false,
@@ -21844,7 +21896,7 @@ impl Workspace {
         let (icon, action, label) = (
             icons::Icon::AiAssistant,
             WorkspaceAction::ClickedAIAssistantIcon,
-            AI_ASSISTANT_FEATURE_NAME.to_owned(),
+            ai_assistant_feature_name().to_owned(),
         );
 
         Align::new(
@@ -22223,13 +22275,14 @@ impl Workspace {
                 AutoupdateStage::UnableToUpdateToNewVersion { new_version }
                     if !self.autoupdate_unable_to_update_banner_dismissed =>
                 {
-                    let description =
-                        if is_incoming_version_past_current(new_version.soft_cutoff.as_deref()) {
-                            VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT.to_owned()
-                        } else {
-                            "A new version is available but Warp is unable to perform the update."
-                                .to_owned()
-                        };
+                    let description = if is_incoming_version_past_current(
+                        new_version.soft_cutoff.as_deref(),
+                    ) {
+                        VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT.to_owned()
+                    } else {
+                        "A new version is available but the app is unable to perform the update."
+                            .to_owned()
+                    };
 
                     Some(WorkspaceBannerFields {
                         banner_type: WorkspaceBanner::UnableToUpdateToNewVersion,
@@ -22238,7 +22291,7 @@ impl Workspace {
                         description,
                         secondary_button: None,
                         button: Some(WorkspaceBannerButtonDetails {
-                            text: "Update Warp manually".to_string(),
+                            text: format!("Update {} manually", ChannelState::product_name()),
                             action: WorkspaceAction::DownloadNewVersion,
                             variant: BannerButtonVariant::Outlined,
                             icon: None,
@@ -22253,7 +22306,10 @@ impl Workspace {
                         if is_incoming_version_past_current(new_version.soft_cutoff.as_deref()) {
                             VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT.to_owned()
                         } else {
-                            "Warp was unable to launch the new installed version.".to_owned()
+                            format!(
+                                "{} was unable to launch the new installed version.",
+                                ChannelState::product_name()
+                            )
                         };
 
                     Some(WorkspaceBannerFields {
@@ -22263,7 +22319,7 @@ impl Workspace {
                         description,
                         secondary_button: None,
                         button: Some(WorkspaceBannerButtonDetails {
-                            text: "Update Warp manually".to_string(),
+                            text: format!("Update {} manually", ChannelState::product_name()),
                             action: WorkspaceAction::DownloadNewVersion,
                             variant: BannerButtonVariant::Outlined,
                             icon: None,
@@ -23749,8 +23805,12 @@ impl Workspace {
             == UserAppInstallStatus::Detected;
 
         if !is_app_installed {
-            // App not installed - redirect to download page
-            ctx.open_url("https://warp.dev/download");
+            // App not installed - redirect to the product download/source page.
+            ctx.open_url(if ChannelState::is_slipstream() {
+                links::user_docs_url()
+            } else {
+                "https://warp.dev/download"
+            });
             // In webapp code we cannot distinguish between
             // the localhost:9277/install_detection endpoint not running (not installed) vs
             // the browser blocking Local Network Access which results in CORS error;
@@ -23758,8 +23818,9 @@ impl Workspace {
             // Many users' browser settings will block Local Network Access so this will end up redirecting to download page,
             // even if they have the app installed.
             let toast_message = format!(
-                "Have Warp installed but redirecting to download page?\nEnable Local Network Access for {} in your browser.",
-                ChannelState::server_root_url()
+                "Have {} installed but redirecting to download page?\nEnable Local Network Access for {} in your browser.",
+                ChannelState::product_name(),
+                ChannelState::server_root_url(),
             );
             self.toast_stack.update(ctx, |toast_stack, ctx| {
                 toast_stack.add_persistent_toast(DismissibleToast::default(toast_message), ctx)

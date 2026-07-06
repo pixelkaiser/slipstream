@@ -149,7 +149,7 @@ async fn shared_session_redirect(
         .header(header::LOCATION, location)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
         .body(Body::from(format!(
-            r#"<!doctype html><html><head><meta http-equiv="refresh" content="0;url={escaped}"></head><body><a href="{escaped}">Open shared session in Warp</a></body></html>"#
+            r#"<!doctype html><html><head><meta http-equiv="refresh" content="0;url={escaped}"></head><body><a href="{escaped}">Open shared session in Slipstream</a></body></html>"#
         )))
         .unwrap()
 }

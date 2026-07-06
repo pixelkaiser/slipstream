@@ -25,6 +25,7 @@ use crate::ai::request_usage_model::{
     AIRequestUsageModel, AIRequestUsageModelEvent, BuyCreditsBannerDisplayState,
 };
 use crate::auth::AuthStateProvider;
+use crate::channel::ChannelState;
 use crate::features::FeatureFlag;
 use crate::menu::MenuItemFields;
 use crate::pricing::{PricingInfoModel, PricingInfoModelEvent};
@@ -262,7 +263,7 @@ impl BuyCreditsBanner {
             .unwrap_or(0);
 
         let tooltip_text = format!(
-            "When enabled, auto reload will purchase {} credits when your credit balance gets low",
+            "When enabled, auto reload will add {} AI requests when your balance gets low",
             selected_credits
         );
 
@@ -562,7 +563,7 @@ impl BuyCreditsBanner {
         let make_banner_text = || {
             let mut banner_text_children = vec![appearance
                 .ui_builder()
-                .paragraph("Out of credits")
+                .paragraph("Out of AI requests")
                 .with_style(UiComponentStyles {
                     font_size: Some(14.),
                     ..Default::default()
@@ -575,7 +576,7 @@ impl BuyCreditsBanner {
                 // Create formatted text with clickable hyperlink
                 let warning_text_fragments = vec![
                     FormattedTextFragment::plain_text(
-                        "Purchasing these credits would take you over your monthly spend limit. ",
+                        "This purchase would take you over your monthly spend limit. ",
                     ),
                     FormattedTextFragment::hyperlink_action("Increase it", Action::ManageBilling),
                     FormattedTextFragment::plain_text(" to continue."),
@@ -606,9 +607,9 @@ impl BuyCreditsBanner {
             } else {
                 // Default message when not at limit
                 let banner_description = if has_admin_permissions {
-                    "Add more credits to your account to continue using Oz agents."
+                    "Add more AI requests to your account to continue using agents."
                 } else {
-                    "Contact a team admin to purchase more credits to continue."
+                    "Contact a team admin to increase AI request capacity."
                 };
 
                 banner_text_children.push(
@@ -820,6 +821,10 @@ impl View for BuyCreditsBanner {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
+        if ChannelState::is_slipstream() {
+            return Container::new(warpui::elements::Empty::new().finish()).finish();
+        }
+
         let ai_request_usage = AIRequestUsageModel::as_ref(app);
 
         // Override with spend limit error if set (from failed purchase attempt)

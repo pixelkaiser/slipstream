@@ -29,8 +29,8 @@ use super::requests::{Event as RequestsEvent, RequestStatus, Requests};
 use super::transcript::{Transcript, TranscriptEvent};
 use super::utils::{render_prepared_response_button, render_request_limit_info, TranscriptPart};
 use super::{
-    AskAIType, AI_ASSISTANT_FEATURE_NAME, AI_ASSISTANT_LOGO_COLOR, AI_ASSISTANT_SVG_PATH,
-    ASK_AI_ASSISTANT_TEXT, PROMPT_CHARACTER_LIMIT,
+    ai_assistant_feature_name, ask_ai_assistant_text, AskAIType, AI_ASSISTANT_LOGO_COLOR,
+    AI_ASSISTANT_SVG_PATH, PROMPT_CHARACTER_LIMIT,
 };
 use crate::appearance::Appearance;
 use crate::editor::{
@@ -68,7 +68,6 @@ const BODY_FONT_SIZE: f32 = 13.;
 const TITLE_FONT_SIZE: f32 = 16.;
 const ZERO_STATE_HELP_TEXT_FONT_SIZE: f32 = 12.;
 
-const ZERO_STATE_HELP_TEXT: &str = "Shift + ctrl + space a block or text selection to ask Warp AI.";
 const SCRIPT_ZERO_STATE_PROMPT: &str = "Write a script to connect to an AWS EC2 instance.";
 const GIT_ZERO_STATE_PROMPT: &str = "How do I undo the most recent commits in git?";
 const FILES_ZERO_STATE_PROMPT: &str = "How do I find all files containing specific text?";
@@ -144,28 +143,28 @@ pub fn init(app: &mut AppContext) {
     app.register_fixed_bindings([FixedBinding::custom(
         CustomAction::CloseCurrentSession,
         AIAssistantAction::ClosePanel,
-        "Close Warp AI",
+        "Close AI",
         id!("AIAssistantPanel"),
     )]);
 
     app.register_editable_bindings([
         EditableBinding::new(
             "ai_assistant_panel:focus_terminal_input",
-            "Focus Terminal Input From Warp AI",
+            "Focus Terminal Input From AI",
             AIAssistantAction::FocusTerminalInput,
         )
         .with_context_predicate(id!("AIAssistantPanel"))
         .with_key_binding(cmd_or_ctrl_shift("l")),
         EditableBinding::new(
             "ai_assistant_panel:reset_context",
-            "Restart Warp AI",
+            "Restart AI",
             AIAssistantAction::ResetContext,
         )
         .with_context_predicate(id!("AIAssistantPanel"))
         .with_key_binding("ctrl-l"),
         EditableBinding::new(
             "ai_assistant_panel:reset_context",
-            "Restart Warp AI",
+            "Restart AI",
             AIAssistantAction::ResetContext,
         )
         .with_context_predicate(id!("AIAssistantPanel"))
@@ -654,14 +653,16 @@ impl AIAssistantPanelView {
         let time_now = Local::now();
 
         result.push_str(&format!(
-            "## Warp AI Transcript ({})\n\n",
+            "## {} Transcript ({})\n\n",
+            ai_assistant_feature_name(),
             time_now.format("%x %l:%M %p")
         ));
 
         for part in transcript {
             result.push_str(&format!("Prompt: {}\n\n", part.raw_user_prompt().trim()));
             result.push_str(&format!(
-                "Warp AI: {}\n\n",
+                "{}: {}\n\n",
+                ai_assistant_feature_name(),
                 part.raw_assistant_answer().trim()
             ));
         }
@@ -714,7 +715,7 @@ impl AIAssistantPanelView {
                 Container::new(
                     appearance
                         .ui_builder()
-                        .wrappable_text(AI_ASSISTANT_FEATURE_NAME.to_string(), false)
+                        .wrappable_text(ai_assistant_feature_name().to_string(), false)
                         .with_style(UiComponentStyles {
                             font_family_id: Some(appearance.ui_font_family()),
                             font_size: Some(TITLE_FONT_SIZE),
@@ -903,7 +904,7 @@ impl AIAssistantPanelView {
             )
             .with_child(
                 Container::new(
-                    Text::new_inline(ASK_AI_ASSISTANT_TEXT, appearance.ui_font_family(), 14.)
+                    Text::new_inline(ask_ai_assistant_text(), appearance.ui_font_family(), 14.)
                         .with_color(sub_text_color)
                         .finish(),
                 )
@@ -966,7 +967,13 @@ impl AIAssistantPanelView {
                             1.,
                             appearance
                                 .ui_builder()
-                                .wrappable_text(ZERO_STATE_HELP_TEXT.to_string(), true)
+                                .wrappable_text(
+                                    format!(
+                                        "Shift + ctrl + space a block or text selection to ask {}.",
+                                        ai_assistant_feature_name()
+                                    ),
+                                    true,
+                                )
                                 .with_style(UiComponentStyles {
                                     font_family_id: Some(appearance.ui_font_family()),
                                     font_size: Some(ZERO_STATE_HELP_TEXT_FONT_SIZE),

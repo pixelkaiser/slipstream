@@ -16,6 +16,7 @@ use crate::ai::blocklist::inline_action::inline_action_header::{
 };
 use crate::ai::blocklist::inline_action::inline_action_icons::icon_size;
 use crate::appearance::Appearance;
+use crate::channel::ChannelState;
 use crate::code::editor::view::CodeEditorView;
 use crate::code::editor_management::CodeSource;
 use crate::search::files::icon::icon_from_file_path;
@@ -255,7 +256,7 @@ fn render_linked_code_block_internal(
             let open_button = render_button(
                 appearance,
                 Icon::LinkExternal,
-                "Open in Warp",
+                &format!("Open in {}", ChannelState::product_name()),
                 mouse_handles.open_button,
                 code_clone.clone(),
                 on_open,

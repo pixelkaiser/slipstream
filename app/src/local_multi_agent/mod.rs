@@ -1165,7 +1165,12 @@ async fn health_check(root_url: Url) -> Result<()> {
     let health = response
         .json::<LocalMultiAgentHealthResponse>()
         .await
-        .context("health response was not Warp local service JSON")?;
+        .with_context(|| {
+            format!(
+                "health response was not {} local service JSON",
+                ChannelState::product_name()
+            )
+        })?;
     if health.ok
         && health
             .version
@@ -1174,7 +1179,10 @@ async fn health_check(root_url: Url) -> Result<()> {
     {
         Ok(())
     } else {
-        bail!("health response did not identify a Warp local service")
+        bail!(
+            "health response did not identify a {} local service",
+            ChannelState::product_name()
+        )
     }
 }
 
@@ -1268,9 +1276,10 @@ fn ensure_port_available(config: &LocalMultiAgentConfig) -> Result<()> {
             Ok(())
         }
         Err(error) => bail!(
-            "Port {} on {} is already in use and does not look like a healthy Warp local service: {}",
+            "Port {} on {} is already in use and does not look like a healthy {} local service: {}",
             config.port,
             config.host,
+            ChannelState::product_name(),
             error
         ),
     }

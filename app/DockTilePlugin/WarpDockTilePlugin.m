@@ -50,6 +50,7 @@
         BOOL isDev = [bundleId containsString:@"Dev"];
         BOOL isPreview = [bundleId containsString:@"Preview"];
         BOOL isLocal = [bundleId containsString:@"Local"];
+        BOOL isOss = [bundleId isEqualToString:@"com.slipstream.app"];
         [self logMessage:[NSString stringWithFormat:@"Plugin Bundle ID: %@", bundleId]];
 
         // Initialize the user defaults for the main app
@@ -71,7 +72,7 @@
             return;
         }
 
-        NSString* iconFileName = [self convertAppIconNameToFileName:appIconName isDev:isDev isLocal:isLocal isPreview:isPreview];
+        NSString* iconFileName = [self convertAppIconNameToFileName:appIconName isDev:isDev isLocal:isLocal isPreview:isPreview isOss:isOss];
         [self logMessage:[NSString stringWithFormat:@"Icon file name: %@", iconFileName]];
 
         // Load the icon image
@@ -95,7 +96,7 @@
 }
 
 // See app_icon.rs for the rust version of this conversion.
-- (NSString*)convertAppIconNameToFileName:(NSString*)appIconName isDev:(BOOL)isDev isLocal:(BOOL)isLocal isPreview:(BOOL)isPreview {
+- (NSString*)convertAppIconNameToFileName:(NSString*)appIconName isDev:(BOOL)isDev isLocal:(BOOL)isLocal isPreview:(BOOL)isPreview isOss:(BOOL)isOss {
     // First remove quotes and convert to lowercase
     NSString* cleanName = [[appIconName stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\""]] lowercaseString];
     
@@ -122,7 +123,7 @@
 
     // If the mapping doesn't exist, return the default icon 
     // conditional on whether this is a local, dev, or preview build.
-    return fileName ?: isLocal ? @"local" : isDev ? @"dev" : isPreview ? @"preview" : @"warp_2";
+    return fileName ?: isLocal ? @"local" : isDev ? @"dev" : isPreview ? @"preview" : isOss ? @"slipstream" : @"warp_2";
 }
 
 // Helper function to load named image from the plugin's resource bundle

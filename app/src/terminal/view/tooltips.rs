@@ -9,6 +9,7 @@ use warpui::{AppContext, Element, EventContext};
 
 use super::{TerminalAction, TerminalView};
 use crate::appearance::Appearance;
+use crate::channel::ChannelState;
 use crate::terminal::links::directly_open_link_keybinding_string;
 use crate::terminal::model::{ObfuscateSecrets, Secret};
 use crate::terminal::safe_mode_settings::get_secret_obfuscation_mode;
@@ -59,7 +60,7 @@ fn open_in_warp_tooltip(
         None
     };
     Some(GridTooltipLink {
-        text: "Open in Warp".to_string(),
+        text: format!("Open in {}", ChannelState::product_name()),
         action: TerminalAction::OpenCodeInWarp {
             path,
             layout: *EditorSettings::as_ref(app).open_file_layout.value(),

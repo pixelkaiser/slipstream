@@ -5,6 +5,7 @@ use settings::ToggleableSetting as _;
 use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
 use warpui::{AppContext, EntityId, SingletonEntity, ViewContext, WeakViewHandle, WindowId};
 
+use crate::channel::ChannelState;
 use crate::code::editor_management::{CodeEditorStatus, CodeEditorSummary};
 use crate::pane_group::{CodePane, PaneGroup, PaneId, TerminalPane};
 use crate::server::telemetry::CloseTarget;
@@ -431,7 +432,14 @@ impl<'a> QuitWarningDialog<'a> {
             QuitScope::Tabs(tabs) if tabs.len() == 1 => "Close tab?",
             QuitScope::Tabs(_) => "Close tabs?",
             QuitScope::Window(_) => "Close window?",
-            QuitScope::App => "Quit Warp?",
+            QuitScope::App => {
+                return AlertDialogWithCallbacks::for_app(
+                    format!("Quit {}?", ChannelState::product_name()),
+                    state.warning_text(),
+                    buttons,
+                    on_disable_warning_modal,
+                );
+            }
             QuitScope::EditorTab { .. } => "Save changes?",
         };
 

@@ -1455,8 +1455,8 @@ impl MCPServersListPageView {
                         .current_team()
                         .map(|team| team.name.clone());
                     let shared_by_text = match team_name {
-                        Some(name) => format!("Shared by Warp and {name}"),
-                        None => "Shared by Warp and from other devices".to_string(),
+                        Some(name) => format!("Shared by this app and {name}"),
+                        None => "Shared by this app and from other devices".to_string(),
                     };
 
                     page.add_child(self.render_server_cards_section(
@@ -1467,7 +1467,7 @@ impl MCPServersListPageView {
                     ));
                 } else if !filtered_gallery_cards.is_empty() {
                     page.add_child(self.render_server_cards_section(
-                        "Shared from Warp",
+                        "Shared from this app",
                         &filtered_gallery_cards,
                         appearance,
                         app,

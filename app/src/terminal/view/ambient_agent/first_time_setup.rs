@@ -199,7 +199,7 @@ impl FirstTimeCloudAgentSetupView {
         .finish()
     }
 
-    /// Renders the free credits banner - displayed INSIDE the form card at the top.
+    /// Renders the free request banner - displayed INSIDE the form card at the top.
     fn render_free_credits_banner(
         &self,
         credits: i32,
@@ -209,7 +209,7 @@ impl FirstTimeCloudAgentSetupView {
 
         // Badge with blue border
         let badge = Container::new(
-            Text::new("Free credits", appearance.ui_font_family(), 12.)
+            Text::new("Free AI requests", appearance.ui_font_family(), 12.)
                 .with_style(Properties::default().weight(Weight::Semibold))
                 .with_color(theme.accent().into())
                 .finish(),
@@ -222,10 +222,10 @@ impl FirstTimeCloudAgentSetupView {
 
         // Banner text - dynamic based on credits
         let credits_text = if credits == 1 {
-            "You have 1 free credit to use on Oz cloud agents.".to_string()
+            "You have 1 free AI request to use on cloud agents.".to_string()
         } else {
             format!(
-                "You have {} free credits to use on Oz cloud agents.",
+                "You have {} free AI requests to use on cloud agents.",
                 credits
             )
         };

@@ -1,6 +1,7 @@
 //! Dispatch wrapper that routes between the legacy and v2 billing & usage
 //! pages.
 
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_core::ui::appearance::Appearance;
 use warpui::elements::{ChildView, Container};
@@ -103,6 +104,10 @@ impl SettingsPageMeta for BillingAndUsageDispatchView {
     }
 
     fn should_render(&self, ctx: &AppContext) -> bool {
+        if ChannelState::is_slipstream() {
+            return false;
+        }
+
         !AuthStateProvider::as_ref(ctx)
             .get()
             .is_anonymous_or_logged_out()
@@ -146,7 +151,7 @@ impl SettingsWidget for BillingAndUsageWidget {
     type View = BillingAndUsageDispatchView;
 
     fn search_terms(&self) -> &str {
-        "plan billing a.i. ai usage limit credits balance overview"
+        "plan billing a.i. ai usage limit balance overview"
     }
 
     fn render(

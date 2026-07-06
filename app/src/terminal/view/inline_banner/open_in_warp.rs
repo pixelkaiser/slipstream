@@ -10,6 +10,7 @@ use super::{
     InlineBannerTextButtonVariant,
 };
 use crate::appearance::Appearance;
+use crate::channel::ChannelState;
 use crate::terminal::model::session::Session;
 use crate::terminal::view::open_in_warp::OpenablePath;
 use crate::terminal::view::{InlineBannerId, TerminalAction};
@@ -44,11 +45,14 @@ impl OpenInWarpBannerState {
     }
 }
 
-/// Given an openable file, format a file-specific title for the Open in Warp banner.
+/// Given an openable file, format a file-specific title for the open-in-app banner.
 fn file_title_text(openable_path: &OpenablePath) -> String {
     match openable_path.file_type {
         OpenableFileType::Markdown => {
-            "Did you know that Warp can directly display Markdown files?".to_string()
+            format!(
+                "Did you know that {} can directly display Markdown files?",
+                ChannelState::product_name()
+            )
         }
         OpenableFileType::Code | OpenableFileType::Text => {
             cfg_if::cfg_if! {
@@ -59,13 +63,22 @@ fn file_title_text(openable_path: &OpenablePath) -> String {
 
                     match language.as_ref().map(|language| language.display_name()) {
                         Some(display_name) => {
-                            format!("Did you know that Warp can directly edit {display_name} files?")
+                            format!(
+                                "Did you know that {} can directly edit {display_name} files?",
+                                ChannelState::product_name()
+                            )
                         }
-                        None => "Did you know that Warp can directly edit code?".to_string(),
+                        None => format!(
+                            "Did you know that {} can directly edit code?",
+                            ChannelState::product_name()
+                        ),
                     }
                 } else {
                     // The `languages` crate is not available on WASM, so use a fallback message.
-                    "Did you know that Warp can directly edit code?".to_string()
+                    format!(
+                        "Did you know that {} can directly edit code?",
+                        ChannelState::product_name()
+                    )
                 }
             }
         }
@@ -78,12 +91,14 @@ pub fn render_open_in_warp_banner(
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     let button_text = match state.target.file_type {
-        OpenableFileType::Markdown => "View in Warp",
-        OpenableFileType::Code | OpenableFileType::Text => "Edit in Warp",
+        OpenableFileType::Markdown => format!("View in {}", ChannelState::product_name()),
+        OpenableFileType::Code | OpenableFileType::Text => {
+            format!("Edit in {}", ChannelState::product_name())
+        }
     };
 
     let open_button = InlineBannerTextButton {
-        text: button_text.to_string(),
+        text: button_text,
         text_color: appearance.theme().active_ui_text_color().into_solid(),
         button_state: InlineBannerButtonState {
             on_click_event: TerminalAction::OpenInWarpBanner(OpenInWarpBannerAction::OpenFile),

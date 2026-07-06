@@ -29,14 +29,15 @@ const CORNER_RADIUS: f32 = 12.;
 const PANEL_PADDING: f32 = 24.;
 const CLOSE_BUTTON_DIAMETER: f32 = 20.;
 
-const NOTICE_TITLE_TEXT: &str = "Warp is no longer providing inference on the free plan.";
-const NOTICE_BODY_TEXT: &str = "To keep using Warp's AI features, please upgrade to a paid plan, \
+const NOTICE_TITLE_TEXT: &str = "Hosted inference is no longer available on the free plan.";
+const NOTICE_BODY_TEXT: &str = "To keep using AI features, please upgrade to a paid plan, \
      bring your own API key or endpoint, or log in with your Grok subscription.";
-const NOTICE_BONUS_CREDITS_TEXT: &str = "If you have any unused bonus credits, AI will keep \
+const NOTICE_BONUS_CREDITS_TEXT: &str =
+    "If you have any unused bonus request balance, AI will keep \
      working until these run out.";
 
-const PROMPT_SUGGESTIONS_TITLE_TEXT: &str = "How to use AI features in Warp";
-const PROMPT_SUGGESTIONS_BODY_TEXT: &str = "To use AI features in Warp, subscribe to a paid plan, \
+const PROMPT_SUGGESTIONS_TITLE_TEXT: &str = "How to use AI features";
+const PROMPT_SUGGESTIONS_BODY_TEXT: &str = "To use AI features, subscribe to a paid plan, \
      add an API key (OpenAI, Anthropic, or Google), add a custom inference endpoint (OpenRouter, \
      LiteLLM), or log in using your SuperGrok subscription.";
 

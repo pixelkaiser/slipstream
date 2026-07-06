@@ -1,4 +1,5 @@
 use ai::LLMId;
+use warp_core::channel::ChannelState;
 use warp_core::send_telemetry_from_ctx;
 use warpui_core::{Entity, ModelContext};
 
@@ -27,7 +28,7 @@ impl UICustomizationSettings {
             show_conversation_history: true,
             show_project_explorer: true,
             show_global_search: true,
-            show_warp_drive: true,
+            show_warp_drive: !ChannelState::is_slipstream(),
             show_code_review_button: true,
         }
     }
@@ -49,10 +50,11 @@ impl UICustomizationSettings {
     /// hidden, so it does not count.
     pub fn tools_panel_enabled(&self, intention: &OnboardingIntention) -> bool {
         let conversation_visible = matches!(intention, OnboardingIntention::AgentDrivenDevelopment);
+        let drive_visible = !ChannelState::is_slipstream();
         (conversation_visible && self.show_conversation_history)
             || self.show_project_explorer
             || self.show_global_search
-            || self.show_warp_drive
+            || (drive_visible && self.show_warp_drive)
     }
 }
 
@@ -101,6 +103,10 @@ impl SelectedSettings {
     }
 
     pub fn is_warp_drive_enabled(&self) -> bool {
+        if ChannelState::is_slipstream() {
+            return false;
+        }
+
         match self {
             SelectedSettings::AgentDrivenDevelopment {
                 ui_customization, ..
@@ -444,7 +450,7 @@ impl OnboardingStateModel {
         self.ui_customization.show_conversation_history = enabled;
         self.ui_customization.show_project_explorer = enabled;
         self.ui_customization.show_global_search = enabled;
-        self.ui_customization.show_warp_drive = enabled;
+        self.ui_customization.show_warp_drive = enabled && !ChannelState::is_slipstream();
         ctx.notify();
     }
 
@@ -498,6 +504,10 @@ impl OnboardingStateModel {
     }
 
     pub(crate) fn set_show_warp_drive(&mut self, value: bool, ctx: &mut ModelContext<Self>) {
+        if ChannelState::is_slipstream() {
+            return;
+        }
+
         if self.ui_customization.show_warp_drive == value {
             return;
         }

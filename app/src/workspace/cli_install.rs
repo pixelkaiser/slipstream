@@ -47,7 +47,7 @@ fn path_resolves_to(path: &Path, expected_path: &Path) -> bool {
     path == expected_path
 }
 
-/// Whether the installed Warp Control command resolves to this app bundle's wrapper.
+/// Whether the installed control command resolves to this app bundle's wrapper.
 pub fn is_warpctrl_installed() -> bool {
     let Ok(source) = warpctrl_bundle_source_path() else {
         return false;
@@ -72,7 +72,8 @@ fn create_symlink_with_admin(source: &Path, target: &Path) -> Result<()> {
 
     // Use osascript to run the ln command with admin privileges, with a custom prompt
     let script = format!(
-        "do shell script \"ln -sf {escaped_source} {escaped_target}\" with prompt \"Warp needs administrator privileges to install the command in /usr/local/bin.\" with administrator privileges"
+        "do shell script \"ln -sf {escaped_source} {escaped_target}\" with prompt \"{} needs administrator privileges to install the command in /usr/local/bin.\" with administrator privileges",
+        ChannelState::product_name()
     );
 
     log::debug!("Creating symlink with admin privileges");
@@ -108,7 +109,8 @@ fn remove_file_with_admin(target: &Path) -> Result<()> {
     let escaped_target = ShellFamily::Posix.shell_escape(target_str);
 
     let script = format!(
-        "do shell script \"rm {escaped_target}\" with prompt \"Warp needs administrator privileges to uninstall the command from /usr/local/bin.\" with administrator privileges"
+        "do shell script \"rm {escaped_target}\" with prompt \"{} needs administrator privileges to uninstall the command from /usr/local/bin.\" with administrator privileges",
+        ChannelState::product_name()
     );
 
     log::debug!("Removing file with admin privileges");
@@ -225,17 +227,22 @@ pub fn install_warpctrl() -> Result<()> {
 
     if !warpctrl_source.exists() {
         return Err(anyhow!(
-            "Cannot install Warp Control CLI: bundled wrapper not found at {}",
+            "Cannot install {}: bundled wrapper not found at {}",
+            ChannelState::control_cli_name(),
             warpctrl_source.display()
         ));
     }
 
-    install_symlink(&warpctrl_source, &warpctrl_path, "Warp Control CLI")
+    install_symlink(
+        &warpctrl_source,
+        &warpctrl_path,
+        ChannelState::control_cli_name(),
+    )
 }
 
-/// Uninstall the Warp Control CLI by removing the symlink from /usr/local/bin
+/// Uninstall the control CLI by removing the symlink from /usr/local/bin
 pub fn uninstall_warpctrl() -> Result<()> {
-    uninstall_symlink(&warpctrl_install_target_path(), "Warp Control command")
+    uninstall_symlink(&warpctrl_install_target_path(), "control command")
 }
 
 #[cfg(test)]

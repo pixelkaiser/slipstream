@@ -2,6 +2,7 @@
 use ::local_control::{ActionKind, ControlError, ErrorCode, PROTOCOL_VERSION};
 use warpui::{ModelContext, SingletonEntity};
 
+use crate::channel::ChannelState;
 use crate::features::FeatureFlag;
 use crate::local_control::LocalControlBridge;
 use crate::settings::LocalControlSettings;
@@ -26,7 +27,10 @@ pub(super) fn ensure_feature_enabled() -> Result<(), ControlError> {
     }
     Err(ControlError::new(
         ErrorCode::LocalControlDisabled,
-        "Warp control CLI is disabled by feature flag",
+        format!(
+            "{} is disabled by feature flag",
+            ChannelState::control_cli_name()
+        ),
     ))
 }
 

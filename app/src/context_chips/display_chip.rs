@@ -715,7 +715,7 @@ impl GitBranch {
 
         if branch.is_linked_worktree {
             return PromptChipShellCommand::Echo {
-                message: "The branch is already checked out in another worktree, but Warp couldn't find its path.",
+                message: "The branch is already checked out in another worktree, but the app couldn't find its path.",
             };
         }
 
@@ -1099,7 +1099,7 @@ impl DisplayChip {
 
         let quota_reset_popup = ctx.add_typed_action_view(|_| {
             FeaturePopup::alert_icon(NewFeaturePopupLabel::FromString(
-                "Monthly AI credits reset!".to_string(),
+                "Monthly AI quota reset!".to_string(),
             ))
         });
 

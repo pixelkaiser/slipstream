@@ -749,8 +749,8 @@ fn integration_config_from_variables(variables: &Value) -> anyhow::Result<Integr
 
 fn simple_integration_payload(provider_slug: &str, record: Option<&IntegrationRecord>) -> Value {
     let description = match provider_slug {
-        "linear" => "Connect Linear to local Warp agents.",
-        "slack" => "Connect Slack to local Warp agents.",
+        "linear" => "Connect Linear to local agents.",
+        "slack" => "Connect Slack to local agents.",
         _ => {
             return simple_integration_payload_with_description(
                 provider_slug,

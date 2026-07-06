@@ -32,6 +32,7 @@ use warp_cli::secret::SecretCommand;
 use warp_cli::share::ShareRequest;
 use warp_cli::task::{MessageCommand, TaskCommand};
 use warp_cli::{CliCommand, GlobalOptions, OZ_HARNESS_ENV};
+use warp_core::channel::ChannelState;
 use warp_core::features::FeatureFlag;
 use warp_graphql::object_permissions::OwnerType;
 use warp_isolation_platform::IsolationPlatformError;
@@ -1633,7 +1634,8 @@ fn report_fatal_error(err: anyhow::Error, ctx: &mut AppContext) {
         if let Ok(path) = log_file_path() {
             let _ = write!(
                 message,
-                "\n\nFor more information, check Warp logs at {}",
+                "\n\nFor more information, check {} logs at {}",
+                ChannelState::product_name(),
                 path.display()
             );
         }

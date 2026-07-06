@@ -467,7 +467,7 @@ fn embed_resource_file(target_dir: &Path) {
     use std::io::Write;
 
     let version = env::var("GIT_RELEASE_TAG").unwrap_or("v0".to_owned());
-    let app_name = env::var("WARP_APP_NAME").unwrap_or("Warp".to_owned());
+    let app_name = env::var("WARP_APP_NAME").unwrap_or("Slipstream".to_owned());
     let bin_name = env::var("CARGO_BIN_NAME").unwrap_or("local".to_owned());
     let file_version = windows_file_version(&version);
     let company_name = if app_name == "Slipstream" {

@@ -24,6 +24,7 @@ use super::section_views::{
 use super::{KeybindingsView, ResourceCenterMainEvent, ResourceCenterMainView, TipsCompleted};
 use crate::appearance::Appearance;
 use crate::changelog_model::ChangelogModel;
+use crate::channel::ChannelState;
 use crate::ui_components::buttons::icon_button;
 use crate::ui_components::icons;
 use crate::ui_components::window_focus_dimming::WindowFocusDimming;
@@ -253,8 +254,8 @@ impl ResourceCenterView {
         ctx: &mut ViewContext<Self>,
     ) {
         match item {
-            ResourceCenterFooterItem::Docs => ctx.open_url(links::USER_DOCS_URL),
-            ResourceCenterFooterItem::Slack => ctx.open_url(links::SLACK_URL),
+            ResourceCenterFooterItem::Docs => ctx.open_url(links::user_docs_url()),
+            ResourceCenterFooterItem::Slack => ctx.open_url(links::slack_url()),
             // Route feedback through the workspace action so the guided agent experience is
             // launched when AI is available, and the GitHub issue form is opened otherwise.
             ResourceCenterFooterItem::Feedback => {
@@ -332,7 +333,7 @@ impl ResourceCenterView {
                 if FeatureFlag::AvatarInTabBar.is_enabled() {
                     String::new()
                 } else {
-                    "Warp Essentials".to_string()
+                    format!("{} Essentials", ChannelState::product_name())
                 }
             }
         };
@@ -448,13 +449,16 @@ impl ResourceCenterView {
 
     fn render_footer(&self, appearance: &Appearance) -> Box<dyn Element> {
         let docs_button = self.render_footer_button(ResourceCenterFooterItem::Docs, appearance);
-        let slack_button = self.render_footer_button(ResourceCenterFooterItem::Slack, appearance);
         let feedback_button =
             self.render_footer_button(ResourceCenterFooterItem::Feedback, appearance);
 
-        let footer = Flex::row()
-            .with_child(docs_button)
-            .with_child(slack_button)
+        let mut footer = Flex::row().with_child(docs_button);
+        if !ChannelState::is_slipstream() {
+            footer = footer
+                .with_child(self.render_footer_button(ResourceCenterFooterItem::Slack, appearance));
+        }
+
+        let footer = footer
             .with_child(feedback_button)
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceEvenly)

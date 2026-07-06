@@ -1,4 +1,5 @@
 use pathfinder_geometry::vector::vec2f;
+use warp_core::channel::ChannelState;
 use warp_core::ui::theme::phenomenon::PhenomenonStyle;
 use warp_core::ui::theme::Fill;
 use warpui::assets::asset_cache::AssetSource;
@@ -43,7 +44,7 @@ const FEATURE_ITEMS: &[FeatureItem] = &[
     FeatureItem {
         icon: Icon::MessageCheckSquare,
         title: "Native code review",
-        description: "Send inline comments from Warp's code review directly to Claude Code, Codex, or OpenCode",
+        description: "Send inline comments from code review directly to Claude Code, Codex, or OpenCode",
     },
 ];
 
@@ -105,7 +106,10 @@ pub fn render_welcome_banner(
 
     // Title
     let title = Text::new(
-        "Introducing universal agent support: level up any coding agent with Warp",
+        format!(
+            "Introducing universal agent support: level up any coding agent with {}",
+            ChannelState::product_name()
+        ),
         appearance.ui_font_family(),
         20.,
     )

@@ -298,12 +298,13 @@ impl Display for SettingsSection {
             SettingsSection::SharedBlocks => write!(f, "Shared blocks"),
             SettingsSection::MCPServers => write!(f, "MCP Servers"),
             SettingsSection::Scripting => write!(f, "Scripting"),
-            SettingsSection::WarpDrive => write!(f, "Warp Drive"),
+            SettingsSection::WarpDrive => write!(f, "Drive"),
+            SettingsSection::Warpify => write!(f, "Shell integration"),
             SettingsSection::WarpAgent => {
-                if ChannelState::product_name() == "Slipstream" {
+                if ChannelState::is_slipstream() {
                     write!(f, "Agent")
                 } else {
-                    write!(f, "Warp Agent")
+                    write!(f, "{}", ChannelState::agent_name())
                 }
             }
             SettingsSection::AgentProfiles => write!(f, "Profiles"),

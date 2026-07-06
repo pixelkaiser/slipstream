@@ -165,7 +165,7 @@ impl WorkspaceClient for ServerApi {
         let response = self.send_graphql_request(operation, None).await;
 
         match response {
-            Err(_) => Err(anyhow!("Failed to purchase add-on credits")),
+            Err(_) => Err(anyhow!("Failed to update AI request balance")),
             Ok(response) => match response.purchase_addon_credits {
                 PurchaseAddonCreditsResult::PurchaseAddonCreditsOutput(_) => {
                     TeamClient::workspaces_metadata(self)

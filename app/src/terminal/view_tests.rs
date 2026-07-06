@@ -5414,19 +5414,19 @@ fn set_input_mode_agent_replaces_fullscreen_agent_view_for_long_running_command(
 
             let inline_conversation_id =
                 match view.agent_view_controller().as_ref(ctx).agent_view_state() {
-                AgentViewState::Active {
-                    conversation_id,
-                    origin,
-                    display_mode,
-                    ..
-                } => {
-                    assert_eq!(*origin, AgentViewEntryOrigin::LongRunningCommand);
-                    assert_eq!(*display_mode, AgentViewDisplayMode::Inline);
-                    assert_ne!(*conversation_id, stale_conversation_id);
-                    *conversation_id
-                }
-                state => panic!("expected active inline agent view, got {state:?}"),
-            };
+                    AgentViewState::Active {
+                        conversation_id,
+                        origin,
+                        display_mode,
+                        ..
+                    } => {
+                        assert_eq!(*origin, AgentViewEntryOrigin::LongRunningCommand);
+                        assert_eq!(*display_mode, AgentViewDisplayMode::Inline);
+                        assert_ne!(*conversation_id, stale_conversation_id);
+                        *conversation_id
+                    }
+                    state => panic!("expected active inline agent view, got {state:?}"),
+                };
 
             let model = view.model.lock();
             let block_id = model.block_list().active_block().id().clone();
@@ -5447,7 +5447,10 @@ fn set_input_mode_agent_replaces_fullscreen_agent_view_for_long_running_command(
             let model = view.model.lock();
             let active_block = model.block_list().active_block();
             assert!(active_block.is_agent_monitoring());
-            assert_eq!(active_block.ai_conversation_id(), Some(inline_conversation_id));
+            assert_eq!(
+                active_block.ai_conversation_id(),
+                Some(inline_conversation_id)
+            );
             assert!(active_block.cli_subagent_task_id().is_some());
             assert!(view.cli_subagent_views.contains_key(&block_id));
         });

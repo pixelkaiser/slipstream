@@ -237,7 +237,7 @@ impl AgentSlide {
             .finish();
 
         let subtitle = FormattedTextElement::from_str(
-            "Select your Warp Agent's defaults.",
+            format!("Select your {} defaults.", ChannelState::agent_name()),
             appearance.ui_font_family(),
             16.,
         )
@@ -740,19 +740,19 @@ impl AgentSlide {
             (
                 AgentAutonomy::Full,
                 "Full",
-                "Warp Agent runs commands, writes code, and reads files without asking.",
+                "The agent runs commands, writes code, and reads files without asking.",
                 self.autonomy_full_mouse_state.clone(),
             ),
             (
                 AgentAutonomy::Partial,
                 "Partial",
-                "Warp Agent can plan, read files, and execute low-risk commands. Asks before making any changes or executing sensitive commands.",
+                "The agent can plan, read files, and execute low-risk commands. Asks before making any changes or executing sensitive commands.",
                 self.autonomy_partial_mouse_state.clone(),
             ),
             (
                 AgentAutonomy::None,
                 "None",
-                "Warp Agent takes no actions without your approval.",
+                "The agent takes no actions without your approval.",
                 self.autonomy_none_mouse_state.clone(),
             ),
         ];

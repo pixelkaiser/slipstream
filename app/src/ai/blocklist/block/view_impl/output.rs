@@ -74,13 +74,13 @@ use crate::ai::blocklist::block::view_impl::common::{
     MaybeShimmeringText, BLOCKED_ACTION_MESSAGE_FOR_GREP_OR_FILE_GLOB,
     BLOCKED_ACTION_MESSAGE_FOR_READING_FILES, BLOCKED_ACTION_MESSAGE_FOR_SEARCHING_CODEBASE,
 };
+#[cfg(not(target_family = "wasm"))]
+use crate::ai::blocklist::block::OpenCodeCustomAnswerContext;
 use crate::ai::blocklist::block::{
     AIBlock, AIBlockAction, AIBlockStateHandles, ActionButtons, AutonomySettingSpeedbump,
     CollapsibleElementState, CollapsibleExpansionState, EmbeddedCodeEditorView, FinishReason,
     ImportedCommentGroup, RequestedEdit, TextLocation, TodoListElementState,
 };
-#[cfg(not(target_family = "wasm"))]
-use crate::ai::blocklist::block::OpenCodeCustomAnswerContext;
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::ai::blocklist::inline_action::ask_user_question_view::AskUserQuestionView;
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::AwsBedrockCredentialsErrorView;
@@ -1174,7 +1174,7 @@ pub(super) fn render(props: Props, app: &AppContext) -> Box<dyn Element> {
                                 render_informational_footer(
                                     app,
                                     format!(
-                                        "Sorry you had a bad experience with this interaction. We've refunded you {request_refunded_count} credits. We appreciate your feedback!"
+                                        "Sorry you had a bad experience with this interaction. We've refunded you {request_refunded_count} usage units. We appreciate your feedback!"
                                     ),
                                 )
                                 .with_agent_output_item_spacing(app)

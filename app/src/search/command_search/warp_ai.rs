@@ -12,7 +12,9 @@ use warpui::{AppContext, Element, SingletonEntity};
 use super::workflows::{WorkflowIdentity, WorkflowSearchItem};
 use crate::ai::AIRequestUsageModel;
 use crate::ai_assistant::execution_context::WarpAiExecutionContext;
-use crate::ai_assistant::{GenerateCommandsFromNaturalLanguageError, AI_ASSISTANT_LOGO_COLOR};
+use crate::ai_assistant::{
+    ai_assistant_feature_name, GenerateCommandsFromNaturalLanguageError, AI_ASSISTANT_LOGO_COLOR,
+};
 use crate::appearance::Appearance;
 use crate::features::FeatureFlag;
 use crate::search::command_search::searcher::CommandSearchItemAction;
@@ -29,9 +31,6 @@ use crate::ui_components::icons::Icon as UIIcon;
 use crate::util::color::{ContrastingColor, MinimumAllowedContrast};
 use crate::workflows::{AIWorkflowOrigin, WorkflowSource, WorkflowType};
 
-const OPEN_WARP_AI_ITEM_BODY_TEXT: &str = "Ask Warp AI for command suggestions";
-const TRANSLATE_WITH_WARP_AI_ITEM_BODY_TEXT: &str = "Translate into shell command using Warp AI";
-
 #[derive(Clone, Debug)]
 pub enum WarpAISearchItem {
     /// Translates the query within command search.
@@ -42,10 +41,20 @@ pub enum WarpAISearchItem {
 }
 
 impl WarpAISearchItem {
-    fn item_body_text(&self) -> &'static str {
+    fn item_body_text(&self) -> String {
         match self {
-            WarpAISearchItem::Translate => TRANSLATE_WITH_WARP_AI_ITEM_BODY_TEXT,
-            WarpAISearchItem::Open => OPEN_WARP_AI_ITEM_BODY_TEXT,
+            WarpAISearchItem::Translate => {
+                format!(
+                    "Translate into shell command using {}",
+                    ai_assistant_feature_name()
+                )
+            }
+            WarpAISearchItem::Open => {
+                format!(
+                    "Ask {} for command suggestions",
+                    ai_assistant_feature_name()
+                )
+            }
         }
     }
 }
@@ -58,7 +67,7 @@ impl SearchItem for WarpAISearchItem {
         highlight_state: ItemHighlightState,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        // Since the Warp AI logo color is hardcoded, let's find the best
+        // Since the AI logo color is hardcoded, let's find the best
         // contrasting color depending on the user's theme and the item's selected state.
         let command_search_background = appearance.theme().surface_1();
         let item_background_color = match highlight_state.container_background_fill(appearance) {
@@ -133,13 +142,13 @@ impl SearchItem for WarpAISearchItem {
     }
 
     fn accessibility_label(&self) -> String {
-        format!("Warp AI: {}", self.item_body_text())
+        format!("{}: {}", ai_assistant_feature_name(), self.item_body_text())
     }
 }
 
-/// The Warp AI data source provides two different types of results:
+/// The branded AI data source provides two different types of results:
 /// - synchronous: the synchronous result provided by this data source is a
-///   single item that opens/translates using Warp AI when selected.
+///   single item that opens/translates using the branded AI surface when selected.
 /// - asynchronous: the asynchronous results are AI generated workflows
 /// In most cases, the data source should be registered _twice_: once as a sync source
 /// and once as an async source. That way, the mixer will treat these as two separate
@@ -237,7 +246,7 @@ impl DataSourceRunError for GenerateCommandsFromNaturalLanguageError {
         match self {
             Self::BadPrompt => "No results found. Please try again with a more specific query.",
             Self::AiProviderError => "Something went wrong. Please try again.",
-            Self::RateLimited => "Looks like you're out of AI credits. Please try again later.",
+            Self::RateLimited => "Provider or account limit reached. Please try again later.",
             Self::Other => "Something went wrong. Please try again.",
         }
         .to_string()

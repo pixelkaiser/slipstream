@@ -5,6 +5,7 @@ use std::{env, fs, io};
 
 use async_trait::async_trait;
 use serde_json::Value;
+use warp_core::channel::ChannelState;
 
 use super::{
     compare_versions, run_cli_command_logged, CliAgentPluginManager, PluginInstallError,
@@ -59,7 +60,7 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     }
 
     fn can_auto_install(&self) -> bool {
-        true
+        !ChannelState::is_slipstream()
     }
 
     fn is_installed(&self) -> bool {
@@ -145,18 +146,26 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     }
 
     fn install_success_message(&self) -> &'static str {
-        "Warp plugin installed. Please run /reload-plugins to activate."
+        "Plugin installed. Please run /reload-plugins to activate."
     }
 
     fn update_success_message(&self) -> &'static str {
-        "Warp plugin updated. Please run /reload-plugins to activate."
+        "Plugin updated. Please run /reload-plugins to activate."
     }
 
     fn install_instructions(&self) -> &'static PluginInstructions {
+        if ChannelState::is_slipstream() {
+            return &SLIPSTREAM_UNAVAILABLE_INSTRUCTIONS;
+        }
+
         &INSTALL_INSTRUCTIONS
     }
 
     fn update_instructions(&self) -> &'static PluginInstructions {
+        if ChannelState::is_slipstream() {
+            return &SLIPSTREAM_UNAVAILABLE_INSTRUCTIONS;
+        }
+
         &UPDATE_INSTRUCTIONS
     }
 
@@ -211,32 +220,32 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
 
 static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
     PluginInstructions {
-        title: "Install Warp Plugin for Claude Code",
-        subtitle: "Ensure that jq is installed on your machine. Then, run these commands.",
-        steps: &[
-            PluginInstructionStep {
-                description: "Add the Warp plugin marketplace repository",
-                command: "claude plugin marketplace add warpdotdev/claude-code-warp",
-                executable: true,
-                link: None,
-            },
-            PluginInstructionStep {
-                description: "Install the Warp plugin",
-                command: "claude plugin install warp@claude-code-warp",
-                executable: true,
-                link: None,
-            },
-        ],
-        post_install_notes: &[
-            "Restart Claude Code to activate the plugin.",
-            "There are some known issues with Claude Code's plugin system. \
+    title: "Install Claude Code Notification Plugin",
+    subtitle: "Ensure that jq is installed on your machine. Then, run these commands.",
+    steps: &[
+        PluginInstructionStep {
+            description: "Add the plugin marketplace repository",
+            command: "claude plugin marketplace add warpdotdev/claude-code-warp",
+            executable: true,
+            link: None,
+        },
+        PluginInstructionStep {
+            description: "Install the plugin",
+            command: "claude plugin install warp@claude-code-warp",
+            executable: true,
+            link: None,
+        },
+    ],
+    post_install_notes: &[
+        "Restart Claude Code to activate the plugin.",
+        "There are some known issues with Claude Code's plugin system. \
              If the plugin is not found after step 1, you can try manually adding an \"extraKnownMarketplaces\" entry to ~/.claude/settings.json.",
-        ],
-    }
+    ],
+}
 });
 
 static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
-    title: "Update Warp Plugin for Claude Code",
+    title: "Update Claude Code Notification Plugin",
     subtitle: "Run the following commands.",
     steps: &[
         PluginInstructionStep {
@@ -260,6 +269,14 @@ static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| Plug
     ],
     post_install_notes: &["Restart Claude Code to activate the update."],
 });
+
+static SLIPSTREAM_UNAVAILABLE_INSTRUCTIONS: LazyLock<PluginInstructions> =
+    LazyLock::new(|| PluginInstructions {
+        title: "Plugin Packages Unavailable",
+        subtitle: "Slipstream does not ship these plugin install flows yet.",
+        steps: &[],
+        post_install_notes: &[],
+    });
 
 fn check_installed(claude_dir: &Path) -> bool {
     check_plugin_installed(claude_dir, PLUGIN_KEY)

@@ -1,4 +1,4 @@
-//! AI Assistant has since been renamed to "Warp AI" in the product.
+//! AI Assistant has since been renamed to a branded AI surface in the product.
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -14,6 +14,7 @@ use warp_graphql::ai::{
 use warp_graphql::mutations::generate_commands::{GenerateCommandsFailureType, GeneratedCommand};
 
 use crate::ai::{RequestLimitInfo, RequestLimitRefreshDuration};
+use crate::channel::ChannelState;
 use crate::server::telemetry::OpenedWarpAISource;
 use crate::terminal::model::terminal_model::BlockIndex;
 use crate::workflows::workflow::{Argument, Workflow};
@@ -32,8 +33,13 @@ mod test_util;
 /// This is also roughly the limit at which the editor starts degrading.
 pub const PROMPT_CHARACTER_LIMIT: usize = 1000;
 
-pub const AI_ASSISTANT_FEATURE_NAME: &str = "Warp AI";
-pub const ASK_AI_ASSISTANT_TEXT: &str = "Ask Warp AI";
+pub fn ai_assistant_feature_name() -> &'static str {
+    ChannelState::ai_name()
+}
+
+pub fn ask_ai_assistant_text() -> String {
+    format!("Ask {}", ai_assistant_feature_name())
+}
 
 pub const AI_ASSISTANT_SVG_PATH: &str = "bundled/svg/ai-assistant.svg";
 

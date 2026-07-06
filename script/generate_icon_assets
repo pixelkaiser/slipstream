@@ -19,6 +19,7 @@ ICON_DIR="$REPO_ROOT/app/channels/$CHANNEL/icon"
 MASTER_PATH="${2:-$ICON_DIR/master.png}"
 APP_ICON_PNG="$ICON_DIR/AppIcon.icon/Assets/4-2.png"
 NO_PADDING_DIR="$ICON_DIR/no-padding"
+ASSETS_DIR="$REPO_ROOT/app/assets/bundled"
 
 if ! command -v magick >/dev/null 2>&1; then
     echo "Error: ImageMagick 'magick' is required." >&2
@@ -67,3 +68,31 @@ magick \
     "$NO_PADDING_DIR/128x128.png" \
     "$NO_PADDING_DIR/256x256.png" \
     "$NO_PADDING_DIR/icon.ico"
+
+if [[ "$CHANNEL" = "oss" ]]; then
+    ABOUT_ICON="$ASSETS_DIR/png/slipstream-app-icon.png"
+    DOCK_TILE_ICON="$REPO_ROOT/app/DockTilePlugin/Resources/slipstream.png"
+
+    mkdir -p "$(dirname "$ABOUT_ICON")" "$(dirname "$DOCK_TILE_ICON")"
+
+    magick "$APP_ICON_PNG" \
+        -resize 256x256! \
+        -alpha off \
+        -colorspace sRGB \
+        -depth 8 \
+        -define png:color-type=2 \
+        -strip \
+        "$ABOUT_ICON"
+
+    magick "$APP_ICON_PNG" \
+        -resize 1024x1024! \
+        -alpha set \
+        \( -size 1024x1024 xc:none -fill white -draw "roundrectangle 0,0 1023,1023 220,220" \) \
+        -compose DstIn \
+        -composite \
+        -colorspace sRGB \
+        -depth 8 \
+        -define png:color-type=6 \
+        -strip \
+        "$DOCK_TILE_ICON"
+fi
