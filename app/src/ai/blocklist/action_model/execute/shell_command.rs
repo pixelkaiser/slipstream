@@ -93,6 +93,42 @@ fn command_may_invoke_pager(command: &str) -> bool {
     false
 }
 
+fn command_appears_to_be_bounded_sampler(command: &str) -> bool {
+    let tokens = command
+        .split(|ch: char| {
+            ch.is_whitespace()
+                || matches!(ch, ';' | '&' | '|' | '(' | ')' | '<' | '>' | '\n' | '\r')
+        })
+        .map(|token| {
+            token
+                .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`' | '{' | '}' | '[' | ']'))
+                .to_ascii_lowercase()
+        })
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+
+    const BOUNDED_SAMPLERS: &[&str] = &["iostat", "mpstat", "pidstat", "sar", "vmstat"];
+
+    tokens.iter().enumerate().any(|(index, token)| {
+        BOUNDED_SAMPLERS.contains(&token.as_str())
+            && tokens
+                .iter()
+                .skip(index + 1)
+                .filter(|arg| arg.parse::<u64>().is_ok_and(|value| value > 0))
+                .take(2)
+                .count()
+                >= 2
+    })
+}
+
+fn requested_command_delay(
+    command: &str,
+    wait_until_completion: bool,
+) -> Option<ShellCommandDelay> {
+    (wait_until_completion || command_appears_to_be_bounded_sampler(command))
+        .then_some(ShellCommandDelay::OnCompletion)
+}
+
 pub struct ShellCommandExecutor {
     active_session: ModelHandle<ActiveSession>,
     block_finished_senders: HashMap<BlockSelector, oneshot::Sender<()>>,
@@ -332,7 +368,10 @@ impl ShellCommandExecutor {
                 drop(model);
 
                 ActionExecution::new_async(
-                    self.action_result_future(block_selector.clone(), None),
+                    self.action_result_future(
+                        block_selector.clone(),
+                        requested_command_delay(&command, *wait_until_completion),
+                    ),
                     move |result, ctx| {
                         // Remove the senders from the maps.
                         if let Some(handle) = handle.upgrade(ctx) {

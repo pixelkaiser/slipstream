@@ -346,6 +346,7 @@ impl AgentViewState {
 const EXIT_CONFIRMATION_MESSAGE_ID: &str = "exit_confirmation_message";
 const NEW_CONVERSATION_KEYBINDING_CONFIRMATION_MESSAGE_ID: &str =
     "new_conversation_keybinding_confirmation_message";
+pub(crate) const EXIT_BLOCKED_MESSAGE_ID: &str = "exit_blocked_message";
 
 /// Controller responsible for managing and updating agent view state for a given terminal pane.
 ///
@@ -543,6 +544,23 @@ impl AgentViewController {
         {
             self.clear_pending_confirmation(ctx);
         }
+    }
+
+    pub(crate) fn show_exit_blocked_message(
+        &mut self,
+        error: ExitAgentViewError,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.ephemeral_message_model.update(ctx, |model, ctx| {
+            model.show_ephemeral_message(
+                EphemeralMessage::new(
+                    exit_blocked_message(error),
+                    DismissalStrategy::Timer(ENTER_OR_EXIT_CONFIRMATION_WINDOW),
+                )
+                .with_id(EXIT_BLOCKED_MESSAGE_ID),
+                ctx,
+            );
+        });
     }
 
     fn set_exit_confirmation(
@@ -1066,6 +1084,25 @@ fn exit_confirmation_message(
         MessageItem::text(text),
     ])
     .with_text_color(appearance.theme().ansi_fg_red())
+}
+
+fn exit_blocked_message(error: ExitAgentViewError) -> Message {
+    match error {
+        ExitAgentViewError::LongRunningCommand => Message::new(vec![
+            MessageItem::keystroke(Keystroke {
+                key: "c".to_owned(),
+                ctrl: true,
+                ..Default::default()
+            }),
+            MessageItem::text("to stop the running command before returning to terminal"),
+        ]),
+        ExitAgentViewError::ConversationViewer => {
+            Message::from_text("This conversation has no terminal to return to")
+        }
+        ExitAgentViewError::AmbientAgent => {
+            Message::from_text("This cloud agent has no terminal to return to")
+        }
+    }
 }
 
 fn new_conversation_keybinding_confirmation_message(

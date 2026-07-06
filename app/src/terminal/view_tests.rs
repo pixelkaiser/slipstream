@@ -26,7 +26,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::blocklist::agent_view::toolbar_item::AgentToolbarItemKind;
 use crate::ai::blocklist::agent_view::{
     AgentViewDisplayMode, AgentViewEntryBlock, AgentViewEntryOrigin, AgentViewState,
-    EnterAgentBlockAction, ExitAgentViewError,
+    EnterAgentBlockAction, ExitAgentViewError, EXIT_BLOCKED_MESSAGE_ID,
 };
 use crate::ai::blocklist::block::cli_controller::UserTakeOverReason;
 use crate::ai::blocklist::{
@@ -1316,6 +1316,10 @@ fn command_first_word_and_suffix_handles_alias_without_args() {
 fn escape_pops_nested_cloud_agent_view_with_long_running_command() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
 
@@ -1384,6 +1388,10 @@ fn escape_pops_nested_cloud_agent_view_with_long_running_command() {
 fn escape_does_not_exit_root_cloud_agent_view_with_long_running_command() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
         let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
 
@@ -1408,6 +1416,10 @@ fn escape_does_not_exit_root_cloud_agent_view_with_long_running_command() {
 fn escape_does_not_exit_local_agent_view_with_long_running_command() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::codex_app_server::CodexAppServerModel::new);
+        #[cfg(not(target_family = "wasm"))]
+        app.add_singleton_model(crate::opencode_server::OpenCodeServerModel::new);
         let _agent_view = FeatureFlag::AgentView.override_enabled(true);
 
         let terminal = add_window_with_terminal(&mut app, None);
@@ -1434,6 +1446,12 @@ fn escape_does_not_exit_local_agent_view_with_long_running_command() {
             view.handle_input_event(&InputEvent::Escape, ctx);
 
             assert!(view.agent_view_controller().as_ref(ctx).is_active());
+            let message_id = view
+                .ephemeral_message_model
+                .as_ref(ctx)
+                .current_message()
+                .and_then(|msg| msg.id());
+            assert_eq!(message_id, Some(EXIT_BLOCKED_MESSAGE_ID));
         });
     })
 }
