@@ -53,6 +53,8 @@ Slipstream tracks Warp, but changes the default operating model:
 - **Local inference:** The Warp agent experience connects to OpenAI-compatible local or self-hosted model APIs.
 - **Local state:** Conversations, integrations, tool connector configuration, and diagnostics are stored locally.
 - **Local tools and MCP:** Agent tool calls and MCP tool connectors are handled through the local backend.
+- **Local Codex and OpenCode integrations:** Slipstream can connect to local Codex app-server and OpenCode server endpoints, exposing their conversations and sessions inside the app.
+- **Docker container tools:** The left panel includes a Docker containers view for active local or SSH sessions, with searchable running-container listings and live log tailing for selected containers.
 - **Privacy-oriented app config:** Telemetry, crash reporting, hosted autoupdate configuration, and promotional cloud UI are disabled or removed for the Slipstream OSS app.
 - **Slipstream packaging:** The app is rebranded and packaged separately from upstream Warp, with macOS release artifacts published through GitHub Releases.
 - **Self-hosted sharing:** Session sharing can be routed through self-hosted infrastructure instead of Warp cloud services.
