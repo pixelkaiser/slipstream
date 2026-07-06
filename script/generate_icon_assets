@@ -1,0 +1,69 @@
+#!/bin/bash
+#
+# Generate channel icon assets from a single square master PNG.
+#
+# Usage: generate_icon_assets <channel> [master_png]
+#   channel: release channel under app/channels, e.g. stable
+#   master_png: defaults to app/channels/<channel>/icon/master.png
+
+set -euo pipefail
+
+if [[ "$#" -lt 1 || "$#" -gt 2 ]]; then
+    echo "Usage: generate_icon_assets <channel> [master_png]" >&2
+    exit 1
+fi
+
+CHANNEL="$1"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ICON_DIR="$REPO_ROOT/app/channels/$CHANNEL/icon"
+MASTER_PATH="${2:-$ICON_DIR/master.png}"
+APP_ICON_PNG="$ICON_DIR/AppIcon.icon/Assets/4-2.png"
+NO_PADDING_DIR="$ICON_DIR/no-padding"
+
+if ! command -v magick >/dev/null 2>&1; then
+    echo "Error: ImageMagick 'magick' is required." >&2
+    exit 1
+fi
+
+if [[ ! -f "$MASTER_PATH" ]]; then
+    echo "Error: master icon not found at $MASTER_PATH" >&2
+    exit 1
+fi
+
+WIDTH="$(magick identify -format "%w" "$MASTER_PATH")"
+HEIGHT="$(magick identify -format "%h" "$MASTER_PATH")"
+if [[ "$WIDTH" != "$HEIGHT" ]]; then
+    echo "Error: master icon must be square; got ${WIDTH}x${HEIGHT}." >&2
+    exit 1
+fi
+
+mkdir -p "$(dirname "$APP_ICON_PNG")" "$NO_PADDING_DIR"
+
+magick "$MASTER_PATH" \
+    -resize 1024x1024! \
+    -alpha off \
+    -colorspace sRGB \
+    -depth 8 \
+    -define png:color-type=2 \
+    -strip \
+    "$APP_ICON_PNG"
+
+for SIZE in 16 32 48 64 128 256 512; do
+    magick "$APP_ICON_PNG" \
+        -resize "${SIZE}x${SIZE}!" \
+        -alpha off \
+        -colorspace sRGB \
+        -depth 8 \
+        -define png:color-type=2 \
+        -strip \
+        "$NO_PADDING_DIR/${SIZE}x${SIZE}.png"
+done
+
+magick \
+    "$NO_PADDING_DIR/16x16.png" \
+    "$NO_PADDING_DIR/32x32.png" \
+    "$NO_PADDING_DIR/48x48.png" \
+    "$NO_PADDING_DIR/64x64.png" \
+    "$NO_PADDING_DIR/128x128.png" \
+    "$NO_PADDING_DIR/256x256.png" \
+    "$NO_PADDING_DIR/icon.ico"

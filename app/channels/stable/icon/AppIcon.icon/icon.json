@@ -8,20 +8,12 @@
       "hidden" : false,
       "layers" : [
         {
-          "blend-mode" : "multiply",
-          "fill" : "none",
-          "glass" : false,
-          "image-name" : "Glyph (1).svg",
-          "name" : "Glyph (1)",
-          "opacity" : 1
-        },
-        {
-          "blend-mode" : "overlay",
+          "blend-mode" : "normal",
           "fill" : "none",
           "glass" : false,
           "hidden" : false,
           "image-name" : "4-2.png",
-          "name" : "4-2",
+          "name" : "Warp Synthwave",
           "opacity" : 1
         }
       ],
