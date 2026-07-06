@@ -5,7 +5,11 @@ use futures::channel::oneshot;
 use parking_lot::FairMutex;
 use warpui::{App, EntityId};
 
-use super::{command_may_invoke_pager, BlockSelector, ShellCommandExecutor};
+use super::{
+    command_appears_to_be_bounded_sampler, command_may_invoke_pager, requested_command_delay,
+    BlockSelector, ShellCommandExecutor,
+};
+use crate::ai::agent::ShellCommandDelay;
 use crate::terminal::event::{BlockMetadataReceivedEvent, BlockWorkingDirectoryUpdatedEvent};
 use crate::terminal::model::block::{BlockId, BlockMetadata};
 use crate::terminal::model::session::active_session::ActiveSession;
@@ -116,4 +120,32 @@ fn ignores_commands_that_do_not_page() {
     assert!(!command_may_invoke_pager("echo hello"));
     assert!(!command_may_invoke_pager("git status --short"));
     assert!(!command_may_invoke_pager("git config --get core.pager"));
+}
+
+#[test]
+fn requested_commands_wait_for_completion_when_requested() {
+    assert_eq!(
+        requested_command_delay("sleep 10", true),
+        Some(ShellCommandDelay::OnCompletion)
+    );
+    assert_eq!(requested_command_delay("sleep 10", false), None);
+}
+
+#[test]
+fn bounded_sampler_commands_wait_for_completion_even_when_not_requested() {
+    assert!(command_appears_to_be_bounded_sampler("vmstat 1 5"));
+    assert!(command_appears_to_be_bounded_sampler(
+        r#"iostat -x 1 3 2>/dev/null || echo "iostat not available""#
+    ));
+    assert!(command_appears_to_be_bounded_sampler("mpstat -P ALL 1 3"));
+
+    assert!(!command_appears_to_be_bounded_sampler("vmstat 1"));
+    assert!(!command_appears_to_be_bounded_sampler(
+        "tail -f /var/log/syslog"
+    ));
+
+    assert_eq!(
+        requested_command_delay("vmstat 1 5", false),
+        Some(ShellCommandDelay::OnCompletion)
+    );
 }

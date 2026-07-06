@@ -21589,13 +21589,16 @@ impl TerminalView {
                         return;
                     }
 
-                    // Disable escape completely for ambient agents without a parent terminal.
-                    if self
+                    // Keep the long-running command in place, but surface why
+                    // this shortcut cannot return to terminal yet.
+                    if let Err(error) = self
                         .agent_view_controller
                         .as_ref(ctx)
                         .can_exit_agent_view()
-                        .is_err()
                     {
+                        self.agent_view_controller.update(ctx, |controller, ctx| {
+                            controller.show_exit_blocked_message(error, ctx);
+                        });
                         return;
                     }
 
@@ -27517,14 +27520,19 @@ impl TypedActionView for TerminalView {
                 // to the in-place exit flow.
                 if self.try_navigate_to_parent_conversation(ctx) {
                     ctx.notify();
-                } else if self
-                    .agent_view_controller
-                    .as_ref(ctx)
-                    .can_exit_agent_view()
-                    .is_ok()
-                {
-                    self.exit_agent_view(ctx);
-                    ctx.notify();
+                } else {
+                    match self.agent_view_controller.as_ref(ctx).can_exit_agent_view() {
+                        Ok(()) => {
+                            self.exit_agent_view(ctx);
+                            ctx.notify();
+                        }
+                        Err(error) => {
+                            self.agent_view_controller.update(ctx, |controller, ctx| {
+                                controller.show_exit_blocked_message(error, ctx);
+                            });
+                            ctx.notify();
+                        }
+                    }
                 }
             }
             EnterCloudAgentView => {

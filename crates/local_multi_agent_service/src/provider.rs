@@ -835,7 +835,10 @@ fn local_tool_schemas(cli_agent_command_id: Option<&str>) -> Vec<Value> {
                         "is_read_only": { "type": "boolean", "description": "Whether the command only reads state." },
                         "is_risky": { "type": "boolean", "description": "Whether the command may modify files, processes, or external state." },
                         "uses_pager": { "type": "boolean" },
-                        "wait_until_complete": { "type": "boolean" }
+                        "wait_until_complete": {
+                            "type": "boolean",
+                            "description": "Use true for commands expected to finish, including bounded sampling commands like vmstat 1 5 or iostat -x 1 3. Use false only for commands expected to keep running indefinitely, such as dev servers or tail -f."
+                        }
                     },
                     "required": ["command"]
                 }
