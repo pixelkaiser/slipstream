@@ -1,5 +1,9 @@
 # Slipstream
 
+<p align="center">
+  <img src="app/channels/stable/icon/master.png" alt="Slipstream app icon" width="128">
+</p>
+
 Slipstream is a privacy- and performance-focused fork of [Warp](https://github.com/warpdotdev/warp). It keeps the Warp terminal and agent experience, but adapts it for local and self-hosted inference with no calls to Warp-hosted cloud services by default.
 
 The goal is simple: use a modern terminal with agentic workflows while keeping your prompts, files, terminal context, conversations, integrations, and model traffic under your control.
