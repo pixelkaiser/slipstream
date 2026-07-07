@@ -1224,14 +1224,20 @@ pub fn init(app: &mut AppContext) {
         app.register_editable_bindings([
             EditableBinding::new(
                 "workspace:install_cli",
-                "Install Oz CLI globally for use outside of Warp",
+                format!(
+                    "Install Oz CLI globally for use outside of {}",
+                    ChannelState::product_name()
+                ),
                 WorkspaceAction::InstallOz,
             )
             .with_group(bindings::BindingGroup::Settings.as_str())
             .with_context_predicate(id!("Workspace")),
             EditableBinding::new(
                 "workspace:uninstall_cli",
-                "Undo global Oz CLI installation (oz will still work within Warp)",
+                format!(
+                    "Undo global Oz CLI installation (oz will still work within {})",
+                    ChannelState::product_name()
+                ),
                 WorkspaceAction::UninstallOz,
             )
             .with_group(bindings::BindingGroup::Settings.as_str())

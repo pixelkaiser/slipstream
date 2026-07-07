@@ -8970,10 +8970,13 @@ impl Workspace {
     fn install_oz(&mut self, ctx: &mut ViewContext<Self>) {
         ctx.spawn(async { cli_install::install_oz() }, |view, result, ctx| {
             let command_name = ChannelState::channel().cli_command_name();
-            let message = format!("Installed the Oz CLI globally. You can now run '{command_name}' from any terminal outside of Warp.");
+            let product_name = ChannelState::product_name();
+            let message = format!(
+                "Installed the Oz CLI globally. You can now run '{command_name}' from any terminal outside of {product_name}."
+            );
             let toast = DismissibleToast::success(message).with_link(
                 ToastLink::new("Learn more".to_string())
-                    .with_href("https://docs.warp.dev/reference/cli".to_string()),
+                    .with_href(links::user_docs_url().to_string()),
             );
             view.handle_cli_command_result(result, toast, "Failed to install Oz command", ctx);
         });
@@ -8985,10 +8988,10 @@ impl Workspace {
         ctx.spawn(
             async { cli_install::uninstall_oz() },
             |view, result, ctx| {
-                let toast = DismissibleToast::success(
-                    "Removed the global Oz CLI installation — it still works inside Warp."
-                        .to_string(),
-                );
+                let product_name = ChannelState::product_name();
+                let toast = DismissibleToast::success(format!(
+                    "Removed the global Oz CLI installation - it still works inside {product_name}."
+                ));
                 view.handle_cli_command_result(
                     result,
                     toast,

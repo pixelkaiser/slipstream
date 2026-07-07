@@ -280,6 +280,7 @@ async fn receive_loopback_oauth_callback(
     }
 
     let request = String::from_utf8_lossy(&request);
+    let product_name = ChannelState::product_name();
     let (status, reason, body) = match parse_loopback_callback_request(&request, &origin) {
         Ok((_state, result)) => {
             oauth_result_tx.send(result).await.map_err(|_| {
@@ -288,7 +289,9 @@ async fn receive_loopback_oauth_callback(
             (
                 200,
                 "OK",
-                "Authentication complete. You can close this tab and return to Warp.",
+                format!(
+                    "Authentication complete. You can close this tab and return to {product_name}."
+                ),
             )
         }
         Err(err) => {
@@ -300,12 +303,12 @@ async fn receive_loopback_oauth_callback(
             (
                 400,
                 "Bad Request",
-                "Authentication failed. Return to Warp and try again.",
+                format!("Authentication failed. Return to {product_name} and try again."),
             )
         }
     };
 
-    let response = http_response(status, reason, body);
+    let response = http_response(status, reason, &body);
     socket.write_all(response.as_bytes()).await?;
     socket.shutdown().await?;
     Ok(())
@@ -433,7 +436,7 @@ async fn start_authorization_flow(
         // Try dynamic client registration.
         let mut oauth_state = OAuthState::Unauthorized(auth_manager);
         oauth_state
-            .start_authorization(&[], redirect_uri, Some("Warp"))
+            .start_authorization(&[], redirect_uri, Some(ChannelState::product_name()))
             .await?;
         oauth_state
     };
