@@ -58,7 +58,8 @@ pub(crate) fn ensure_warp_watch_roots_exist() {
         let tui_config_local_dir = warp_core::paths::tui_config_local_dir();
         if let Err(err) = fs::create_dir_all(&tui_config_local_dir) {
             log::warn!(
-                "Failed to create Warp TUI config directory {}: {err}",
+                "Failed to create {} TUI config directory {}: {err}",
+                ChannelState::product_name(),
                 tui_config_local_dir.display()
             );
         }
@@ -307,7 +308,7 @@ impl WarpManagedPathsWatcher {
                         tui_config_local_dir,
                         WatchFilter::accept_all(),
                         RecursiveMode::Recursive,
-                        "Warp TUI config directory",
+                        format!("{} TUI config directory", ChannelState::product_name()),
                     );
                 }
             }

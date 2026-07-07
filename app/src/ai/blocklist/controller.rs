@@ -1206,7 +1206,7 @@ impl BlocklistAIController {
                 codex_model.submit_conversation_prompt(
                     conversation_id,
                     query,
-                    self.terminal_view_id,
+                    self.terminal_surface_id,
                     ctx,
                 )
             });
@@ -1231,7 +1231,7 @@ impl BlocklistAIController {
                 opencode_model.submit_conversation_prompt(
                     conversation_id,
                     query,
-                    self.terminal_view_id,
+                    self.terminal_surface_id,
                     ctx,
                 )
             });

@@ -2008,11 +2008,14 @@ impl TerminalModel {
         self.block_list
             .early_output_mut()
             .init_session(&pending_session_info);
-        self.block_list.precmd(PrecmdValue {
-            ps1: Some(String::new()),
-            ps1_is_encoded: Some(false),
-            session_id: Some(pending_session_info.session_id.as_u64()),
-            ..Default::default()
+        self.block_list.precmd_with_completion_metadata(PrecmdValue {
+            completion_metadata: CompletionMetadata::default(),
+            prompt_metadata: PromptMetadata {
+                ps1: Some(String::new()),
+                ps1_is_encoded: Some(false),
+                session_id: Some(pending_session_info.session_id.as_u64()),
+                ..Default::default()
+            },
         });
 
         let spawning_command = pending_session_info

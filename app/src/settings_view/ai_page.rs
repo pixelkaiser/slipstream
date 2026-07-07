@@ -1,5 +1,6 @@
 use ::ai::api_keys::{
-    local_thinking_mode_label, ApiKeyManager, ApiKeyManagerEvent, LOCAL_THINKING_MODE_CHOICES,
+    local_thinking_mode_label, ApiKeyManager, ApiKeyManagerEvent, ApiKeys,
+    LOCAL_THINKING_MODE_CHOICES,
 };
 #[cfg(not(target_family = "wasm"))]
 use ::ai::grok_subscription::oauth::{self, ManualCodeExchange};

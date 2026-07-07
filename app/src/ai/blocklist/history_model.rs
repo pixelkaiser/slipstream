@@ -1008,7 +1008,7 @@ impl BlocklistAIHistoryModel {
         output_text: Option<String>,
         working_directory: Option<String>,
         is_streaming: bool,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Result<AIAgentExchangeId, UpdateHistoryError> {
         let conversation = self
@@ -1026,14 +1026,14 @@ impl BlocklistAIHistoryModel {
         ctx.emit(BlocklistAIHistoryEvent::AppendedExchange {
             exchange_id,
             task_id: conversation.get_root_task_id().clone(),
-            terminal_view_id,
+            terminal_surface_id,
             conversation_id,
             is_hidden: false,
             response_stream_id: None,
         });
         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
             conversation_id,
-            terminal_view_id,
+            terminal_surface_id,
             update: ConversationStatusUpdate::Changed { prev_status },
             new_status: conversation.status().clone(),
         });
@@ -1047,7 +1047,7 @@ impl BlocklistAIHistoryModel {
         output_text: String,
         is_finished: bool,
         is_error: bool,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<Self>,
     ) -> Result<(), UpdateHistoryError> {
         let conversation = self
@@ -1063,14 +1063,14 @@ impl BlocklistAIHistoryModel {
         )?;
         ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
             exchange_id,
-            terminal_view_id,
+            terminal_surface_id,
             conversation_id,
             is_hidden: false,
         });
         if is_finished && prev_status != *conversation.status() {
             ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id,
-                terminal_view_id,
+                terminal_surface_id,
                 update: ConversationStatusUpdate::Changed { prev_status },
                 new_status: conversation.status().clone(),
             });

@@ -60,6 +60,7 @@ define_settings_group!(SharedSessionSettings, settings: [
         default: String::new(),
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "cloud_platform.sharing.session_sharing_server_url",
         description: "Self-hosted session sharing relay WebSocket URL used in no-cloud mode.",

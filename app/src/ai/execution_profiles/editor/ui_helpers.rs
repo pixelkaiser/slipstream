@@ -415,8 +415,7 @@ fn render_custom_endpoint_controls(
     view: &ExecutionProfileEditorView,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let is_enabled = FeatureFlag::CustomInferenceEndpoints.is_enabled()
-        && AISettings::as_ref(app).is_any_ai_enabled(app)
+    let is_enabled = AISettings::as_ref(app).is_any_ai_enabled(app)
         && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app);
     let Some(profile_key) = view.inference_profile_key(app) else {
         return Empty::new().finish();
@@ -660,9 +659,7 @@ pub fn render_local_inference_section(
         ));
         column.add_child(render_local_agent_status_card(appearance, view, app));
 
-        if FeatureFlag::CustomInferenceEndpoints.is_enabled()
-            && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
-        {
+        if UserWorkspaces::as_ref(app).is_custom_inference_enabled(app) {
             column.add_child(render_custom_endpoint_controls(appearance, view, app));
         }
 

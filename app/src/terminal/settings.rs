@@ -165,6 +165,7 @@ define_settings_group!(TerminalSettings, settings: [
         default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "terminal.effects.cursor_trail",
         description: "Whether to show an animated trail behind the terminal cursor.",
